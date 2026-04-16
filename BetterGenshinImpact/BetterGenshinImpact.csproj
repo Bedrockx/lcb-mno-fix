@@ -206,6 +206,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <Folder Include="GameTask\AutoOreAim\" />
 	  <Folder Include="GameTask\OneDragon\" />
 	  <Folder Include="GameTask\UseRedeemCode\Assets\1920x1080\" />
 	  <Folder Include="Resources\" />
@@ -236,6 +237,10 @@
 	    <SubType>Code</SubType>
 	    <DependentUpon>WelcomeDialog.xaml</DependentUpon>
 	  </Compile>
+	  <Compile Remove="GameTask\AutoOreAim\OreRegion.cs" />
+	  <Compile Remove="GameTask\AutoOreAim\OreDetector.cs" />
+	  <Compile Remove="GameTask\AutoOreAim\OreAutoAimTask.cs" />
+	  <Compile Remove="GameTask\AutoOreAim\OreAutoAimConfig.cs" />
 	</ItemGroup>
 
 	<ItemGroup>
