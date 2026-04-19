@@ -2472,6 +2472,38 @@
                       FontTypography="BodyStrong"
                       Text="帮助" />
 
+        <!--  Tea Bag Tutorial  -->
+        <ui:CardControl Margin="0,0,0,12" Icon="{ui:SymbolIcon BookOpen24}">
+            <ui:CardControl.Header>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:TextBlock Grid.Row="0"
+                                  Grid.Column="0"
+                                  FontTypography="Body"
+                                  Text="茶包使用教程"
+                                  TextWrapping="Wrap" />
+                    <ui:TextBlock Grid.Row="1"
+                                  Grid.Column="0"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="点击打开茶包版攻略（核弹密码）"
+                                  TextWrapping="Wrap" />
+                    <ui:Button Grid.Row="0"
+                               Grid.RowSpan="2"
+                               Grid.Column="1"
+                               Margin="0,0,36,0"
+                               Command="{Binding OpenTeaBagTutorialCommand}"
+                               Content="打开教程" />
+                </Grid>
+            </ui:CardControl.Header>
+        </ui:CardControl>
+
         <!--  Update Check Card  -->
 
         <ui:CardExpander Margin="0,0,0,12"
@@ -2486,6 +2518,8 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <ui:TextBlock Grid.Row="0"
                                   Grid.Column="0"
@@ -2495,17 +2529,78 @@
                     <ui:TextBlock Grid.Row="1"
                                   Grid.Column="0"
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="茶包版请到Github查看最新版本"
-                                  TextWrapping="Wrap" />
-                    <!-- <ui:Button Grid.Row="0" -->
-                    <!--            Grid.RowSpan="2" -->
-                    <!--            Grid.Column="1" -->
-                    <!--            Margin="0,0,20,0" -->
-                    <!--            Command="{Binding CheckUpdateCommand}" -->
-                    <!--            Content="检查更新" /> -->
+                                  TextWrapping="Wrap">
+                        茶包版请到
+                        <Hyperlink NavigateUri="https://github.com/kaedelcb/better-genshin-impact/actions"
+                                   RequestNavigate="Hyperlink_RequestNavigate"
+                                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}">Github</Hyperlink>
+                        查看最新版本
+                    </ui:TextBlock>
+                    <StackPanel Grid.Row="0"
+                                Grid.RowSpan="2"
+                                Grid.Column="1"
+                                Margin="0,0,8,0"
+                                Orientation="Horizontal"
+                                Visibility="{Binding IsGitHubUpdateLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ui:ProgressRing Width="16" Height="16" IsIndeterminate="True" Margin="0,0,8,0" />
+                        <ui:TextBlock VerticalAlignment="Center"
+                                      Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                      Text="加载中..." />
+                    </StackPanel>
+                    <ui:Button Grid.Row="0"
+                               Grid.RowSpan="2"
+                               Grid.Column="2"
+                               Margin="0,0,8,0"
+                               Command="{Binding GitHubAutoUpdateCommand}"
+                               IsEnabled="{Binding IsGitHubUpdateLoading, Converter={StaticResource InverseBooleanConverter}}"
+                               Content="GitHub 自动更新"
+                               PreviewMouseDown="UpdateButton_PreviewMouseDown" />
+                    <ui:Button Grid.Row="0"
+                               Grid.RowSpan="2"
+                               Grid.Column="3"
+                               Margin="0,0,20,0"
+                               Appearance="Danger"
+                               Command="{Binding CancelGitHubUpdateCommand}"
+                               Visibility="{Binding IsGitHubUpdateLoading, Converter={StaticResource BooleanToVisibilityConverter}}"
+                               Content="取消更新"
+                               PreviewMouseDown="CancelUpdateButton_PreviewMouseDown" />
                 </Grid>
             </ui:CardExpander.Header>
-            
+            <StackPanel>
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:TextBlock Grid.Row="0"
+                                  Grid.Column="0"
+                                  FontTypography="Body"
+                                  Text="GitHub Token (可选)"
+                                  TextWrapping="Wrap" />
+                    <ui:TextBlock Grid.Row="1"
+                                  Grid.Column="0"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  TextWrapping="Wrap">
+                        未认证 API 每小时限 60 次请求，一般够用。如遇 403 错误，请到
+                        <Hyperlink NavigateUri="https://github.com/settings/tokens/new"
+                                   RequestNavigate="Hyperlink_RequestNavigate"
+                                   Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}">GitHub 设置</Hyperlink>
+                        生成 Token（勾选 public_repo），填入右侧即可。
+                    </ui:TextBlock>
+                    <ui:PasswordBox Grid.Row="0"
+                                    Grid.RowSpan="2"
+                                    Grid.Column="1"
+                                    MinWidth="200"
+                                    Margin="0,0,36,0"
+                                    PlaceholderText="ghp_xxxx"
+                                    Password="{Binding Config.OtherConfig.GitHubToken, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                </Grid>
+            </StackPanel>
         </ui:CardExpander>
 
         <!--  About Option  -->

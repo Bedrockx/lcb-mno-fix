@@ -3,7 +3,9 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using BetterGenshinImpact.GameTask.AutoFight.Config;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Windows;
+using System.Windows.Navigation;
 using Wpf.Ui.Violeta.Controls;
 using BetterGenshinImpact.Core.Config;
 using System;
@@ -111,6 +113,30 @@ public partial class CommonSettingsPage : Page
             
             ViewModelDefaultAuto.UpdateCombatAvatarList();
             Toast.Success("已删除自定义角色：" + taskToDelete);
+        }
+    }
+
+    private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e)
+    {
+        Process.Start(new ProcessStartInfo(e.Uri.AbsoluteUri) { UseShellExecute = true });
+        e.Handled = true;
+    }
+
+    private void UpdateButton_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Primitives.ButtonBase button && button.Command?.CanExecute(null) == true)
+        {
+            button.Command.Execute(null);
+            e.Handled = true;
+        }
+    }
+
+    private void CancelUpdateButton_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is System.Windows.Controls.Primitives.ButtonBase button && button.Command?.CanExecute(null) == true)
+        {
+            button.Command.Execute(null);
+            e.Handled = true;
         }
     }
    

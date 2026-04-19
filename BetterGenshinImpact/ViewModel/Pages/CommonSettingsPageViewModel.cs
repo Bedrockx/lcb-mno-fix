@@ -10,6 +10,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using Windows.System;
@@ -25,6 +26,7 @@ using BetterGenshinImpact.GameTask.LogParse;
 using BetterGenshinImpact.Helpers;
 using BetterGenshinImpact.Helpers.Http;
 using BetterGenshinImpact.Model;
+using BetterGenshinImpact.Service;
 using BetterGenshinImpact.Service.Interface;
 using BetterGenshinImpact.Service.Notification;
 using BetterGenshinImpact.View.Controls.Webview;
@@ -40,6 +42,7 @@ using Microsoft.Extensions.Localization;
 using Microsoft.Win32;
 using Newtonsoft.Json;
 using Wpf.Ui;
+using Wpf.Ui.Violeta.Controls;
 
 namespace BetterGenshinImpact.ViewModel.Pages;
 
@@ -52,6 +55,10 @@ public partial class CommonSettingsPageViewModel : ViewModel
 
     private string _selectedArea = string.Empty;
 
+    [ObservableProperty]
+    private bool _isGitHubUpdateLoading;
+
+    private CancellationTokenSource? _githubUpdateCts;
 
     private string _selectedCountry = string.Empty;
     [ObservableProperty] private List<string> _adventurersGuildCountry = ["无", "枫丹", "稻妻", "璃月", "蒙德"];
@@ -402,6 +409,20 @@ public partial class CommonSettingsPageViewModel : ViewModel
     }
 
     [RelayCommand]
+    private void OpenTeaBagTutorial()
+    {
+        var tutorialPath = Path.Combine(AppContext.BaseDirectory, "茶包版攻略.核弹密码.必看.否则地球爆炸.txt");
+        if (File.Exists(tutorialPath))
+        {
+            Process.Start(new ProcessStartInfo(tutorialPath) { UseShellExecute = true });
+        }
+        else
+        {
+            Toast.Warning("未找到茶包版攻略文件");
+        }
+    }
+
+    [RelayCommand]
     private void OpenKeyBindingsWindow()
     {
         var keyBindingsWindow = KeyBindingsWindow.Instance;
@@ -434,6 +455,132 @@ public partial class CommonSettingsPageViewModel : ViewModel
             Trigger = UpdateTrigger.Manual,
             Channel = UpdateChannel.Alpha,
         });
+    }
+
+    [RelayCommand]
+    private async Task GitHubAutoUpdateAsync()
+    {
+        if (IsGitHubUpdateLoading)
+        {
+            return;
+        }
+
+        IsGitHubUpdateLoading = true;
+        _githubUpdateCts = new CancellationTokenSource();
+        string? tempDir = null;
+
+        try
+        {
+            var ct = _githubUpdateCts.Token;
+
+            // Step 1: 查询最新构建产物
+            var service = new GitHubActionsService();
+            var token = string.IsNullOrWhiteSpace(Config.OtherConfig.GitHubToken)
+                ? null
+                : Config.OtherConfig.GitHubToken;
+            var artifacts = await service.GetLatestArtifactsAsync(token, ct);
+
+            if (artifacts.Count == 0)
+            {
+                Toast.Warning("未找到可用的构建产物");
+                return;
+            }
+
+            // Step 2: 打开选择弹窗
+            var dialog = new ArtifactSelectorDialog(artifacts)
+            {
+                Owner = Application.Current.MainWindow
+            };
+            var dialogResult = dialog.ShowDialog();
+
+            if (dialogResult != true || dialog.SelectedArtifact == null)
+            {
+                return;
+            }
+
+            var selected = dialog.SelectedArtifact;
+
+            // Step 3: 下载构建产物
+            tempDir = Path.Combine(Path.GetTempPath(), $"BetterGI_update_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempDir);
+
+            var updater = new GitHubAutoUpdater();
+
+            Toast.Information($"正在下载 {selected.Version} 安装包... (点击「取消更新」可中止)");
+
+            var installerPath = await updater.DownloadArtifactAsync(
+                selected.DownloadUrl,
+                tempDir,
+                token,
+                new Progress<(long downloaded, long total)>(p =>
+                {
+                    if (p.total > 0)
+                    {
+                        var percent = (double)p.downloaded / p.total * 100;
+                        Application.Current.Dispatcher.InvokeAsync(() =>
+                        {
+                            Toast.Information($"下载进度: {percent:F1}% ({p.downloaded / 1024 / 1024}MB / {p.total / 1024 / 1024}MB)");
+                        });
+                    }
+                }),
+                ct);
+
+            // Step 4: 下载完成，启动安装程序并关闭当前应用
+            var launchResult = await ThemedMessageBox.ShowAsync(
+                $"安装包下载完成！\n\n即将启动安装程序，安装过程中会自动关闭当前程序。\n是否立即安装？",
+                "下载完成",
+                MessageBoxButton.YesNo,
+                ThemedMessageBox.MessageBoxIcon.Question);
+
+            if (launchResult == MessageBoxResult.Yes)
+            {
+                Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true });
+                Application.Current.Shutdown();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            Toast.Warning("已取消更新");
+        }
+        catch (HttpRequestException ex)
+        {
+            if (ex.Message.Contains("403"))
+                Toast.Error($"网络请求失败: {ex.Message}");
+            else
+                Toast.Error($"网络请求失败: {ex.Message}\n可能需要 VPN 才能访问 GitHub，也可使用第三方工具在线升级。");
+        }
+        catch (Exception ex)
+        {
+            Toast.Error($"自动更新失败: {ex.Message}");
+        }
+        finally
+        {
+            IsGitHubUpdateLoading = false;
+            _githubUpdateCts?.Dispose();
+            _githubUpdateCts = null;
+
+            // 清理临时文件
+            if (tempDir != null)
+            {
+                try
+                {
+                    if (Directory.Exists(tempDir))
+                    {
+                        Directory.Delete(tempDir, recursive: true);
+                    }
+                }
+                catch
+                {
+                    // Best effort cleanup
+                }
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void CancelGitHubUpdate()
+    {
+        _githubUpdateCts?.Cancel();
     }
 
     // [RelayCommand]

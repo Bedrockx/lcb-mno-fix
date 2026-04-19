@@ -170,4 +170,10 @@ public partial class OtherConfig : ObservableObject
     /// </summary>
     [ObservableProperty]
     private string _uiCultureInfoName = "zh-Hans";
+
+    /// <summary>
+    /// GitHub Personal Access Token（可选，用于提高 GitHub API 速率限制）
+    /// </summary>
+    [ObservableProperty]
+    private string _gitHubToken = string.Empty;
 }
