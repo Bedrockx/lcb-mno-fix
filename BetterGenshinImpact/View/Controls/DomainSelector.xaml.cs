@@ -15,8 +15,21 @@ public partial class DomainSelector : UserControl
     public DomainSelector()
     {
         InitializeComponent();
-        Countries = MapLazyAssets.Instance.CountryToDomains.Keys.Reverse().ToList();
+        RebuildCountries();
         Unloaded += OnUnloaded;
+    }
+
+    /// <summary>
+    /// 重建 Countries 列表：标准国家 + 可选的"自定义"分类
+    /// </summary>
+    private void RebuildCountries()
+    {
+        var countries = MapLazyAssets.Instance.CountryToDomains.Keys.Reverse().ToList();
+        if (CustomDomains != null && CustomDomains.Count > 0)
+        {
+            countries.Add("自定义");
+        }
+        Countries = countries;
     }
 
     /// <summary>
@@ -36,6 +49,33 @@ public partial class DomainSelector : UserControl
     public static readonly DependencyProperty CountriesProperty =
         DependencyProperty.Register("Countries", typeof(List<string>), typeof(DomainSelector), new PropertyMetadata(null));
 
+    // Task 1.1: CustomDomains DependencyProperty
+    public List<string> CustomDomains
+    {
+        get => (List<string>)GetValue(CustomDomainsProperty);
+        set => SetValue(CustomDomainsProperty, value);
+    }
+
+    public static readonly DependencyProperty CustomDomainsProperty =
+        DependencyProperty.Register(
+            "CustomDomains",
+            typeof(List<string>),
+            typeof(DomainSelector),
+            new PropertyMetadata(null, OnCustomDomainsChanged));
+
+    private static void OnCustomDomainsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var control = (DomainSelector)d;
+        control.RebuildCountries();
+
+        // 如果当前选中的是"自定义"分类，刷新右侧列表
+        if (control.SelectedCountry == "自定义")
+        {
+            OnSelectedCountryChanged(d, new DependencyPropertyChangedEventArgs(
+                SelectedCountryProperty, null, "自定义"));
+        }
+    }
+
     public string SelectedCountry
     {
         get { return (string)GetValue(SelectedCountryProperty); }
@@ -51,30 +91,47 @@ public partial class DomainSelector : UserControl
         var country = (string)e.NewValue;
         if (string.IsNullOrEmpty(country))
         {
-            control.FilteredDomains = new List<System.Tuple<string, GiTpPosition>>();
+            control.FilteredDomains = new List<Tuple<string, string>>();
+        }
+        else if (country == "自定义")
+        {
+            // Build list from CustomDomains
+            if (control.CustomDomains != null && control.CustomDomains.Count > 0)
+            {
+                control.FilteredDomains = control.CustomDomains
+                    .Select(name => new Tuple<string, string>(name, name))
+                    .ToList();
+            }
+            else
+            {
+                control.FilteredDomains = new List<Tuple<string, string>>();
+            }
         }
         else
         {
             if (MapLazyAssets.Instance.CountryToDomains.TryGetValue(country, out var domains))
             {
                 // Reverse the list for display
-                control.FilteredDomains = domains.Select(i => new System.Tuple<string, GiTpPosition>(i.Name! + " | " + string.Join(" ", i.Rewards), i)).Reverse().ToList();
+                control.FilteredDomains = domains
+                    .Select(tp => new Tuple<string, string>(tp.Name! + " | " + string.Join(" ", tp.Rewards), tp.Name!))
+                    .Reverse()
+                    .ToList();
             }
             else
             {
-                control.FilteredDomains = new List<System.Tuple<string, GiTpPosition>>();
+                control.FilteredDomains = new List<Tuple<string, string>>();
             }
         }
     }
 
-    public List<System.Tuple<string, GiTpPosition>> FilteredDomains
+    public List<Tuple<string, string>> FilteredDomains
     {
-        get { return (List<System.Tuple<string, GiTpPosition>>)GetValue(FilteredDomainsProperty); }
+        get { return (List<Tuple<string, string>>)GetValue(FilteredDomainsProperty); }
         set { SetValue(FilteredDomainsProperty, value); }
     }
 
     public static readonly DependencyProperty FilteredDomainsProperty =
-        DependencyProperty.Register("FilteredDomains", typeof(List<System.Tuple<string, GiTpPosition>>), typeof(DomainSelector), new PropertyMetadata(null));
+        DependencyProperty.Register("FilteredDomains", typeof(List<Tuple<string, string>>), typeof(DomainSelector), new PropertyMetadata(null));
 
     public string SelectedDomain
     {
@@ -92,11 +149,19 @@ public partial class DomainSelector : UserControl
 
         if (string.IsNullOrEmpty(domain)) return;
 
-        // Verify if domain matches current country, if not, update country
+        // First try standard domain reverse lookup
         var country = MapLazyAssets.Instance.GetCountryByDomain(domain);
         if (country != null && country != control.SelectedCountry)
         {
             control.SelectedCountry = country;
+        }
+        // If standard lookup failed, check custom domains
+        else if (country == null && control.CustomDomains != null && control.CustomDomains.Contains(domain))
+        {
+            if (control.SelectedCountry != "自定义")
+            {
+                control.SelectedCountry = "自定义";
+            }
         }
     }
 

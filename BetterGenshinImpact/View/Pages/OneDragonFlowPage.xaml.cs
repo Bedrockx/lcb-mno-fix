@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using BetterGenshinImpact.View.Windows;
+using BetterGenshinImpact.View.Controls;
 using Wpf.Ui.Violeta.Controls;
 using System.Windows.Input; 
 using System.Linq; 
@@ -204,6 +205,7 @@ public partial class OneDragonFlowPage
             ViewModel.SelectedConfig?.CustomDomainList.AddRange(new[] { comboBox.SelectedItem?.ToString() });
             ViewModel.SaveConfig();
             ViewModel.InitializeDomainNameList();
+            RefreshAllDomainSelectors();
             Toast.Success("已创建自定义秘境任务：" + comboBox.SelectedItem?.ToString());
         }
     }
@@ -228,7 +230,37 @@ public partial class OneDragonFlowPage
             ViewModel?.SelectedConfig?.CustomDomainList.Remove(taskToDelete);
             ViewModel?.SaveConfig();
             ViewModel?.InitializeDomainNameList();
+            RefreshAllDomainSelectors();
             Toast.Success("已删除自定义秘境任务：" + taskToDelete);
+        }
+    }
+
+    /// <summary>
+    /// 刷新页面上所有 DomainSelector 的 CustomDomains 属性，
+    /// 通过创建新列表实例强制触发 DependencyProperty 变更通知
+    /// </summary>
+    private void RefreshAllDomainSelectors()
+    {
+        if (ViewModel?.SelectedConfig == null) return;
+        var newList = new List<string>(ViewModel.SelectedConfig.CustomDomainList);
+        foreach (var selector in FindVisualChildren<DomainSelector>(this))
+        {
+            selector.CustomDomains = newList;
+        }
+    }
+
+    /// <summary>
+    /// 在视觉树中递归查找指定类型的所有子元素
+    /// </summary>
+    private static IEnumerable<T> FindVisualChildren<T>(DependencyObject parent) where T : DependencyObject
+    {
+        if (parent == null) yield break;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T t) yield return t;
+            foreach (var grandChild in FindVisualChildren<T>(child))
+                yield return grandChild;
         }
     }
     
@@ -255,6 +287,23 @@ public partial class OneDragonFlowPage
                     ViewModel.ScriptControlPageAsync(ViewModel?.ScriptGroups?.FirstOrDefault(x => x.Name == selectedItem));
                 }
                 
+            }
+        }
+    }
+
+    private void DomainSelector_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        var domainSelector = sender as DomainSelector;
+        if (domainSelector != null)
+        {
+            var selectedItem = domainSelector.SelectedDomain;
+            if (selectedItem != null && ViewModel.SelectedConfig != null)
+            {
+                ViewModel.ReadScriptGroup();
+                if (ViewModel.SelectedConfig.CustomDomainList.Any(c => c.Equals(selectedItem)))
+                {
+                    ViewModel.ScriptControlPageAsync(ViewModel?.ScriptGroups?.FirstOrDefault(x => x.Name == selectedItem));
+                }
             }
         }
     }

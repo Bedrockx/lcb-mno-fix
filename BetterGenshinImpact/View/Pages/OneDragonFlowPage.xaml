@@ -11,6 +11,7 @@
              xmlns:pages="clr-namespace:BetterGenshinImpact.ViewModel.Pages"
              xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
              xmlns:i="using:Microsoft.Xaml.Behaviors.Core"
+             xmlns:controls="clr-namespace:BetterGenshinImpact.View.Controls"
              xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              d:DataContext="{d:DesignInstance Type=pages:OneDragonFlowViewModel}"
              d:DesignHeight="600"
@@ -621,21 +622,16 @@
                                                   Text="秘境名称"
                                                   Width="Auto"
                                                   TextWrapping="Wrap" />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.RowSpan="2"
-                                              Grid.Column="2"
-                                              Width="Auto"
-                                              MinWidth="100"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              MouseRightButtonUp="ConfigComboBox_MouseRightButtonDown"
-                                              ContextMenu="{x:Null}"
-                                              HorizontalAlignment="Left"
-                                              HorizontalContentAlignment="Center"
-                                              Margin="5,0,10,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.DomainName, Mode=TwoWay}">
-                                    </ComboBox>
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.RowSpan="2"
+                                                            Grid.Column="2"
+                                                            Width="Auto"
+                                                            MinWidth="100"
+                                                            HorizontalAlignment="Left"
+                                                            Margin="5,0,10,0"
+                                                            SelectedDomain="{Binding SelectedConfig.DomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
                                     <Button
                                         Grid.Row="0"
                                         Grid.Column="1"
@@ -832,14 +828,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Width="140"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.MondayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.MondayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
                                 </Grid>
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
@@ -863,14 +858,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Width="140"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.TuesdayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.TuesdayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
                                 </Grid>
                                 <Grid Margin="16">
                                     <Grid.ColumnDefinitions>
@@ -893,14 +887,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              Width="140"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.WednesdayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.WednesdayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
 
                                 </Grid>
                                 <Grid Margin="16">
@@ -924,14 +917,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Width="140"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.ThursdayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.ThursdayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
 
                                 </Grid>
                                 <Grid Margin="16">
@@ -955,14 +947,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Width="140"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.FridayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.FridayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
 
                                 </Grid>
                                 <Grid Margin="16">
@@ -986,14 +977,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              Width="140"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.SaturdayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.SaturdayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
 
                                 </Grid>
                                 <Grid Margin="16">
@@ -1022,14 +1012,13 @@
                                                 VerticalAlignment="Center"
                                                 TextAlignment="Center"
                                                 PlaceholderText="填写队伍名称 " />
-                                    <ComboBox Grid.Row="0"
-                                              Grid.Column="2"
-                                              Width="140"
-                                              GotFocus="ConfigRow_GotFocus"
-                                              PreviewMouseLeftButtonDown="ConfigComboBox_Clicked"
-                                              Margin="0,0,36,0"
-                                              ItemsSource="{Binding DomainNameList}"
-                                              SelectedItem="{Binding SelectedConfig.SundayDomainName, Mode=TwoWay}" />
+                                    <controls:DomainSelector Grid.Row="0"
+                                                            Grid.Column="2"
+                                                            Width="140"
+                                                            Margin="0,0,36,0"
+                                                            SelectedDomain="{Binding SelectedConfig.SundayDomainName, Mode=TwoWay}"
+                                                            CustomDomains="{Binding SelectedConfig.CustomDomainList}"
+                                                            MouseRightButtonUp="DomainSelector_MouseRightButtonDown" />
                                     <Border Grid.Row="1"
                                             Grid.Column="0"
                                             Grid.ColumnSpan="3"
