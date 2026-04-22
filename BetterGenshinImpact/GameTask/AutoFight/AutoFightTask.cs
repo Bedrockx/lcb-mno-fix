@@ -1108,7 +1108,7 @@ public class AutoFightTask : ISoloTask
 
         await fightTask;
 
-        if (_taskParam.KazuhaPickupEnabled && _taskParam.ExpKazuhaPickup && !_isExperiencePickup)
+        if (_taskParam.KazuhaPickupEnabled && _taskParam.ExpKazuhaPickup && !_isExperiencePickup && (combatScenes.GetAvatars().Select( a => a.Name).Contains("枫原万叶") || combatScenes.GetAvatars().Select( a => a.Name).Contains("琴")))
         {
             TaskControl.Logger.LogInformation("基于怪物经验判断：{text} 经验值显示","等待");
 
@@ -1287,7 +1287,7 @@ public class AutoFightTask : ISoloTask
                     if (forcePickup || !shouldSkip)
                     {
                         TaskControl.Logger.LogInformation("使用 枫原万叶-长E 拾取掉落物");
-                        await Delay(200, ct);
+                        await Delay(50, ct);
                         if (picker.TrySwitch(20))
                         {
                             await Delay(50, ct);
@@ -1295,9 +1295,24 @@ public class AutoFightTask : ISoloTask
                             {
                                 await picker.WaitSkillCd(ct);
                             }
+                            //判断万叶是否出战，如果出战了才执行后续操作
+                            using var ra = CaptureToRectArea();
+                            if (!picker.IsActive(ra))
+                            {
+                                picker.TrySwitch(20);
+                            }
                             picker.UseSkill(true);
                             await Delay(50, ct);
                             Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            if (!await AutoFightSkill.AvatarSkillAsync(Logger, picker, false, 1, ct))
+                            {
+                                Logger.LogWarning("万叶长E技能未成功释放，尝试再次释放");
+                                picker.TrySwitch(20);
+                                await Delay(50, ct);
+                                picker.UseSkill(true);
+                                await Delay(50, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            }
                             await Delay(_taskParam.KazuhaTime, ct);
                         }
                     }
@@ -1774,6 +1789,8 @@ public class AutoFightTask : ISoloTask
         var greenBloodCount = 0;
         var reviveCooldownTime = DateTime.MinValue;
         const int reviveCooldownSeconds = 20;
+        var lastReviveTime = DateTime.MinValue; // 死亡槽位检测吃药独立计时，不影响 LastEatTime
+        const int reviveRetryIntervalMs = 1500; // 死亡吃药重试间隔
         var cdRetryCount = 0; // CD重试计数器
         const int maxCdRetries = 5; // CD最多重试5次（约2.5秒），超过后计为失败
 
@@ -1804,6 +1821,7 @@ public class AutoFightTask : ISoloTask
                 {
                     var needHeal = false;
                     var needRevive = false;
+                    var isResurrectionDrug = false;
 
                     using (var ra = CaptureToRectArea())
                     {
@@ -1844,7 +1862,7 @@ public class AutoFightTask : ISoloTask
                         }
 
                         // 检测是否为复活药（白色图标）
-                        var isResurrectionDrug = CombatHealthDetector.IsResurrectionDrug(ra);
+                        isResurrectionDrug = CombatHealthDetector.IsResurrectionDrug(ra);
 
                         // 死亡检测
                         var deadSlots = CombatHealthDetector.GetDeadCharacterSlots(ra);
@@ -1927,12 +1945,15 @@ public class AutoFightTask : ISoloTask
                     }
 
                     // 执行吃药/复活
-                    if ((needHeal || needRevive) &&
-                        (DateTime.UtcNow - PathingConditionConfig.LastEatTime).TotalMilliseconds >
-                        Math.Max(_taskParam.MedicineInterval, 1500))
+                    if ((needHeal &&
+                         (DateTime.UtcNow - PathingConditionConfig.LastEatTime).TotalMilliseconds >
+                         Math.Max(_taskParam.MedicineInterval, 1500)) ||
+                        (needRevive &&
+                         (DateTime.UtcNow - lastReviveTime).TotalMilliseconds > reviveRetryIntervalMs))
                     {
                         var canHeal = needHeal && !_medicineState.IsHealOverLimit(_taskParam.RecoverMaxCount);
-                        var canRevive = needRevive && !_medicineState.IsReviveOverLimit();
+                        // 死亡槽位检测触发的复活不受上限限制，上限由复活弹窗确认计数控制
+                        var canRevive = needRevive && isResurrectionDrug; // 复活药CD时快捷键会变回恢复药，此时不按
 
                         if (canHeal || canRevive)
                         {
@@ -1942,8 +1963,7 @@ public class AutoFightTask : ISoloTask
                                 cdRetryCount++;
                                 if (cdRetryCount >= maxCdRetries)
                                 {
-                                    // CD等待超限，计为一次失败的吃药尝试
-                                    if (needRevive) _medicineState.IncrementRevive();
+                                    // CD等待超限，计为一次失败的吃药尝试（死亡路径不计复活次数）
                                     if (needHeal) _medicineState.IncrementHeal();
                                     Logger.LogWarning("自动吃药：药物冷却等待超限({count}次)，计为失败尝试，{reason}", cdRetryCount, needRevive ? "复活" : "回复");
                                     cdRetryCount = 0;
@@ -1958,27 +1978,47 @@ public class AutoFightTask : ISoloTask
                             }
                             
                             cdRetryCount = 0;
-                            Simulation.SendInput.SimulateAction(GIActions.QuickUseGadget);
+                            
+                            using var ra = CaptureToRectArea();
+                            if (CombatHealthDetector.HasNutritionBag(ra))
+                            {
+                                Simulation.SendInput.SimulateAction(GIActions.QuickUseGadget);
+                            }
+                            else
+                            {
+                                Logger.LogWarning("自动吃药：未发现营养袋，无法使用小道具");
+                            }
+                            
                             Simulation.ReleaseAllKey();
 
-                            // 直接计数，不验证（战斗中角色切换导致验证不可靠）
-                            if (needRevive) _medicineState.IncrementRevive();
-                            if (needHeal) _medicineState.IncrementHeal();
+                            // 死亡检测触发的吃药不计数，复活次数以复活弹窗确认为准（避免倒下动画期间重复计数）
+                            if (needHeal)
+                            {
+                                _medicineState.IncrementHeal();
+                                PathingConditionConfig.LastEatTime = DateTime.UtcNow;
+                            }
+                            if (needRevive) lastReviveTime = DateTime.UtcNow;
                             Logger.LogInformation("自动吃药：{reason}，使用小道具", needHeal ? "发现红血" : "发现角色死亡");
-                            PathingConditionConfig.LastEatTime = DateTime.UtcNow;
 
                             if (endBloodCheck && _medicineState.TotalCount >= 1)
                                 return; // 单次检测复用
                         }
                         else
                         {
-                            Logger.LogInformation("自动吃药：吃药数量超额退出");
-                            _medicineState.ExitMedicineScope(shouldEnableReviveCheck: true);
-                            return;
+                            // 真正超额：heal超限且没有死亡需要处理
+                            // 复活药CD时 canRevive=false 但 needRevive=true，不应退出，等复活药CD好
+                            if (!needRevive && needHeal)
+                            {
+                                Logger.LogInformation("自动吃药：吃药数量超额退出");
+                                _medicineState.ExitMedicineScope(shouldEnableReviveCheck: true);
+                                return;
+                            }
+                            // 复活药CD中，等待下一轮检测
+                            Logger.LogDebug("自动吃药：复活药CD中或无可执行操作，等待下一轮");
                         }
                     }
 
-                    await Task.Delay(Math.Max(_taskParam.CheckInterval - 150, 100), ct);
+                    await Task.Delay(Math.Max(_taskParam.CheckInterval - 100, 100), ct);
                 }
                 catch (OperationCanceledException)
                 {
