@@ -1885,14 +1885,21 @@ public partial class ScriptControlViewModel : ViewModel
     {
         if (item == null || item.Type != "SoloTask") return;
 
+        item.SoloTaskSettingsObject ??= new Dictionary<string, object?>();
+
+        // 锄地一条龙：统一弹窗，顶部有单机/联机切换开关
+        if (item.Name == "锄地一条龙")
+        {
+            ShowHoeingSettingsDialog(item);
+            return;
+        }
+
         var settingItems = GameTask.SoloTaskRegistry.GetSettingItems(item.Name);
         if (settingItems.Count == 0)
         {
             Toast.Warning("此独立任务没有可配置的参数");
             return;
         }
-
-        item.SoloTaskSettingsObject ??= new Dictionary<string, object?>();
 
         var stackPanel = new StackPanel { Margin = new Thickness(10) };
 
@@ -1992,6 +1999,537 @@ public partial class ScriptControlViewModel : ViewModel
         });
     }
 
+    private void ShowHoeingSettingsDialog(ScriptGroupProject item)
+    {
+        var settings = item.SoloTaskSettingsObject!;
+        var globalCfg = TaskContext.Instance().Config.AutoHoeingConfig;
+
+        string GetStr(string key, string fallback) =>
+            settings.TryGetValue(key, out var v) ? v?.ToString() ?? fallback : fallback;
+        bool GetBool(string key, bool fallback) =>
+            settings.TryGetValue(key, out var v) ? v is true or "True" or "true" : fallback;
+        int GetInt(string key, int fallback) =>
+            settings.TryGetValue(key, out var v) && int.TryParse(v?.ToString(), out var n) ? n : fallback;
+
+        // ===== 顶部：单机/联机切换 =====
+        var mpEnabled = GetBool("multiplayerEnabled", globalCfg.MultiplayerEnabled);
+        var modeToggle = new System.Windows.Controls.CheckBox
+        {
+            Content = "启用联机锄地模式",
+            IsChecked = mpEnabled,
+            FontSize = 15,
+            Margin = new Thickness(0, 0, 0, 12)
+        };
+
+        // ===== 单机内容区（普通参数列表）=====
+        var soloPanel = new System.Windows.Controls.StackPanel
+        {
+            Visibility = mpEnabled ? Visibility.Collapsed : Visibility.Visible
+        };
+        var settingItems = GameTask.SoloTaskRegistry.GetSettingItems(item.Name);
+        var controls = new Dictionary<string, FrameworkElement>();
+        foreach (var setting in settingItems)
+        {
+            soloPanel.Children.Add(new TextBlock { Text = setting.Label, Margin = new Thickness(0, 8, 0, 2), FontSize = 13 });
+            object? currentValue = settings.TryGetValue(setting.Name, out var ov) ? ov : setting.DefaultValue;
+            if (setting.Type == "select" && setting.Options != null)
+            {
+                var combo = new System.Windows.Controls.ComboBox
+                {
+                    ItemsSource = setting.Options,
+                    SelectedItem = currentValue?.ToString() ?? "",
+                    Margin = new Thickness(0, 0, 0, 4)
+                };
+                soloPanel.Children.Add(combo);
+                controls[setting.Name] = combo;
+            }
+            else if (setting.Type == "bool")
+            {
+                var check = new System.Windows.Controls.CheckBox
+                {
+                    IsChecked = currentValue is true or "True" or "true",
+                    Margin = new Thickness(0, 0, 0, 4)
+                };
+                soloPanel.Children.Add(check);
+                controls[setting.Name] = check;
+            }
+            else
+            {
+                var tb = new TextBox { Text = currentValue?.ToString() ?? "", Margin = new Thickness(0, 0, 0, 4) };
+                soloPanel.Children.Add(tb);
+                controls[setting.Name] = tb;
+            }
+        }
+
+        // ===== 联机内容区（声明在布局代码之前，由下方布局代码填充）=====
+        var currentRole = GetStr("multiplayerRole", "host");
+        var currentJoinMode = GetStr("memberJoinMode", "byHostName");
+
+        var roleCombo = new System.Windows.Controls.ComboBox
+        {
+            ItemsSource = new[] { "房主（创建房间）", "成员（加入房间）" },
+            SelectedIndex = currentRole == "member" ? 1 : 0,
+            Margin = new Thickness(0, 0, 0, 0)
+        };
+        var joinModeCombo = new System.Windows.Controls.ComboBox
+        {
+            ItemsSource = new[] { "指定房主名称", "随机加入现有房间" },
+            SelectedIndex = currentJoinMode == "random" ? 1 : 0,
+            Margin = new Thickness(0, 0, 0, 0)
+        };
+        var targetHostBox = new TextBox { Text = GetStr("targetHostName", globalCfg.TargetHostName), PlaceholderText = "房主的玩家名称" };
+        var serverUrlBox = new TextBox { Text = GetStr("coordinatorServerUrl", globalCfg.CoordinatorServerUrl), PlaceholderText = "协调服务器地址" };
+        var playerNameBox = new TextBox { Text = GetStr("playerName", globalCfg.PlayerName), PlaceholderText = "玩家名称" };
+        var playerUidBox = new TextBox { Text = GetStr("playerUid", globalCfg.PlayerUid), PlaceholderText = "玩家 UID" };
+
+        // 房主专属
+        var expectedCountBox = new TextBox { Text = GetInt("expectedPlayerCount", globalCfg.ExpectedPlayerCount).ToString(), PlaceholderText = "2-4" };
+        var whitelistBox = new TextBox { Text = GetStr("roomWhitelist", globalCfg.RoomWhitelist), PlaceholderText = "逗号分隔，留空不限制" };
+        var partyTimeoutBox = new TextBox { Text = GetInt("partyTimeoutSeconds", globalCfg.PartyTimeoutSeconds).ToString(), PlaceholderText = "秒" };
+        var memberPartyTimeoutBox = new TextBox { Text = GetInt("partyTimeoutSeconds", globalCfg.PartyTimeoutSeconds).ToString(), PlaceholderText = "秒，默认300" };
+        var timeoutActionCombo = new System.Windows.Controls.ComboBox { ItemsSource = new[] { "超时后结束任务", "超时后以现有人数开始" }, SelectedIndex = GetInt("partyTimeoutAction", globalCfg.PartyTimeoutAction) };
+        var syncTimeoutBox = new TextBox { Text = GetInt("syncTimeoutSeconds", globalCfg.SyncTimeoutSeconds).ToString(), PlaceholderText = "秒" };
+        var minPlayersBox = new TextBox { Text = GetInt("minPlayersToSync", globalCfg.MinPlayersToSync).ToString(), PlaceholderText = "0=等齐" };
+        var syncPointMinDistBox = new TextBox { Text = GetStr("syncPointMinDistance", globalCfg.SyncPointMinDistance.ToString()), PlaceholderText = "默认30" };
+        var startRouteIndexBox = new TextBox { Text = GetInt("startRouteIndex", globalCfg.StartRouteIndex).ToString(), PlaceholderText = "0=从头" };
+        var kazuhaIndexBox = new TextBox { Text = GetInt("kazuhaPlayerIndex", globalCfg.KazuhaPlayerIndex).ToString(), PlaceholderText = "0=不指定" };
+        var returnToFightCheck = new System.Windows.Controls.CheckBox { Content = "战斗后走回战斗点", IsChecked = GetBool("returnToFightPointAfterBattle", globalCfg.ReturnToFightPointAfterBattle) };
+        var returnStaySecondsBox = new TextBox { Text = GetInt("returnToFightPointStaySeconds", globalCfg.ReturnToFightPointStaySeconds).ToString(), PlaceholderText = "秒" };
+        returnStaySecondsBox.IsEnabled = returnToFightCheck.IsChecked ?? false;
+        returnToFightCheck.Checked += (_, _) => returnStaySecondsBox.IsEnabled = true;
+        returnToFightCheck.Unchecked += (_, _) => returnStaySecondsBox.IsEnabled = false;
+        var debugModeCheck = new System.Windows.Controls.CheckBox { Content = "调试模式（跳过路线一致性验证）", IsChecked = GetBool("debugMode", globalCfg.DebugMode) };
+        var useFixedRoutesCheck = new System.Windows.Controls.CheckBox { Content = "固定调试线路（按顺序执行内置线路）", IsChecked = GetBool("useFixedDebugRoutes", globalCfg.UseFixedDebugRoutes) };
+        var fixedRoutePathBox = new TextBox { Text = GetStr("fixedDebugRoutePath", globalCfg.FixedDebugRoutePath), PlaceholderText = "调试线路目录（留空使用内置）" };
+
+        // 多世界
+        var multiWorldCheck = new System.Windows.Controls.CheckBox
+        {
+            Content = "启用多世界连续锄地",
+            IsChecked = GetBool("multiWorldEnabled", globalCfg.MultiWorldEnabled),
+            Margin = new Thickness(0, 0, 0, 4)
+        };
+        var multiWorldCountBox = new TextBox
+        {
+            Text = GetInt("multiWorldCount", globalCfg.MultiWorldCount).ToString(),
+            PlaceholderText = "轮数（1-4）",
+            Width = 80,
+            Margin = new Thickness(0, 0, 0, 0)
+        };
+        multiWorldCountBox.IsEnabled = multiWorldCheck.IsChecked ?? false;
+        multiWorldCheck.Checked += (_, _) => multiWorldCountBox.IsEnabled = true;
+        multiWorldCheck.Unchecked += (_, _) => multiWorldCountBox.IsEnabled = false;
+
+        // ── 辅助函数 ──────────────────────────────────────────────────────────
+
+        // 分组标题：文字 + 全宽分隔线
+        System.Windows.Controls.DockPanel MakeGroupHeader(string title)
+        {
+            var dp = new System.Windows.Controls.DockPanel { Margin = new Thickness(0, 14, 0, 6), LastChildFill = true };
+            var tb = new TextBlock { Text = title, FontSize = 13, FontWeight = FontWeights.SemiBold, Foreground = SystemColors.ControlLightBrush, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+            System.Windows.Controls.DockPanel.SetDock(tb, System.Windows.Controls.Dock.Left);
+            var line = new System.Windows.Shapes.Rectangle { Height = 1, Fill = new SolidColorBrush(Color.FromRgb(80, 80, 80)), VerticalAlignment = VerticalAlignment.Center };
+            dp.Children.Add(tb);
+            dp.Children.Add(line);
+            return dp;
+        }
+
+        // 字段：标签在上，控件在下，控件填满宽度（用于大字段）
+        System.Windows.Controls.StackPanel MakeField(string label, System.Windows.UIElement control, string? hint = null)
+        {
+            var sp = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+            sp.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = SystemColors.GrayTextBrush, Margin = new Thickness(0, 0, 0, 3) });
+            if (hint != null)
+                sp.Children.Add(new TextBlock { Text = hint, FontSize = 11, Foreground = SystemColors.GrayTextBrush, Margin = new Thickness(0, 0, 0, 2), TextWrapping = TextWrapping.Wrap });
+            sp.Children.Add(control);
+            return sp;
+        }
+
+        // 小数字字段：标签在上，输入框固定宽度（用于数字类）
+        System.Windows.Controls.StackPanel MakeSmallField(string label, System.Windows.UIElement control, double ctrlWidth)
+        {
+            if (control is System.Windows.FrameworkElement fe) { fe.Width = ctrlWidth; fe.HorizontalAlignment = HorizontalAlignment.Left; }
+            var sp = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 0, 16, 8) };
+            sp.Children.Add(new TextBlock { Text = label, FontSize = 12, Foreground = SystemColors.GrayTextBrush, Margin = new Thickness(0, 0, 0, 3) });
+            sp.Children.Add(control);
+            return sp;
+        }
+
+        // 一行多个小字段（WrapPanel 自动换行）
+        System.Windows.Controls.WrapPanel MakeSmallRow(params System.Windows.UIElement[] fields)
+        {
+            var wp = new System.Windows.Controls.WrapPanel();
+            foreach (var f in fields) wp.Children.Add(f);
+            return wp;
+        }
+
+        // 期望人数（小）+ 白名单（大）：DockPanel，左侧固定，右侧填满
+        System.Windows.Controls.DockPanel MakeCountAndWhitelist()
+        {
+            var dp = new System.Windows.Controls.DockPanel { Margin = new Thickness(0, 0, 0, 0), LastChildFill = true };
+            var left = MakeSmallField("期望人数（2-4）", expectedCountBox, 50);
+            left.Margin = new Thickness(0, 0, 16, 8);
+            System.Windows.Controls.DockPanel.SetDock(left, System.Windows.Controls.Dock.Left);
+            var right = MakeField("房间白名单（逗号分隔，留空不限）", whitelistBox);
+            dp.Children.Add(left);
+            dp.Children.Add(right);
+            return dp;
+        }
+
+        // 设置控件填满宽度
+        void Stretch(System.Windows.FrameworkElement el) { el.HorizontalAlignment = HorizontalAlignment.Stretch; el.Width = double.NaN; }
+
+        Stretch(serverUrlBox);
+        Stretch(whitelistBox);
+        Stretch(fixedRoutePathBox);
+        Stretch(targetHostBox);
+        Stretch(roleCombo);
+
+        // ── 联机面板布局 ──────────────────────────────────────────────────────
+
+        var mpPanel = new System.Windows.Controls.StackPanel
+        {
+            Visibility = mpEnabled ? Visibility.Visible : Visibility.Collapsed
+        };
+
+        // 分组1：身份信息
+        mpPanel.Children.Add(MakeGroupHeader("身份信息"));
+        mpPanel.Children.Add(MakeField("服务器地址", serverUrlBox));
+        // 玩家名称 + UID：固定宽度，同行
+        var nameUidRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        nameUidRow.Children.Add(MakeSmallField("玩家名称", playerNameBox, 130));
+        nameUidRow.Children.Add(MakeSmallField("玩家 UID", playerUidBox, 120));
+        mpPanel.Children.Add(nameUidRow);
+        mpPanel.Children.Add(MakeField("联机角色", roleCombo));
+        
+        // ===== 联机队伍和角色准备 =====
+        var multiplayerPartyNameBox = new TextBox { Text = GetStr("multiplayerPartyName", globalCfg.MultiplayerPartyName), PlaceholderText = "留空则使用当前队伍" };
+        var multiplayerStartAvatarNameBox = new TextBox { Text = GetStr("multiplayerStartAvatarName", globalCfg.MultiplayerStartAvatarName), PlaceholderText = "留空则使用当前角色，如：钟离、纳西妲" };
+        Stretch(multiplayerPartyNameBox);
+        Stretch(multiplayerStartAvatarNameBox);
+        
+        mpPanel.Children.Add(MakeGroupHeader("联机队伍和角色准备"));
+        mpPanel.Children.Add(MakeField("联机队伍名称", multiplayerPartyNameBox, "联机前自动切换到指定队伍，留空则使用当前队伍"));
+        mpPanel.Children.Add(MakeField("联机起始角色名称", multiplayerStartAvatarNameBox, "联机前自动切换到指定角色，留空则使用当前角色"));
+
+        // 房主面板
+        var hostPanel = new System.Windows.Controls.StackPanel();
+
+        // 分组2：房间设置
+        hostPanel.Children.Add(MakeGroupHeader("房间设置"));
+        // 期望人数（小）单独一行，白名单单独一行
+        hostPanel.Children.Add(MakeSmallRow(MakeSmallField("期望人数（2-4）", expectedCountBox, 50)));
+        hostPanel.Children.Add(MakeField("房间白名单（逗号分隔，留空不限）", whitelistBox));
+        // 组队超时（小）+ 超时动作（固定）同行
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("组队超时（秒）", partyTimeoutBox, 65),
+            MakeSmallField("超时动作", timeoutActionCombo, 160)));
+
+        // 多世界行
+        var mwRow = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+        var mwTopRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+        mwTopRow.Children.Add(multiWorldCheck);
+        mwTopRow.Children.Add(new TextBlock { Text = "  轮数", FontSize = 12, Foreground = SystemColors.GrayTextBrush, VerticalAlignment = VerticalAlignment.Center });
+        multiWorldCountBox.Width = 50; multiWorldCountBox.HorizontalAlignment = HorizontalAlignment.Left;
+        mwTopRow.Children.Add(multiWorldCountBox);
+        mwRow.Children.Add(mwTopRow);
+        mwRow.Children.Add(new TextBlock { Text = "按加入顺序轮换房主，最多4轮", FontSize = 11, Foreground = SystemColors.GrayTextBrush, Margin = new Thickness(26, 2, 0, 0), TextWrapping = TextWrapping.Wrap });
+        hostPanel.Children.Add(mwRow);
+
+        // 分组3：同步设置
+        hostPanel.Children.Add(MakeGroupHeader("同步设置"));
+        // 第一行：集合点超时 + 最低同步人数
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("集合点超时（秒）", syncTimeoutBox, 65),
+            MakeSmallField("最低同步人数（0=等齐）", minPlayersBox, 50)));
+        // 第二行：集合点最小距离 + 万叶序号
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("集合点最小距离", syncPointMinDistBox, 65),
+            MakeSmallField("万叶序号（0=不指定）", kazuhaIndexBox, 50)));
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("从第几条路线开始（0=从头）", startRouteIndexBox, 65)));
+
+        // 战斗后走回战斗点
+        var returnRow = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+        returnRow.Children.Add(returnToFightCheck);
+        returnRow.Children.Add(new TextBlock { Text = "  停留", FontSize = 12, Foreground = SystemColors.GrayTextBrush, VerticalAlignment = VerticalAlignment.Center });
+        returnStaySecondsBox.Width = 50; returnStaySecondsBox.HorizontalAlignment = HorizontalAlignment.Left;
+        returnRow.Children.Add(returnStaySecondsBox);
+        returnRow.Children.Add(new TextBlock { Text = " 秒", FontSize = 12, Foreground = SystemColors.GrayTextBrush, VerticalAlignment = VerticalAlignment.Center });
+        hostPanel.Children.Add(returnRow);
+
+        // 分组4：线路选项（Expander 折叠，默认收起）
+        var debugInner = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+        debugInner.Children.Add(debugModeCheck);
+        debugInner.Children.Add(new System.Windows.Controls.StackPanel { Height = 4 });
+        debugInner.Children.Add(useFixedRoutesCheck);
+        debugInner.Children.Add(new System.Windows.Controls.StackPanel { Height = 4 });
+        
+        // 手动指定线路目录 - 只在固定调试线路开启时显示
+        var manualRouteField = MakeField("手动指定线路目录", fixedRoutePathBox, "留空则使用下方按钮选择");
+        debugInner.Children.Add(manualRouteField);
+
+        // 添加内置线路选择按钮
+        var routeScanner = new BetterGenshinImpact.GameTask.AutoHoeing.Services.RouteDirectoryScanner();
+        var builtinFolders = routeScanner.ScanBuiltinRoutes();
+
+        // 内置线路选择区域容器
+        var builtinRouteContainer = new System.Windows.Controls.StackPanel();
+        
+        if (builtinFolders.Count > 0)
+        {
+            builtinRouteContainer.Children.Add(new TextBlock 
+            { 
+                Text = "内置线路快速选择", 
+                FontSize = 12, 
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 8, 0, 4)
+            });
+            
+            var buttonPanel = new System.Windows.Controls.WrapPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            var selectedRoute = GetStr("selectedBuiltinRoute", globalCfg.SelectedBuiltinRoute);
+            
+            foreach (var folder in builtinFolders)
+            {
+                var btn = new System.Windows.Controls.Button
+                {
+                    Content = folder.FolderName,
+                    Margin = new Thickness(0, 0, 8, 8),
+                    Tag = folder.FolderName
+                };
+                
+                // 设置按钮样式 - 使用基本的 WPF 样式而不是 WPF UI 的 Appearance
+                if (folder.FolderName == selectedRoute)
+                {
+                    btn.Background = SystemColors.HighlightBrush;
+                    btn.Foreground = SystemColors.HighlightTextBrush;
+                }
+                else
+                {
+                    btn.Background = SystemColors.ControlBrush;
+                    btn.Foreground = SystemColors.ControlTextBrush;
+                }
+                
+                btn.Click += (s, e) =>
+                {
+                    // 更新所有按钮样式
+                    foreach (var child in buttonPanel.Children.OfType<System.Windows.Controls.Button>())
+                    {
+                        child.Background = SystemColors.ControlBrush;
+                        child.Foreground = SystemColors.ControlTextBrush;
+                    }
+                    btn.Background = SystemColors.HighlightBrush;
+                    btn.Foreground = SystemColors.HighlightTextBrush;
+                    settings["selectedBuiltinRoute"] = btn.Tag.ToString();
+                };
+                
+                buttonPanel.Children.Add(btn);
+            }
+            
+            builtinRouteContainer.Children.Add(buttonPanel);
+            
+            builtinRouteContainer.Children.Add(new TextBlock 
+            { 
+                Text = "手动输入路径优先级高于按钮选择", 
+                FontSize = 11, 
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+            
+            // 更新按钮状态的方法
+            void UpdateButtonStates()
+            {
+                var useFixedRoutes = useFixedRoutesCheck.IsChecked ?? false;
+                var hasManualPath = !string.IsNullOrWhiteSpace(fixedRoutePathBox.Text);
+                var buttonsEnabled = useFixedRoutes && !hasManualPath;
+                
+                // 控制手动输入框的可见性
+                manualRouteField.Visibility = useFixedRoutes ? Visibility.Visible : Visibility.Collapsed;
+                
+                // 控制整个内置线路区域的可见性
+                builtinRouteContainer.Visibility = useFixedRoutes ? Visibility.Visible : Visibility.Collapsed;
+                
+                // 控制按钮的启用状态
+                foreach (var btn in buttonPanel.Children.OfType<System.Windows.Controls.Button>())
+                {
+                    btn.IsEnabled = buttonsEnabled;
+                }
+                
+                // 如果不满足条件，清除选择状态
+                if (!buttonsEnabled)
+                {
+                    foreach (var btn in buttonPanel.Children.OfType<System.Windows.Controls.Button>())
+                    {
+                        btn.Background = SystemColors.ControlBrush;
+                        btn.Foreground = SystemColors.ControlTextBrush;
+                    }
+                }
+            }
+            
+            // 监听UseFixedDebugRoutes变化
+            useFixedRoutesCheck.Checked += (s, e) => UpdateButtonStates();
+            useFixedRoutesCheck.Unchecked += (s, e) => UpdateButtonStates();
+            
+            // 监听手动路径输入变化
+            fixedRoutePathBox.TextChanged += (s, e) => UpdateButtonStates();
+            
+            // 初始化状态
+            UpdateButtonStates();
+        }
+        
+        debugInner.Children.Add(builtinRouteContainer);
+
+        var debugExpander = new System.Windows.Controls.Expander
+        {
+            Header = "线路选项",
+            IsExpanded = GetBool("debugMode", false) || GetBool("useFixedDebugRoutes", false),
+            Content = debugInner,
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        hostPanel.Children.Add(debugExpander);
+
+        // 成员面板
+        var memberPanel = new System.Windows.Controls.StackPanel();
+        memberPanel.Children.Add(MakeGroupHeader("加入设置"));
+        memberPanel.Children.Add(MakeSmallRow(MakeSmallField("加入方式", joinModeCombo, 160)));
+        memberPanel.Children.Add(MakeField("指定房主名称", targetHostBox, "仅「指定房主名称」模式下生效"));
+        memberPanel.Children.Add(MakeSmallRow(MakeSmallField("等待超时（秒）", memberPartyTimeoutBox, 65)));
+
+        void UpdateJoinModeVisibility() => targetHostBox.IsEnabled = joinModeCombo.SelectedIndex == 0;
+        joinModeCombo.SelectionChanged += (_, _) => UpdateJoinModeVisibility();
+        UpdateJoinModeVisibility();
+
+        mpPanel.Children.Add(hostPanel);
+        mpPanel.Children.Add(memberPanel);
+
+        void UpdateRoleVisibility()
+        {
+            var isHost = roleCombo.SelectedIndex == 0;
+            hostPanel.Visibility = isHost ? Visibility.Visible : Visibility.Collapsed;
+            memberPanel.Visibility = isHost ? Visibility.Collapsed : Visibility.Visible;
+        }
+        roleCombo.SelectionChanged += (_, _) => UpdateRoleVisibility();
+        UpdateRoleVisibility();
+
+        // ===== 根面板：顶部开关 + 内容区切换 =====
+        var rootPanel = new System.Windows.Controls.StackPanel { Margin = new Thickness(12) };
+        rootPanel.Children.Add(modeToggle);
+        rootPanel.Children.Add(soloPanel);
+        rootPanel.Children.Add(mpPanel);
+
+        modeToggle.Checked += (_, _) =>
+        {
+            soloPanel.Visibility = Visibility.Collapsed;
+            mpPanel.Visibility = Visibility.Visible;
+        };
+        modeToggle.Unchecked += (_, _) =>
+        {
+            soloPanel.Visibility = Visibility.Visible;
+            mpPanel.Visibility = Visibility.Collapsed;
+        };
+
+        var dialog = new Wpf.Ui.Controls.MessageBox
+        {
+            Title = "修改独立任务配置 - 锄地一条龙",
+            Width = 520,
+            Content = new ScrollViewer
+            {
+                Content = rootPanel,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                MaxHeight = 600,
+            },
+            PrimaryButtonText = "保存",
+            CloseButtonText = "取消",
+            Owner = Application.Current.MainWindow,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+        };
+
+        dialog.ShowDialogAsync().ContinueWith(t =>
+        {
+            if (t.Result != MessageBoxResult.Primary) return;
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                var isMpMode = modeToggle.IsChecked ?? false;
+                settings["multiplayerEnabled"] = isMpMode;
+
+                if (isMpMode)
+                {
+                    // 保存联机配置
+                    settings["multiplayerRole"] = roleCombo.SelectedIndex == 0 ? "host" : "member";
+                    settings["memberJoinMode"] = joinModeCombo.SelectedIndex == 0 ? "byHostName" : "random";
+                    settings["targetHostName"] = targetHostBox.Text;
+                    settings["coordinatorServerUrl"] = serverUrlBox.Text;
+                    settings["playerName"] = playerNameBox.Text;
+                    settings["playerUid"] = playerUidBox.Text;
+                    settings["multiplayerPartyName"] = multiplayerPartyNameBox.Text;
+                    settings["multiplayerStartAvatarName"] = multiplayerStartAvatarNameBox.Text;
+                    var isHostRole = roleCombo.SelectedIndex == 0;
+                    var timeoutText = isHostRole ? partyTimeoutBox.Text : memberPartyTimeoutBox.Text;
+                    if (int.TryParse(timeoutText, out var pt)) settings["partyTimeoutSeconds"] = pt;
+                    settings["partyTimeoutAction"] = timeoutActionCombo.SelectedIndex;
+                    if (int.TryParse(expectedCountBox.Text, out var ec)) settings["expectedPlayerCount"] = ec;
+                    settings["roomWhitelist"] = whitelistBox.Text;
+                    if (int.TryParse(syncTimeoutBox.Text, out var st)) settings["syncTimeoutSeconds"] = st;
+                    if (int.TryParse(minPlayersBox.Text, out var mp)) settings["minPlayersToSync"] = mp;
+                    if (double.TryParse(syncPointMinDistBox.Text, out var spd)) settings["syncPointMinDistance"] = spd;
+                    if (int.TryParse(startRouteIndexBox.Text, out var sri)) settings["startRouteIndex"] = sri;
+                    if (int.TryParse(kazuhaIndexBox.Text, out var ki)) settings["kazuhaPlayerIndex"] = ki;
+                    settings["returnToFightPointAfterBattle"] = returnToFightCheck.IsChecked ?? false;
+                    if (int.TryParse(returnStaySecondsBox.Text, out var rss)) settings["returnToFightPointStaySeconds"] = rss;
+                    settings["debugMode"] = debugModeCheck.IsChecked ?? false;
+                    settings["useFixedDebugRoutes"] = useFixedRoutesCheck.IsChecked ?? false;
+                    settings["fixedDebugRoutePath"] = fixedRoutePathBox.Text;
+                    // 保存选中的内置线路
+                    if (settings.ContainsKey("selectedBuiltinRoute"))
+                    {
+                        // selectedBuiltinRoute 已在按钮点击事件中设置
+                    }
+                    else
+                    {
+                        settings["selectedBuiltinRoute"] = GetStr("selectedBuiltinRoute", globalCfg.SelectedBuiltinRoute);
+                    }
+                    settings["multiWorldEnabled"] = multiWorldCheck.IsChecked ?? false;
+                    if (int.TryParse(multiWorldCountBox.Text, out var mwc)) settings["multiWorldCount"] = mwc;
+                }
+                else
+                {
+                    // 保存单机配置，同时清除联机专属字段避免残留影响
+                    foreach (var setting in settingItems)
+                    {
+                        if (!controls.TryGetValue(setting.Name, out var ctrl)) continue;
+                        object? value = ctrl switch
+                        {
+                            System.Windows.Controls.ComboBox combo => combo.SelectedItem?.ToString(),
+                            System.Windows.Controls.CheckBox check => check.IsChecked ?? false,
+                            TextBox tb => setting.Type == "number"
+                                ? double.TryParse(tb.Text, out var n) ? (object)n : tb.Text
+                                : tb.Text,
+                            _ => null
+                        };
+                        settings[setting.Name] = value;
+                    }
+                    // 清除联机专属字段，防止残留值在单机模式下被 ApplySettingsOverride 错误应用
+                    // 注意：保留 "multiplayerRole" 和 "memberJoinMode"，避免单机保存破坏联机角色配置
+                    foreach (var key in new[] {
+                        "targetHostName", "coordinatorServerUrl",
+                        "playerName", "playerUid", "multiplayerPartyName", "multiplayerStartAvatarName", 
+                        "expectedPlayerCount", "roomWhitelist",
+                        "partyTimeoutSeconds", "partyTimeoutAction", "syncTimeoutSeconds", "minPlayersToSync",
+                        "syncPointMinDistance", "startRouteIndex", "kazuhaPlayerIndex",
+                        "returnToFightPointAfterBattle", "returnToFightPointStaySeconds",
+                        "debugMode", "useFixedDebugRoutes", "fixedDebugRoutePath", "selectedBuiltinRoute",
+                        "multiWorldEnabled", "multiWorldCount"
+                    })
+                        settings.Remove(key);
+                }
+
+                foreach (var group in ScriptGroups)
+                    WriteScriptGroup(group);
+                Toast.Success("独立任务配置已保存");
+            });
+        });
+    }
     [RelayCommand]
     public async void OnDeleteScriptByFolder(ScriptGroupProject? item)
     {

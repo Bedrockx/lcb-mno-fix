@@ -46,6 +46,7 @@ public class AccountGroupSettings
     public bool DisableSelfOptimization { get; set; }
 
     [JsonPropertyName("efficiencyIndex")]
+    [JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)]
     public double EfficiencyIndex { get; set; } = 0.25;
 
     [JsonPropertyName("curiosityFactor")]

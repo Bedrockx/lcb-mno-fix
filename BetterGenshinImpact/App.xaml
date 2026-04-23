@@ -27,6 +27,7 @@
             <bgivc:StringToColorConverter x:Key="StringToColorConverter" />
             <bgivc:TrConverter x:Key="TrConverter" />
             <bgivc:AdaptiveUniformGridColumnsConverter x:Key="AdaptiveUniformGridColumnsConverter" />
+            <bgivc:BoolToButtonAppearanceConverter x:Key="BoolToButtonAppearanceConverter" />
             <Style BasedOn="{StaticResource DefaultTextBoxStyle}" TargetType="{x:Type TextBox}">
                 <Setter Property="behavior:ClipboardInterceptor.EnableSafeClipboard" Value="True" />
             </Style>

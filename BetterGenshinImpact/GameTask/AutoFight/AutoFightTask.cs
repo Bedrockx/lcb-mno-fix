@@ -614,9 +614,9 @@ public class AutoFightTask : ISoloTask
                         
                         #region 盾奶位技能优先和自动EQ功能
                         
-                        var skipModel = guardianAvatar != null && lastFightName != command.Name;
+                        // var skipModel = guardianAvatar != null && ((lastFightName != command.Name) || (guardianAvatar.IsSkillReady()));
                         
-                        if (skipModel && guardianAvatar is not null) {
+                        if (guardianAvatar is not null && (lastFightName != command.Name || combatScenes.GetAvatars().Count == 1)) {
                             
                             image = CaptureToRectArea();
                             

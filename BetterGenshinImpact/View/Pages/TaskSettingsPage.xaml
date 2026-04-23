@@ -4306,8 +4306,14 @@
                 </Grid>
             </ui:CardExpander.Header>
             <StackPanel>
-                <!-- 第一部分：执行配置 -->
-                <ui:TextBlock Margin="16,12,16,4" FontTypography="BodyStrong" Text="第一部分：执行配置" />
+                <!-- 普通锄地选项折叠区域 -->
+                <ui:CardExpander Margin="0,0,0,8" ContentPadding="12" IsExpanded="False">
+                    <ui:CardExpander.Header>
+                        <ui:TextBlock FontTypography="Body" Text="锄地配置选项" />
+                    </ui:CardExpander.Header>
+                    <StackPanel>
+                        <!-- 第一部分：执行配置 -->
+                        <ui:TextBlock Margin="16,12,16,4" FontTypography="BodyStrong" Text="第一部分：执行配置" />
 
                 <Grid Margin="16,8">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -4608,6 +4614,508 @@
                     </StackPanel>
                     <ui:TextBox Grid.Column="1" MinWidth="220" Margin="0,0,36,0" Text="{Binding Config.AutoHoeingConfig.TargetMonsters, Mode=TwoWay}" />
                 </Grid>
+
+                    </StackPanel>
+                </ui:CardExpander>
+
+                <!-- ========== 联机锄地设置 ========== -->
+                <ui:CardExpander Margin="0,12,0,0" ContentPadding="12">
+                    <ui:CardExpander.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <ui:TextBlock FontTypography="Body" Text="联机锄地设置" />
+                                <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" Text="复用独立任务中的自动战斗配置，另可添加到配置组执行（应用配置组设置）" />
+                            </StackPanel>
+                            <ui:ToggleSwitch Grid.Column="1" Margin="0,0,12,0"
+                                            IsChecked="{Binding Config.AutoHoeingConfig.MultiplayerEnabled, Mode=TwoWay}" />
+                        </Grid>
+                    </ui:CardExpander.Header>
+                    <StackPanel>
+
+                        <!-- ── 身份信息 ── -->
+                        <ui:TextBlock Margin="0,0,0,6" FontTypography="BodyStrong" Text="身份信息" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <ui:TextBlock Grid.Column="0" VerticalAlignment="Center" Text="服务器地址" />
+                            <ui:TextBox Grid.Column="1" Width="260" Margin="0,0,36,0"
+                                       Text="{Binding Config.AutoHoeingConfig.CoordinatorServerUrl, Mode=TwoWay}" />
+                        </Grid>
+
+                        <!-- 玩家名称 + UID -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <ui:TextBlock Text="玩家名称 / UID" />
+                                <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" Text="玩家游戏中的名称，UID 用于进入世界" />
+                            </StackPanel>
+                            <ui:TextBox Grid.Column="1" Width="120" Margin="0,0,8,0"
+                                       Text="{Binding Config.AutoHoeingConfig.PlayerName, Mode=TwoWay}"
+                                       PlaceholderText="名称" />
+                            <ui:TextBox Grid.Column="2" Width="120" Margin="0,0,36,0"
+                                       Text="{Binding Config.AutoHoeingConfig.PlayerUid, Mode=TwoWay}"
+                                       PlaceholderText="UID" />
+                        </Grid>
+
+                        <!-- ========== 联机角色选择 ========== -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <ui:TextBlock Text="联机角色" FontTypography="Body" />
+                                <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                             Text="选择在联机锄地中的角色定位" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" Width="180" Margin="0,0,36,0"
+                                     SelectedIndex="{Binding MultiplayerRoleIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="房主（创建房间）" />
+                                <ComboBoxItem Content="成员（加入房间）" />
+                            </ComboBox>
+                        </Grid>
+
+                        <Separator Margin="0,0,36,12" />
+
+                        <!-- ── 房间管理（房主专属）── -->
+                        <StackPanel Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <ui:TextBlock Margin="0,0,0,6" FontTypography="BodyStrong" Text="房间管理（房主）" />
+
+                            <!-- 创建房间行 -->
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ui:Button Grid.Column="0" Margin="0,0,8,0" Content="创建房间"
+                                          Command="{Binding CreateRoomCommand}" />
+                                <ui:TextBox Grid.Column="1" Width="100" Margin="0,0,8,0"
+                                           IsReadOnly="True"
+                                           Text="{Binding CurrentRoomCode, Mode=OneWay}"
+                                           PlaceholderText="房间码" />
+                                <ui:Button Grid.Column="2" Margin="0,0,8,0" Content="复制"
+                                          Command="{Binding CopyRoomCodeCommand}" />
+                                <ui:TextBlock Grid.Column="3" VerticalAlignment="Center" Margin="0,0,4,0" Text="人数:" />
+                                <ui:NumberBox Grid.Column="4" Width="100" Margin="0,0,8,0" Minimum="2" Maximum="4" SpinButtonPlacementMode="Inline"
+                                             Value="{Binding Config.AutoHoeingConfig.ExpectedPlayerCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <ui:Button Grid.Column="5" Margin="0,0,36,0" HorizontalAlignment="Right" Content="关闭房间"
+                                          Command="{Binding CloseRoomCommand}" />
+                            </Grid>
+
+                            <!-- 房间白名单 -->
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Column="0" VerticalAlignment="Center" Text="房间白名单（逗号分隔，留空不限制，支持备注名）" />
+                                <ui:TextBox Grid.Column="1" MinWidth="180" Margin="0,0,36,0"
+                                           Text="{Binding Config.AutoHoeingConfig.RoomWhitelist, Mode=TwoWay}"
+                                           PlaceholderText="留空则不限制" />
+                            </Grid>
+                        </StackPanel>
+
+                        <!-- 加入房间（房主和成员都可见）-->
+                        <ui:TextBlock Margin="0,12,0,6" FontTypography="BodyStrong" Text="加入房间" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <ui:Button Grid.Column="0" Margin="0,0,8,0" Content="加入房间"
+                                      Command="{Binding JoinRoomCommand}" />
+                            <ui:TextBox Grid.Column="1" Width="100" Margin="0,0,8,0"
+                                       Text="{Binding Config.AutoHoeingConfig.CurrentRoomCode, Mode=TwoWay}"
+                                       PlaceholderText="输入房间码" />
+                            <ui:Button Grid.Column="2" Margin="0,0,36,0" Content="浏览房间"
+                                      Command="{Binding BrowseRoomsCommand}" />
+                        </Grid>
+
+                        <!-- 房间玩家状态 -->
+                        <Grid Margin="0,0,0,4">
+                            <ui:TextBlock Text="{Binding RoomPlayerSummary}" TextWrapping="Wrap"
+                                         Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+                        </Grid>
+
+                        <!-- 路线差异提示 -->
+                        <Grid Margin="0,0,0,8"
+                              Visibility="{Binding HasRouteDiff, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel>
+                                <ui:TextBlock Text="路线文件不一致" Foreground="OrangeRed" />
+                                <ui:TextBlock Text="{Binding RouteDiffMessage}" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Separator Margin="0,4,36,12" />
+
+                        <!-- ── 联机队伍和角色准备 ── -->
+                        <ui:TextBlock Margin="0,0,0,6" FontTypography="BodyStrong" Text="联机队伍和角色准备" />
+                        
+                        <!-- 联机队伍名称 -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="300" />
+                            </Grid.ColumnDefinitions>
+                            <ui:TextBlock Grid.Row="0" Grid.Column="0" 
+                                         FontTypography="Body" 
+                                         Text="联机队伍名称" 
+                                         VerticalAlignment="Center" />
+                            <ui:TextBlock Grid.Row="1" Grid.Column="0" 
+                                         Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                         Text="联机前自动切换到指定队伍，留空则使用当前队伍" />
+                            <ui:TextBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1"
+                                       Margin="0,0,36,0"
+                                       PlaceholderText="留空则使用当前队伍"
+                                       Text="{Binding Config.AutoHoeingConfig.MultiplayerPartyName, Mode=TwoWay}" />
+                        </Grid>
+
+                        <!-- 联机起始角色名称 -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="300" />
+                            </Grid.ColumnDefinitions>
+                            <ui:TextBlock Grid.Row="0" Grid.Column="0" 
+                                         FontTypography="Body" 
+                                         Text="联机起始角色名称" 
+                                         VerticalAlignment="Center" />
+                            <ui:TextBlock Grid.Row="1" Grid.Column="0" 
+                                         Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                         Text="联机前自动切换到指定角色，留空则使用当前角色" />
+                            <ui:TextBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1"
+                                       Margin="0,0,36,0"
+                                       PlaceholderText="留空则使用当前角色，如：钟离、纳西妲"
+                                       Text="{Binding Config.AutoHoeingConfig.MultiplayerStartAvatarName, Mode=TwoWay}" />
+                        </Grid>
+
+                        <!-- 说明文字 -->
+                        <ui:TextBlock Margin="0,0,0,12" 
+                                     Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}"
+                                     FontSize="12"
+                                     TextWrapping="Wrap"
+                                     Text="联机前会自动切换到指定队伍和角色，切换失败不影响联机" />
+
+                        <Separator Margin="0,4,36,12"
+                                   Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                        <!-- 房主专属设置说明 -->
+                        <ui:TextBlock Margin="0,0,0,8" 
+                                     FontSize="11"
+                                     Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                     Text="以下设置仅房主设置有效（多轮锄地轮换以第一任房主设置为准）"
+                                     Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                        <!-- ── 房间设置（房主）── -->
+                        <Expander Margin="0,0,36,8"
+                                  Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Expander.Header>
+                                <ui:TextBlock Text="房间设置" FontTypography="BodyStrong" />
+                            </Expander.Header>
+                            <StackPanel Margin="0,8,0,0">
+                                <!-- 组队超时（秒） -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="组队超时（秒）" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="等待队友加入的最长时间" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" 
+                                                 Minimum="60" Maximum="7200" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.PartyTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 超时动作 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="超时动作" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="组队超时后的处理方式" TextWrapping="Wrap" />
+                                    <ComboBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="180"
+                                              SelectedIndex="{Binding Config.AutoHoeingConfig.PartyTimeoutAction, Mode=TwoWay}">
+                                        <ComboBoxItem Content="结束任务" />
+                                        <ComboBoxItem Content="现有人数锄地" />
+                                    </ComboBox>
+                                </Grid>
+
+                                <!-- 多世界连续锄地 -->
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="多世界连续锄地" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="完成一个世界后按加入顺序轮换房主，最多4轮（使用第一任房主的配置）" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" Margin="0,0,8,0" 
+                                                 Minimum="1" Maximum="4" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.MultiWorldCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 IsEnabled="{Binding Config.AutoHoeingConfig.MultiWorldEnabled}" />
+                                    <ui:ToggleSwitch Grid.Row="0" Grid.RowSpan="2" Grid.Column="2"
+                                                   IsChecked="{Binding Config.AutoHoeingConfig.MultiWorldEnabled, Mode=TwoWay}" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- ── 同步设置（房主）── -->
+                        <Expander Margin="0,4,36,8"
+                                  Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Expander.Header>
+                                <ui:TextBlock Text="同步设置" FontTypography="BodyStrong" />
+                            </Expander.Header>
+                            <StackPanel Margin="0,8,0,0">
+                                <!-- 集合点超时（秒） -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="集合点超时（秒）" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="等待队友到达集合点的最长时间" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" 
+                                                 Minimum="10" Maximum="300" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.SyncTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 最低同步人数 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="最低同步人数" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="至少需要多少人到达集合点才继续，0表示不限制" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" 
+                                                 Minimum="0" Maximum="4" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.MinPlayersToSync, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 集合点最小距离 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="集合点最小距离" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="路线中相邻集合点的最小距离，用于自动插入集合点" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" 
+                                                 Minimum="5" Maximum="200" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.SyncPointMinDistance, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 万叶玩家序号 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="万叶玩家序号（0=不指定）" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="指定哪位玩家使用万叶聚怪，0表示不指定" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" 
+                                                 Minimum="0" Maximum="4" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.KazuhaPlayerIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 从第几条路线开始 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="从第几条路线开始" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="0：检测锄地CD，1以上：调试时可跳过前N条" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120" 
+                                                 Minimum="0" Maximum="999" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.StartRouteIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 战斗后走回战斗点 -->
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="战斗后走回战斗点" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" 
+                                                 Text="战斗完成后走回战斗点等待其他玩家" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="100" Margin="0,0,8,0" 
+                                                 Minimum="0" Maximum="60" SpinButtonPlacementMode="Inline"
+                                                 Value="{Binding Config.AutoHoeingConfig.ReturnToFightPointStaySeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 IsEnabled="{Binding Config.AutoHoeingConfig.ReturnToFightPointAfterBattle}" />
+                                    <ui:ToggleSwitch Grid.Row="0" Grid.RowSpan="2" Grid.Column="2"
+                                                   IsChecked="{Binding Config.AutoHoeingConfig.ReturnToFightPointAfterBattle, Mode=TwoWay}" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- ── 线路选项（折叠）── -->
+                        <Expander Margin="0,4,36,8"
+                                  Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Expander.Header>
+                                <ui:TextBlock Text="线路选项" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" />
+                            </Expander.Header>
+                            <StackPanel Margin="0,8,0,0">
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <ui:TextBlock Text="调试模式" />
+                                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" Text="跳过路线一致性验证，方便单人调试" />
+                                    </StackPanel>
+                                    <ui:ToggleSwitch Grid.Column="1"
+                                                   IsChecked="{Binding Config.AutoHoeingConfig.DebugMode, Mode=TwoWay}" />
+                                </Grid>
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <ui:TextBlock Text="固定调试线路" />
+                                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" Text="启用后使用内置线路按顺序执行，跳过路线选择" />
+                                    </StackPanel>
+                                    <ui:ToggleSwitch Grid.Column="1"
+                                                   IsChecked="{Binding Config.AutoHoeingConfig.UseFixedDebugRoutes, Mode=TwoWay}" />
+                                </Grid>
+                                <!-- 手动指定线路目录 - 只在固定调试线路开启时显示 -->
+                                <Grid Margin="0,0,0,12" Visibility="{Binding Config.AutoHoeingConfig.UseFixedDebugRoutes, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Column="0" VerticalAlignment="Center" Text="手动指定线路目录" />
+                                    <ui:TextBox Grid.Column="1" Width="260"
+                                               Text="{Binding Config.AutoHoeingConfig.FixedDebugRoutePath, Mode=TwoWay}"
+                                               PlaceholderText="留空则使用下方按钮选择"
+                                               TextChanged="OnDebugRoutePathChanged" />
+                                </Grid>
+                                
+                                <!-- 内置线路选择按钮区域 - 只在固定调试线路开启时显示 -->
+                                <StackPanel Visibility="{Binding Config.AutoHoeingConfig.UseFixedDebugRoutes, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <ui:TextBlock Text="内置线路快速选择" 
+                                                 Margin="0,0,0,4"
+                                                 Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+                                    <ItemsControl ItemsSource="{Binding BuiltinRoutes}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel Orientation="Horizontal" />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <ui:Button Content="{Binding FolderName}"
+                                                          Margin="0,0,8,8"
+                                                          Appearance="{Binding IsSelected, Converter={StaticResource BoolToButtonAppearanceConverter}}"
+                                                          IsEnabled="{Binding IsEnabled}"
+                                                          Command="{Binding DataContext.SelectBuiltinRouteCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                          CommandParameter="{Binding}" />
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    
+                                    <ui:TextBlock Text="手动输入路径优先级高于按钮选择" 
+                                                 Margin="0,4,0,0"
+                                                 FontSize="11"
+                                                 Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- ── 操作区 ── -->
+                        <StackPanel Margin="0,8,0,0">
+                            <!-- 按钮行 -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Column="0" VerticalAlignment="Center"
+                                             Text="{Binding MultiplayerStatusText}"
+                                             Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+                                <ui:Button Grid.Column="1" Margin="0,0,8,0"
+                                          Content="开始联机锄地"
+                                          Appearance="Primary"
+                                          IsEnabled="{Binding CanStartMultiplayer}"
+                                          Command="{Binding StartMultiplayerHoeingCommand}" />
+                                <ui:Button Grid.Column="2" Margin="0,0,36,0"
+                                          Content="立即开始(当前人数)"
+                                          IsEnabled="{Binding CanSkipPartyWait}"
+                                          Command="{Binding SkipPartyWaitCommand}" />
+                            </Grid>
+                            <!-- 说明文字 -->
+                            <ui:TextBlock Margin="0,6,36,0" 
+                                         HorizontalAlignment="Right"
+                                         Text="仅在组队等待过程中可用"
+                                         FontSize="11"
+                                         Foreground="{ui:ThemeResource TextFillColorSecondaryBrush}" />
+                            <ui:TextBlock Margin="0,2,36,0" 
+                                         HorizontalAlignment="Right"
+                                         Text="{Binding SkipPartyWaitHotkeyText}"
+                                         FontSize="10"
+                                         Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+                </ui:CardExpander>
             </StackPanel>
         </ui:CardExpander>
 

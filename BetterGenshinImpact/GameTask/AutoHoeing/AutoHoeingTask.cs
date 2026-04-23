@@ -1,10 +1,15 @@
 using BetterGenshinImpact.Core.Config;
+using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.AutoHoeing.Models;
+using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
+using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models;
 using BetterGenshinImpact.GameTask.AutoHoeing.Services;
 using BetterGenshinImpact.GameTask.AutoPathing;
 using BetterGenshinImpact.GameTask.AutoPathing.Model;
+using BetterGenshinImpact.GameTask.AutoTrackPath;
 using BetterGenshinImpact.GameTask.Common;
 using BetterGenshinImpact.GameTask.Common.Job;
+using BetterGenshinImpact.GameTask.Model.Area;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -13,7 +18,12 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Vanara.PInvoke;
 using static BetterGenshinImpact.GameTask.Common.TaskControl;
+
+using BetterGenshinImpact.Core.Simulator;
+using BetterGenshinImpact.Core.Simulator.Extensions;
+
 
 namespace BetterGenshinImpact.GameTask.AutoHoeing;
 
@@ -52,8 +62,22 @@ public class AutoHoeingTask : ISoloTask
     private readonly DumperService _dumperService = new();
     private readonly BlacklistManager _blacklistManager = new();
     private readonly CookingService _cookingService = new();
+    private RouteConsistencyChecker? _consistencyChecker;
+    private CoordinatorClient? _coordinatorClientRef;
     private RouteExecutionEngine? _executionEngine;
+    private MultiplayerCoordinator? _multiplayerCoordinator;
     private bool _shouldSwitchFurina;
+    
+    private bool _teamAlreadySwitched = false;
+    private bool _worldPermissionSet = false;
+    
+    /// <summary>
+    /// 多世界模式下，保存第一任房主的配置，后续轮次都使用这个配置
+    /// </summary>
+    private RoomConfig? _firstHostConfig;
+    
+    public static volatile bool SkipPartyWait = false; // 房主点击"立即开始"时设为 true
+    public static volatile bool IsWaitingForParty = false; // 是否正在等待组队（进入F2页面）
 
     public AutoHoeingTask(PathingPartyConfig? partyConfig = null, Dictionary<string, object?>? settings = null)
     {
@@ -106,6 +130,725 @@ public class AutoHoeingTask : ISoloTask
         {
             _logger.LogError(ex, "锄地一条龙任务异常终止");
         }
+        finally
+        {
+            if (_multiplayerCoordinator != null)
+            {
+                await _multiplayerCoordinator.DisposeAsync();
+                _multiplayerCoordinator = null;
+            }
+            // 多世界模式下 _coordinatorClientRef 由 RunTask 管理，这里只做兜底清理
+            if (_coordinatorClientRef != null)
+            {
+                await _coordinatorClientRef.DisposeAsync();
+                _coordinatorClientRef = null;
+            }
+        }
+    }
+
+    private async Task InitializeMultiplayerAsync()
+    {
+        try
+        {
+            var client = new CoordinatorClient();
+            _logger.LogInformation("[联机] 开始连接协调服务器: {Url}", _config.CoordinatorServerUrl);
+            var connected = await client.ConnectAsync(_config.CoordinatorServerUrl, _ct);
+            if (!connected)
+            {
+                _logger.LogWarning("[联机] 连接协调服务器失败，降级为单机模式");
+                return;
+            }
+            _logger.LogInformation("[联机] 连接成功");
+
+            // 解析白名单
+            var whitelist = string.IsNullOrEmpty(_config.RoomWhitelist)
+                ? null
+                : new List<string>(_config.RoomWhitelist.Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+            // 根据角色决定创建或加入房间
+            var isMember = _config.MultiplayerRole == "member";
+
+            if (isMember)
+            {
+                // 成员模式：根据加入方式获取房间码
+                string? roomCodeToJoin = null;
+
+                // 指定房主名为空时，自动降级为随机加入
+                if (_config.MemberJoinMode != "random" && string.IsNullOrEmpty(_config.TargetHostName))
+                {
+                    _logger.LogWarning("[联机] 成员模式指定房主名为空，自动切换为随机加入模式");
+                    _config.MemberJoinMode = "random";
+                }
+
+                if (_config.MemberJoinMode == "random")
+                {
+                    // 随机加入：轮询房间列表，逐个尝试有空位的房间，加入失败则换下一个
+                    _logger.LogInformation("[联机] 成员模式，随机加入现有房间（超时 {T}s）...", _config.PartyTimeoutSeconds);
+                    var deadline = DateTime.UtcNow.AddSeconds(_config.PartyTimeoutSeconds);
+                    int attempt = 0;
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        attempt++;
+                        var rooms = await client.GetOnlineRoomsAsync();
+                        var candidates = rooms.Where(r => r.PlayerCount < r.MaxPlayers).ToList();
+                        if (candidates.Count == 0)
+                        {
+                            _logger.LogInformation("[联机] 暂无可用房间，等待中...（第{N}次）", attempt);
+                            await Task.Delay(5000, _ct);
+                            continue;
+                        }
+
+                        bool joined = false;
+                        foreach (var room in candidates)
+                        {
+                            _logger.LogInformation("[联机] 尝试加入房间: {Code}（房主: {Host}，{N}/{Max}人）",
+                                room.Code, room.HostName, room.PlayerCount, room.MaxPlayers);
+                            var ok = await client.JoinRoomAsync(room.Code, _config.PlayerName, _config.PlayerUid);
+                            if (ok)
+                            {
+                                roomCodeToJoin = room.Code;
+                                _logger.LogInformation("[联机] 成功加入房间: {Code}", room.Code);
+                                joined = true;
+                                break;
+                            }
+                            _logger.LogWarning("[联机] 加入房间 {Code} 失败（可能满员或白名单限制），尝试下一个", room.Code);
+                        }
+
+                        if (joined) break;
+
+                        _logger.LogInformation("[联机] 本轮所有候选房间均加入失败，5秒后重试（第{N}次）", attempt);
+                        await Task.Delay(5000, _ct);
+                    }
+                    if (roomCodeToJoin == null)
+                    {
+                        _logger.LogError("[联机] 等待超时（{T}s），未能加入任何可用房间，停止联机锄地", _config.PartyTimeoutSeconds);
+                        await client.DisposeAsync();
+                        return;
+                    }
+                }
+                else
+                {
+                    // 指定房主名：轮询房间列表，找到对应房主的房间
+                    var targetHost = _config.TargetHostName;
+                    _logger.LogInformation("[联机] 成员模式，等待房主 [{Host}] 的房间（超时 {T}s）...", targetHost, _config.PartyTimeoutSeconds);
+                    var deadline = DateTime.UtcNow.AddSeconds(_config.PartyTimeoutSeconds);
+                    int attempt = 0;
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        attempt++;
+                        var rooms = await client.GetOnlineRoomsAsync();
+                        var target = rooms.FirstOrDefault(r =>
+                            r.HostName.Equals(targetHost, StringComparison.OrdinalIgnoreCase) &&
+                            r.PlayerCount < r.MaxPlayers);
+                        if (target != null)
+                        {
+                            roomCodeToJoin = target.Code;
+                            _logger.LogInformation("[联机] 找到房主 [{Host}] 的房间: {Code}", targetHost, target.Code);
+                            break;
+                        }
+                        _logger.LogInformation("[联机] 未找到房主 [{Host}] 的房间，等待中...（第{N}次）", targetHost, attempt);
+                        await Task.Delay(5000, _ct);
+                    }
+                    if (roomCodeToJoin == null)
+                    {
+                        _logger.LogError("[联机] 等待超时（{T}s），未找到房主 [{Host}] 的房间，停止联机锄地", _config.PartyTimeoutSeconds, targetHost);
+                        await client.DisposeAsync();
+                        return;
+                    }
+                }
+
+                // 加入找到的房间（带重试）
+                _config.CurrentRoomCode = roomCodeToJoin;
+                bool joinedRoom = false;
+                bool roomClosed = false;
+                Action<string> roomClosedHandler = _ => roomClosed = true;
+                client.RoomClosed += roomClosedHandler;
+                try
+                {
+                    for (int retry = 1; retry <= 10; retry++)
+                    {
+                        if (roomClosed) { _logger.LogWarning("[联机] 房间已被关闭，停止加入"); break; }
+                        _logger.LogInformation("[联机] 尝试加入房间: {Code}（第{N}次）", roomCodeToJoin, retry);
+                        joinedRoom = await client.JoinRoomAsync(roomCodeToJoin, _config.PlayerName, _config.PlayerUid);
+                        if (joinedRoom) { _logger.LogInformation("[联机] 成功加入房间: {Code}", roomCodeToJoin); break; }
+                        _logger.LogWarning("[联机] 加入房间 {Code} 失败，3秒后重试", roomCodeToJoin);
+                        await Task.Delay(3000, _ct);
+                    }
+                }
+                finally
+                {
+                    client.RoomClosed -= roomClosedHandler;
+                }
+                if (!joinedRoom)
+                {
+                    _logger.LogError("[联机] 无法加入房间 {Code}（{Reason}），停止联机锄地",
+                        roomCodeToJoin, roomClosed ? "房间已关闭" : "重试耗尽");
+                    await client.DisposeAsync();
+                    return;
+                }
+                // 加入房间后立刻发心跳，确保服务器知道成员在线
+                await client.SendHeartbeatAsync();
+            }
+            else
+            {
+                // 房主模式：始终创建新房间（避免重启后尝试加入已不存在的旧房间）
+                if (!string.IsNullOrEmpty(_config.CurrentRoomCode))
+                {
+                    _logger.LogInformation("[联机] 清除旧房间码 {Code}，创建新房间", _config.CurrentRoomCode);
+                    _config.CurrentRoomCode = "";
+                }
+                _logger.LogInformation("[联机] 无房间码，创建新房间");
+                var newCode = await client.CreateRoomAsync(_config.PlayerName, whitelist, _config.PlayerUid, _config.ExpectedPlayerCount);
+                if (newCode != null)
+                {
+                    _config.CurrentRoomCode = newCode;
+                    _logger.LogInformation("[联机] 已创建房间: {Code}", newCode);
+                }
+                else
+                {
+                    _logger.LogWarning("[联机] 创建房间失败，降级为单机模式");
+                    await client.DisposeAsync();
+                    return;
+                }
+            }
+
+            // 房主/成员标识（用于后续配置同步）
+            var isHost = !isMember;
+            if (_config.KazuhaPlayerIndex > 0)
+            {
+                await client.SetKazuhaPlayerAsync(_config.KazuhaPlayerIndex);
+                _logger.LogInformation("[联机] 已设置万叶玩家序号: {Idx}", _config.KazuhaPlayerIndex);
+            }
+
+            // 配置同步：房主上传，成员拉取
+            if (isHost)
+            {
+                var roomConfig = new Multiplayer.Models.RoomConfig
+                {
+                    SyncTimeoutSeconds = _config.SyncTimeoutSeconds,
+                    MinPlayersToSync = _config.MinPlayersToSync,
+                    SyncPointMinDistance = _config.SyncPointMinDistance,
+                    StartRouteIndex = _config.StartRouteIndex,
+                    UseFixedDebugRoutes = _config.UseFixedDebugRoutes,
+                    FixedDebugRoutePath = _config.FixedDebugRoutePath,
+                    DebugMode = _config.DebugMode,
+                    ReturnToFightPointAfterBattle = _config.ReturnToFightPointAfterBattle,
+                    ReturnToFightPointStaySeconds = _config.ReturnToFightPointStaySeconds,
+                    KazuhaPlayerIndex = _config.KazuhaPlayerIndex,
+                    PartyTimeoutSeconds = _config.PartyTimeoutSeconds,
+                    MultiWorldEnabled = _config.MultiWorldEnabled,
+                    MultiWorldCount = _config.MultiWorldCount,
+                    SelectedBuiltinRoute = _config.SelectedBuiltinRoute,
+                };
+                
+                // 房主上传配置，带重试机制（最多3次）
+                bool uploadSuccess = false;
+                for (int retry = 1; retry <= 3; retry++)
+                {
+                    try
+                    {
+                        await client.SetRoomConfigAsync(roomConfig);
+                        uploadSuccess = true;
+                        _logger.LogInformation("[联机] 房主配置已上传到服务器（第{N}次尝试）", retry);
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        if (retry < 3)
+                        {
+                            _logger.LogWarning(ex, "[联机] 上传房主配置失败（第{N}次尝试），2秒后重试", retry);
+                            await Task.Delay(2000, _ct);
+                        }
+                        else
+                        {
+                            _logger.LogError(ex, "[联机] 上传房主配置失败（重试3次后仍失败）");
+                        }
+                    }
+                }
+                
+                // 多世界模式下配置上传失败是严重错误，必须终止
+                if (!uploadSuccess && _config.MultiWorldEnabled)
+                {
+                    _logger.LogError("[联机] 多世界模式：房主配置上传失败，终止多世界模式");
+                    await client.DisposeAsync();
+                    _multiplayerCoordinator = null;
+                    return;
+                }
+                
+                // 多世界模式：保存第一任房主的配置
+                if (_config.MultiWorldEnabled && uploadSuccess)
+                {
+                    _firstHostConfig = roomConfig;
+                    _logger.LogInformation("[联机] 多世界模式：已锁定第一任房主配置");
+                }
+            }
+
+            var barrier = new SyncBarrier(client, _config.SyncTimeoutSeconds);
+            var resolver = new SyncPointResolver();
+            _multiplayerCoordinator = new MultiplayerCoordinator(client, barrier, resolver, _config.MinPlayersToSync, _config.SyncTimeoutSeconds);
+            _logger.LogInformation("[联机] MultiplayerCoordinator 初始化完成，超时={Timeout}s，最低人数={Min}", _config.SyncTimeoutSeconds, _config.MinPlayersToSync);
+
+            _multiplayerCoordinator.OnDegraded += reason =>
+            {
+                _logger.LogWarning("[联机] 已降级为单机模式，原因：{Reason}", reason);
+            };
+
+            // 路线一致性验证（延迟到路线筛选后执行，只验证本次要跑的路线）
+            _consistencyChecker = new RouteConsistencyChecker();
+            _coordinatorClientRef = client;
+            _logger.LogInformation("[联机] 路线一致性验证将在路线筛选后执行");
+
+            // 自动组队：游戏内加入/等待
+            var autoParty = new AutoPartyTask();
+            if (isHost)
+            {
+                // 上报房主就绪，通知成员可以开始申请
+                await client.ReportHostReadyAsync();
+                var hotkeyHint = string.IsNullOrEmpty(TaskContext.Instance().Config.HotKeyConfig.SkipPartyWaitHotkey)
+                    ? "（可在快捷键设置中配置快捷键）"
+                    : $"（可按快捷键 {TaskContext.Instance().Config.HotKeyConfig.SkipPartyWaitHotkey} 立即开始）";
+                _logger.LogInformation("[联机] 当前为房主，已上报就绪，等待成员加入世界 {Hint}", hotkeyHint);
+                var partyWhitelist = string.IsNullOrEmpty(_config.RoomWhitelist)
+                    ? null
+                    : _config.RoomWhitelist.Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var actualCount = await autoParty.WaitForMembersAsync(
+                    _config.ExpectedPlayerCount, partyWhitelist, client, _config.PartyTimeoutSeconds, _ct);
+
+                if (actualCount < 0)
+                {
+                    // 初始化失败（未检测到主界面等）
+                    _logger.LogError("[联机] 自动组队初始化失败，停止联机锄地");
+                    await client.DisposeAsync();
+                    _multiplayerCoordinator = null;
+                    return;
+                }
+                else if (actualCount == 0)
+                {
+                    // 超时
+                    if (_config.PartyTimeoutAction == 1)
+                    {
+                        // 现有人数锄地
+                        var currentCount = client.CurrentRoomPlayerCount;
+                        _logger.LogWarning("[联机] 组队超时，以当前 {N} 人开始锄地", currentCount);
+                        _config.ExpectedPlayerCount = currentCount > 0 ? currentCount : 1;
+                        _config.MinPlayersToSync = _config.ExpectedPlayerCount;
+                    }
+                    else
+                    {
+                        _logger.LogError("[联机] 组队超时，停止联机锄地");
+                        await client.DisposeAsync();
+                        _multiplayerCoordinator = null;
+                        return;
+                    }
+                }
+                else if (actualCount < _config.ExpectedPlayerCount)
+                {
+                    // 房主手动跳过（ESC），以实际人数开始
+                    _logger.LogInformation("[联机] 房主跳过等待，以实际 {N} 人开始锄地", actualCount);
+                    _config.ExpectedPlayerCount = actualCount;
+                    _config.MinPlayersToSync = actualCount;
+                }
+                else
+                {
+                    _logger.LogInformation("[联机] 人齐，共 {N} 人，开始锄地", actualCount);
+                }
+
+                // 房主也上报 WorldJoined，触发 AllWorldJoined 广播给成员
+                // 先注册监听再上报，避免信号在上报和等待之间丢失
+                var hostAllJoinedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Action hostAllJoinedHandler = () => hostAllJoinedTcs.TrySetResult(true);
+                client.AllWorldJoined += hostAllJoinedHandler;
+                try
+                {
+                    await client.ReportWorldJoinedAsync();
+                    _logger.LogInformation("[联机] 房主已上报就绪，等待所有成员就绪...");
+
+                    using var allJoinedCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.PartyTimeoutSeconds));
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_ct, allJoinedCts.Token);
+                    using var reg = linkedCts.Token.Register(() => hostAllJoinedTcs.TrySetResult(false));
+                    var allJoined = await hostAllJoinedTcs.Task;
+                    if (allJoined)
+                        _logger.LogInformation("[联机] 所有成员已就绪，开始锄地");
+                    else
+                        _logger.LogWarning("[联机] 等待所有成员就绪超时，继续执行");
+                }
+                finally
+                {
+                    client.AllWorldJoined -= hostAllJoinedHandler;
+                }
+            }
+            else
+            {
+                // 从服务器获取房主 UID（PlayerList 第一个玩家）
+                // 等待 PlayerListUpdated 到达（最多 10 秒超时）
+                if (string.IsNullOrEmpty(client.HostPlayerUid))
+                {
+                    _logger.LogInformation("[联机] 等待 PlayerListUpdated 事件到达...");
+                    var playerListTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    Action<List<PlayerInfo>> playerListHandler = _ => playerListTcs.TrySetResult(true);
+                    client.PlayerListUpdated += playerListHandler;
+                    try
+                    {
+                        using var playerListCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_ct, playerListCts.Token);
+                        using var reg = linkedCts.Token.Register(() => playerListTcs.TrySetResult(false));
+                        
+                        var received = await playerListTcs.Task;
+                        if (!received)
+                        {
+                            _logger.LogWarning("[联机] 等待 PlayerListUpdated 超时，HostPlayerUid 可能为空");
+                        }
+                        else
+                        {
+                            _logger.LogInformation("[联机] PlayerListUpdated 已到达");
+                        }
+                    }
+                    finally
+                    {
+                        client.PlayerListUpdated -= playerListHandler;
+                    }
+                }
+                
+                var hostUid = client.HostPlayerUid;
+                if (string.IsNullOrEmpty(hostUid))
+                {
+                    _logger.LogWarning("[联机] 无法获取房主 UID，跳过自动组队");
+                }
+                else
+                {
+                    // 等待房主就绪后再申请加入
+                    _logger.LogInformation("[联机] 等待房主进入就绪状态...");
+                    var hostReadyTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    Action<bool> readyHandler = ready => { if (ready) hostReadyTcs.TrySetResult(true); };
+                    client.HostReadyChanged += readyHandler;
+                    try
+                    {
+                        // 先查一次当前状态
+                        if (await client.IsHostReadyAsync())
+                        {
+                            _logger.LogInformation("[联机] 房主已就绪");
+                        }
+                        else
+                        {
+                            using var readyCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.PartyTimeoutSeconds));
+                            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_ct, readyCts.Token);
+                            using var reg = linkedCts.Token.Register(() => hostReadyTcs.TrySetResult(false));
+
+                            // 同时启动轮询，防止事件推送丢失（服务器可能不持久化就绪状态）
+                            _ = Task.Run(async () =>
+                            {
+                                while (!hostReadyTcs.Task.IsCompleted)
+                                {
+                                    try
+                                    {
+                                        await Task.Delay(3000, linkedCts.Token);
+                                        if (await client.IsHostReadyAsync())
+                                            hostReadyTcs.TrySetResult(true);
+                                    }
+                                    catch { break; }
+                                }
+                            }, linkedCts.Token);
+
+                            var ready = await hostReadyTcs.Task;
+                            if (!ready)
+                            {
+                                _logger.LogError("[联机] 等待房主就绪超时，停止联机锄地");
+                                await client.DisposeAsync();
+                                _multiplayerCoordinator = null;
+                                return;
+                            }
+                            _logger.LogInformation("[联机] 房主已就绪");
+                        }
+                    }
+                    finally
+                    {
+                        client.HostReadyChanged -= readyHandler;
+                    }
+
+                    // 房主就绪后拉取配置（确保房主已上传配置）
+                    RoomConfig? hostConfig = null;
+                    for (int retry = 1; retry <= 3; retry++)
+                    {
+                        hostConfig = await client.GetRoomConfigAsync();
+                        if (hostConfig != null)
+                        {
+                            _logger.LogInformation("[联机] 成功拉取房主配置（第{N}次尝试）", retry);
+                            break;
+                        }
+                        if (retry < 3)
+                        {
+                            _logger.LogWarning("[联机] 拉取房主配置失败（第{N}次尝试），2秒后重试", retry);
+                            await Task.Delay(2000, _ct);
+                        }
+                    }
+
+                    if (hostConfig != null)
+                    {
+                        _config.SyncTimeoutSeconds = hostConfig.SyncTimeoutSeconds;
+                        _config.MinPlayersToSync = hostConfig.MinPlayersToSync;
+                        _config.SyncPointMinDistance = hostConfig.SyncPointMinDistance;
+                        _config.StartRouteIndex = hostConfig.StartRouteIndex;
+                        _config.UseFixedDebugRoutes = hostConfig.UseFixedDebugRoutes;
+                        _config.FixedDebugRoutePath = hostConfig.FixedDebugRoutePath;
+                        _config.DebugMode = hostConfig.DebugMode;
+                        _config.ReturnToFightPointAfterBattle = hostConfig.ReturnToFightPointAfterBattle;
+                        _config.ReturnToFightPointStaySeconds = hostConfig.ReturnToFightPointStaySeconds;
+                        _config.KazuhaPlayerIndex = hostConfig.KazuhaPlayerIndex;
+                        _config.PartyTimeoutSeconds = hostConfig.PartyTimeoutSeconds;
+                        _config.MultiWorldEnabled = hostConfig.MultiWorldEnabled;
+                        _config.MultiWorldCount = hostConfig.MultiWorldCount;
+                        _config.SelectedBuiltinRoute = hostConfig.SelectedBuiltinRoute;
+
+                        // 多世界模式：保存第一任房主的配置
+                        if (_config.MultiWorldEnabled)
+                        {
+                            _firstHostConfig = hostConfig;
+                            _logger.LogInformation("[联机] 多世界模式：已保存第一任房主配置");
+                        }
+
+                        _logger.LogInformation("[联机] 已同步房主配置：超时={Timeout}s，最低人数={Min}，最小距离={Dist}",
+                            hostConfig.SyncTimeoutSeconds, hostConfig.MinPlayersToSync, hostConfig.SyncPointMinDistance);
+                    }
+                    else
+                    {
+                        // 多世界模式下配置同步失败是严重错误，必须终止
+                        if (_config.MultiWorldEnabled)
+                        {
+                            _logger.LogError("[联机] 多世界模式：无法获取房主配置（重试3次后仍失败），终止多世界模式");
+                            await client.DisposeAsync();
+                            _multiplayerCoordinator = null;
+                            return;
+                        }
+                        _logger.LogWarning("[联机] 无法获取房主配置，使用本地配置");
+                    }
+
+                    _logger.LogInformation("[联机] 当前为成员，尝试加入房主世界，房主 UID: {Uid}", hostUid);
+                    var joinOk = await autoParty.JoinHostWorldAsync(hostUid, _ct);
+                    if (joinOk)
+                    {
+                        var hotkeyHint = string.IsNullOrEmpty(TaskContext.Instance().Config.HotKeyConfig.SkipPartyWaitHotkey)
+                            ? "（可在快捷键设置中配置快捷键）"
+                            : $"（可按快捷键 {TaskContext.Instance().Config.HotKeyConfig.SkipPartyWaitHotkey} 立即开始）";
+                        _logger.LogInformation("[联机] 已进入房主世界，等待所有人就绪...{Hint}", hotkeyHint);
+
+                        // 先注册 AllWorldJoined 监听，再上报，避免信号在上报和等待之间丢失
+                        var waitTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        Action handler = () => waitTcs.TrySetResult(true);
+                        client.AllWorldJoined += handler;
+                        try
+                        {
+                            await client.ReportWorldJoinedAsync();
+
+                            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.PartyTimeoutSeconds));
+                            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_ct, timeoutCts.Token);
+                            using var reg = linkedCts.Token.Register(() =>
+                            {
+                                if (_ct.IsCancellationRequested)
+                                    waitTcs.TrySetCanceled(_ct);
+                                else
+                                    waitTcs.TrySetResult(false);
+                            });
+
+                            var allReady = await waitTcs.Task;
+                            if (allReady)
+                            {
+                                _logger.LogInformation("[联机] 所有人已就绪，开始锄地");
+                            }
+                            else
+                            {
+                                _logger.LogWarning("[联机] 等待组队超时，退出房间，结束任务");
+                                _multiplayerCoordinator?.Degrade("组队超时");
+                                return;
+                            }
+                        }
+                        finally
+                        {
+                            client.AllWorldJoined -= handler;
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogError("[联机] 加入房主世界失败，停止联机锄地");
+                        _multiplayerCoordinator?.Degrade("加入房主世界失败");
+                        return;
+                    }
+                }
+            }
+
+            // 注入到执行引擎
+            _executionEngine?.SetCoordinator(_multiplayerCoordinator);
+            _logger.LogInformation("[联机] 初始化完成，房间码：{Code}", _config.CurrentRoomCode);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[联机] 初始化异常，降级为单机模式");
+            _multiplayerCoordinator = null;
+        }
+    }
+
+    /// <summary>
+    /// 联机前准备：切换队伍和角色
+    /// </summary>
+    private async Task PrepareMultiplayerPartyAndAvatar()
+    {
+        if (!_config.MultiplayerEnabled)
+        {
+            return;
+        }
+        
+        _logger.LogInformation("[联机] 开始准备联机队伍和角色");
+        
+        // 0. 设置世界权限为确认后才能加入
+        await SetWorldPermissionToConfirmJoin();
+        
+        // 1. 切换队伍
+        if (!string.IsNullOrEmpty(_config.MultiplayerPartyName))
+        {
+            await SwitchMultiplayerParty();
+        }
+        
+        // 2. 切换角色
+        if (!string.IsNullOrEmpty(_config.MultiplayerStartAvatarName))
+        {
+            await SwitchMultiplayerAvatar();
+        }
+        
+        _logger.LogInformation("[联机] 队伍和角色准备完成");
+    }
+
+    /// <summary>
+    /// 切换联机队伍（带重试）
+    /// </summary>
+    private async Task SwitchMultiplayerParty()
+    {
+        // 避免重复切换队伍
+        if (_teamAlreadySwitched)
+        {
+            _logger.LogInformation("[联机] 队伍已切换过，跳过重复切换");
+            return;
+        }
+        
+        bool switchSuccess = false;
+        
+        for (int retry = 1; retry <= 5; retry++)
+        {
+            try
+            {
+                switchSuccess = await new SwitchPartyTask().Start(_config.MultiplayerPartyName, _ct);
+                if (switchSuccess)
+                {
+                    _logger.LogInformation("[联机] 切换队伍成功（第{N}次尝试）", retry);
+                    _teamAlreadySwitched = true; // 标记已切换
+                    break;
+                }
+                
+                if (retry < 5)
+                {
+                    _logger.LogWarning("[联机] 切换队伍失败（第{N}次尝试），2秒后重试", retry);
+                    await Task.Delay(2000, _ct);
+                    
+                    // 第3次失败后尝试去七天神像
+                    if (retry == 3)
+                    {
+                        _logger.LogInformation("[联机] 尝试传送到七天神像后重试");
+                        try
+                        {
+                            await new TpTask(_ct).TpToStatueOfTheSeven();
+                            await Task.Delay(1000, _ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "[联机] 传送到七天神像失败，继续重试");
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[联机] 切换队伍异常（第{N}次尝试）", retry);
+                if (retry < 5)
+                {
+                    await Task.Delay(2000, _ct);
+                }
+            }
+        }
+        
+        if (!switchSuccess)
+        {
+            _logger.LogWarning("[联机] 切换队伍失败（重试5次后仍失败），将使用当前队伍继续联机");
+        }
+        else
+        {
+            await Task.Delay(500, _ct); // 等待队伍切换完成
+        }
+    }
+
+    /// <summary>
+    /// 切换联机角色（带重试）
+    /// </summary>
+    private async Task SwitchMultiplayerAvatar()
+    {
+        bool avatarSwitchSuccess = false;
+        
+        for (int retry = 1; retry <= 3; retry++)
+        {
+            try
+            {
+                // 获取当前战斗场景
+                using var ra = CaptureToRectArea();
+                var combatScenes = new CombatScenes().InitializeTeam(ra);
+                
+                if (combatScenes.CheckTeamInitialized())
+                {
+                    // 通过角色名称查找角色
+                    var targetAvatar = combatScenes.SelectAvatar(_config.MultiplayerStartAvatarName);
+                    
+                    if (targetAvatar != null)
+                    {
+                        // 尝试切换到该角色
+                        if (targetAvatar.TrySwitch(10))
+                        {
+                            avatarSwitchSuccess = true;
+                            _logger.LogInformation("[联机] 切换到角色[{Name}]成功（第{R}次尝试）", 
+                                _config.MultiplayerStartAvatarName, retry);
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        // 当前队伍没有该角色，切换到1号位
+                        _logger.LogWarning("[联机] 当前队伍没有角色[{Name}]，切换到1号位角色", 
+                            _config.MultiplayerStartAvatarName);
+                        var firstAvatar = combatScenes.SelectAvatar(1);
+                        if (firstAvatar.TrySwitch(10))
+                        {
+                            avatarSwitchSuccess = true;
+                            _logger.LogInformation("[联机] 切换到1号位角色[{Name}]成功", firstAvatar.Name);
+                            break;
+                        }
+                    }
+                }
+                
+                if (retry < 3)
+                {
+                    _logger.LogWarning("[联机] 切换角色失败（第{N}次尝试），1秒后重试", retry);
+                    await Task.Delay(1000, _ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[联机] 切换角色异常（第{N}次尝试）", retry);
+                if (retry < 3)
+                {
+                    await Task.Delay(1000, _ct);
+                }
+            }
+        }
+        
+        if (!avatarSwitchSuccess)
+        {
+            _logger.LogWarning("[联机] 切换角色失败（重试3次后仍失败），将使用当前角色继续联机");
+        }
     }
 
     private async Task RunTask()
@@ -131,18 +874,515 @@ public class AutoHoeingTask : ISoloTask
         _executionEngine = new RouteExecutionEngine(
             _pickupService, _anomalyDetector, _dumperService, _blacklistManager, _config, _partyConfig);
 
+        // 联机模式初始化
+        if (_config.MultiplayerEnabled)
+        {
+            // 联机前准备：切换队伍和角色
+            await PrepareMultiplayerPartyAndAvatar();
+            
+            await InitializeMultiplayerAsync();
+
+            // 多世界模式：循环执行多轮
+            if (_config.MultiWorldEnabled && _coordinatorClientRef != null)
+            {
+                // 在进入多世界循环前先加载 CD 记录（单世界路径在下面加载，多世界需要在这里加载）
+                _cdManager.Load(_dataDir, accountName);
+                await RunMultiWorldAsync(accountName);
+                return;
+            }
+        }
+
         // 4. 加载CD记录
         _cdManager.Load(_dataDir, accountName);
 
         // 5. 构建分组标签
         var groupTags = BuildGroupTags();
 
-        // 6. 根据操作模式执行
+        await RunSingleWorldAsync(accountName, groupTags);
+
+        // 联机模式任务结束：成员退回自己的世界
+        if (_config.MultiplayerEnabled && _coordinatorClientRef != null)
+        {
+            var isMember = _config.MultiplayerRole == "member";
+            if (isMember)
+            {
+                _logger.LogInformation("[联机] 任务结束，成员退回自己的世界");
+                try
+                {
+                    var autoParty = new AutoPartyTask();
+                    var left = await autoParty.LeaveWorldAsync(_ct);
+                    if (!left)
+                        _logger.LogWarning("[联机] 退出世界未确认成功");
+                }
+                catch (Exception ex) { _logger.LogWarning(ex, "[联机] 退出世界失败，忽略"); }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 多世界连续锄地：按玩家列表顺序，每轮换一个房主，共 MultiWorldCount 轮
+    /// </summary>
+    private async Task RunMultiWorldAsync(string accountName)
+    {
+        var client = _coordinatorClientRef!;
+
+        // 直接使用 client 缓存的玩家列表（在组队完成时已由服务器推送并缓存）
+        // 立即快照并锁定顺序，后续掉线不影响轮换序列
+        var playerOrder = new List<PlayerInfo>(client.CurrentPlayerList);
+
+        if (playerOrder.Count == 0)
+        {
+            _logger.LogWarning("[多世界] 玩家列表为空，仅执行第1轮");
+            await RunSingleWorldCoreAsync(accountName);
+            return;
+        }
+
+        // 轮数 = min(配置轮数, 实际玩家数)，超出玩家数的轮数没有意义
+        var totalRounds = Math.Min(_config.MultiWorldCount, playerOrder.Count);
+        if (totalRounds < _config.MultiWorldCount)
+            _logger.LogWarning("[多世界] 配置轮数({Cfg})超过实际玩家数({N})，实际执行 {Total} 轮",
+                _config.MultiWorldCount, playerOrder.Count, totalRounds);
+
+        _logger.LogInformation("[多世界] 共 {Total} 轮，轮换顺序: {Players}",
+            totalRounds, string.Join(" → ", playerOrder.Select(p => p.PlayerName)));
+
+        bool lastRoundAmIHost = false;
+        for (int round = 0; round < totalRounds; round++)
+        {
+            _ct.ThrowIfCancellationRequested();
+
+            var roundHostPlayer = playerOrder[round];
+            // 身份判断优先级：UID > 名称 > 列表位置（都为空时用位置，第0个是第1轮房主）
+            bool amIHost;
+            if (!string.IsNullOrEmpty(_config.PlayerUid))
+                amIHost = roundHostPlayer.PlayerUid == _config.PlayerUid;
+            else if (!string.IsNullOrEmpty(_config.PlayerName))
+                amIHost = roundHostPlayer.PlayerName == _config.PlayerName;
+            else
+            {
+                // UID 和名称都未填，无法可靠判断，降级：只有第1轮的第1个玩家是房主
+                amIHost = round == 0 && _config.MultiplayerRole == "host";
+                _logger.LogWarning("[多世界] 玩家 UID 和名称均未填写，身份判断可能不准确，建议填写 UID");
+            }
+            lastRoundAmIHost = amIHost;
+
+            _logger.LogInformation("[多世界] 第 {Round}/{Total} 轮，房主: {Host}，我是{Role}",
+                round + 1, totalRounds, roundHostPlayer.PlayerName, amIHost ? "房主" : "成员");
+
+            if (round > 0)
+            {
+                // 非第一轮：需要重新组队进入新房主的世界，并重新加载 CD
+                await SetupNextRoundAsync(round, roundHostPlayer, amIHost, client, playerOrder.Count);
+                if (_multiplayerCoordinator == null)
+                {
+                    _logger.LogError("[多世界] 第 {Round} 轮初始化失败，停止后续轮次", round + 1);
+                    // 尝试回到自己世界，避免卡在别人世界
+                    try { await LeaveCurrentWorldAsync(amIHost, client); }
+                    catch (Exception ex) { _logger.LogWarning(ex, "[多世界] 离开世界失败，忽略"); }
+                    break;
+                }
+                _cdManager.Load(_dataDir, accountName);
+            }
+
+            // 每轮开始前重新准备队伍和角色
+            await PrepareMultiplayerPartyAndAvatar();
+            
+            // 执行本轮锄地
+            var groupTags = BuildGroupTags();
+            await RunSingleWorldCoreAsync(accountName, groupTags);
+
+            // 本轮结束：全员同步后离开世界（最后一轮不需要离开）
+            if (round < totalRounds - 1)
+            {
+                _logger.LogInformation("[多世界] 第 {Round} 轮锄地完成，等待全员同步", round + 1);
+                await SyncRoundEndAsync(round, client);
+
+                // 离开世界：成员先主动离开，房主等待后再关闭房间
+                // 这样避免房主关闭房间时成员还在执行 LeaveWorldAsync 的竞态
+                await LeaveCurrentWorldAsync(amIHost, client);
+
+                // 清理本轮的 coordinator，下一轮重新建
+                if (_multiplayerCoordinator != null)
+                {
+                    _multiplayerCoordinator.OnDegraded -= _ => { };
+                    _multiplayerCoordinator = null;
+                }
+                _executionEngine?.SetCoordinator(null);
+            }
+        }
+
+        _logger.LogInformation("[多世界] 全部 {Total} 轮锄地完成", totalRounds);
+
+        // 任务结束：所有人退回自己的世界
+        _logger.LogInformation("[多世界] 任务结束，退回自己的世界");
+        try { await LeaveCurrentWorldAsync(lastRoundAmIHost, client); }
+        catch (Exception ex) { _logger.LogWarning(ex, "[多世界] 任务结束退出世界失败，忽略"); }
+    }
+
+    /// <summary>
+    /// 设置下一轮：新房主创建房间，成员加入
+    /// </summary>
+    private async Task SetupNextRoundAsync(int round, PlayerInfo roundHostPlayer, bool amIHost,
+        CoordinatorClient client, int playerCount)
+    {
+        try
+        {
+            var autoParty = new AutoPartyTask();
+            var whitelist = string.IsNullOrEmpty(_config.RoomWhitelist)
+                ? null
+                : _config.RoomWhitelist.Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            // 多世界模式下，确保所有参与玩家都在白名单中（避免轮换后原房主无法加入新房间）
+            List<string>? multiWorldWhitelist = null;
+            if (whitelist != null)
+            {
+                var allPlayerNames = client.CurrentPlayerList.Select(p => p.PlayerName).Where(n => !string.IsNullOrEmpty(n));
+                multiWorldWhitelist = whitelist.Union(allPlayerNames).ToList();
+                _logger.LogInformation("[多世界] 第 {Round} 轮白名单（含所有参与玩家）: {List}", round + 1, string.Join(", ", multiWorldWhitelist));
+            }
+
+            if (amIHost)
+            {
+                // 我是本轮房主：创建新房间，带重试机制（最多3次）
+                _logger.LogInformation("[多世界] 第 {Round} 轮我是房主，创建新房间", round + 1);
+                string? newCode = null;
+                for (int retry = 1; retry <= 3; retry++)
+                {
+                    newCode = await client.CreateRoomAsync(_config.PlayerName, multiWorldWhitelist?.ToList() ?? whitelist?.ToList(), _config.PlayerUid, playerCount);
+                    if (newCode != null)
+                    {
+                        _logger.LogInformation("[多世界] 第 {Round} 轮创建房间成功（第{N}次尝试）: {Code}", round + 1, retry, newCode);
+                        break;
+                    }
+                    if (retry < 3)
+                    {
+                        _logger.LogWarning("[多世界] 第 {Round} 轮创建房间失败（第{N}次尝试），2秒后重试", round + 1, retry);
+                        await Task.Delay(2000, _ct);
+                    }
+                }
+                
+                if (newCode == null)
+                {
+                    _logger.LogError("[多世界] 第 {Round} 轮创建房间失败（重试3次后仍失败），终止多世界模式", round + 1);
+                    return;
+                }
+                _config.CurrentRoomCode = newCode;
+                _logger.LogInformation("[多世界] 新房间码: {Code}", newCode);
+
+                // 重置 WorldJoinedSet，确保新轮次独立计数
+                await client.ResetWorldJoinedAsync();
+                _logger.LogInformation("[多世界] 第 {Round} 轮 WorldJoinedSet 已重置", round + 1);
+
+                // 上传配置：使用第一任房主的配置（已在第1轮保存）
+                if (_firstHostConfig != null)
+                {
+                    // 房主上传配置，带重试机制（最多3次）
+                    bool uploadSuccess = false;
+                    for (int retry = 1; retry <= 3; retry++)
+                    {
+                        try
+                        {
+                            await client.SetRoomConfigAsync(_firstHostConfig);
+                            uploadSuccess = true;
+                            _logger.LogInformation("[多世界] 第 {Round} 轮已上传第一任房主的配置（第{N}次尝试）", round + 1, retry);
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            if (retry < 3)
+                            {
+                                _logger.LogWarning(ex, "[多世界] 第 {Round} 轮上传配置失败（第{N}次尝试），2秒后重试", round + 1, retry);
+                                await Task.Delay(2000, _ct);
+                            }
+                            else
+                            {
+                                _logger.LogError(ex, "[多世界] 第 {Round} 轮上传配置失败（重试3次后仍失败），终止多世界模式", round + 1);
+                            }
+                        }
+                    }
+                    
+                    if (!uploadSuccess)
+                    {
+                        _multiplayerCoordinator = null;
+                        return;
+                    }
+                }
+                else
+                {
+                    // 多世界模式下_firstHostConfig为null是严重错误，必须终止
+                    _logger.LogError("[多世界] 第 {Round} 轮房主配置丢失（_firstHostConfig为null），这表明第1轮配置保存失败，终止多世界模式", round + 1);
+                    _multiplayerCoordinator = null;
+                    return;
+                }
+
+                await client.ReportHostReadyAsync();
+                var actualCount = await autoParty.WaitForMembersAsync(
+                    playerCount, whitelist, client, _config.PartyTimeoutSeconds, _ct);
+
+                if (actualCount <= 0)
+                {
+                    _logger.LogError("[多世界] 第 {Round} 轮等待成员超时", round + 1);
+                    return;
+                }
+
+                // 先注册监听再上报，避免信号在上报和等待之间丢失
+                var hostAllJoinedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Action hostAllJoinedHandler = () => hostAllJoinedTcs.TrySetResult(true);
+                client.AllWorldJoined += hostAllJoinedHandler;
+                try
+                {
+                    await client.ReportWorldJoinedAsync();
+                    _logger.LogInformation("[多世界] 第 {Round} 轮房主已上报就绪，等待所有成员就绪...", round + 1);
+
+                    using var allJoinedCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.PartyTimeoutSeconds));
+                    using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_ct, allJoinedCts.Token);
+                    using var reg = linkedCts.Token.Register(() => hostAllJoinedTcs.TrySetResult(false));
+                    var allJoined = await hostAllJoinedTcs.Task;
+                    if (allJoined)
+                        _logger.LogInformation("[多世界] 第 {Round} 轮所有成员已就绪", round + 1);
+                    else
+                        _logger.LogWarning("[多世界] 第 {Round} 轮等待所有成员就绪超时，继续执行", round + 1);
+                }
+                finally
+                {
+                    client.AllWorldJoined -= hostAllJoinedHandler;
+                }
+            }
+            else
+            {
+                // 我是成员：先找到新房主的房间并加入，再等待就绪
+                _logger.LogInformation("[多世界] 第 {Round} 轮我是成员，等待房主 [{Host}] 创建房间",
+                    round + 1, roundHostPlayer.PlayerName);
+
+                // 轮询找到新房主的房间并加入
+                string? newRoomCode = null;
+                var deadline = DateTime.UtcNow.AddSeconds(_config.PartyTimeoutSeconds);
+                int attempt = 0;
+                while (DateTime.UtcNow < deadline)
+                {
+                    attempt++;
+                    var rooms = await client.GetOnlineRoomsAsync();
+                    var target = rooms.FirstOrDefault(r =>
+                        (!string.IsNullOrEmpty(roundHostPlayer.PlayerUid) && r.HostUid == roundHostPlayer.PlayerUid) ||
+                        r.HostName.Equals(roundHostPlayer.PlayerName, StringComparison.OrdinalIgnoreCase));
+                    if (target != null)
+                    {
+                        _logger.LogInformation("[多世界] 找到新房主 [{Host}] 的房间: {Code}", roundHostPlayer.PlayerName, target.Code);
+                        var joined = await client.JoinRoomAsync(target.Code, _config.PlayerName, _config.PlayerUid);
+                        if (joined)
+                        {
+                            newRoomCode = target.Code;
+                            _logger.LogInformation("[多世界] 成功加入新房间: {Code}", target.Code);
+                            break;
+                        }
+                        _logger.LogWarning("[多世界] 加入房间 {Code} 失败，重试", target.Code);
+                    }
+                    else
+                    {
+                        _logger.LogInformation("[多世界] 未找到新房主 [{Host}] 的房间，等待中...（第{N}次）", roundHostPlayer.PlayerName, attempt);
+                    }
+                    await Task.Delay(3000, _ct);
+                }
+
+                if (newRoomCode == null)
+                {
+                    _logger.LogError("[多世界] 等待超时，未找到新房主 [{Host}] 的房间，终止多世界模式", roundHostPlayer.PlayerName);
+                    _multiplayerCoordinator = null;
+                    return;
+                }
+
+                // 加入房间后立刻发心跳，确保服务器知道成员在线（避免 AllOnlineMembersReported 提前触发）
+                await client.SendHeartbeatAsync();
+                _logger.LogInformation("[多世界] 第 {Round} 轮成员已发送心跳", round + 1);
+
+                // 等待房主就绪
+                var hostReadyTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Action<bool> readyHandler = ready => { if (ready) hostReadyTcs.TrySetResult(true); };
+                client.HostReadyChanged += readyHandler;
+                try
+                {
+                    if (!await client.IsHostReadyAsync())
+                    {
+                        using var readyCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.PartyTimeoutSeconds));
+                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_ct, readyCts.Token);
+                        using var reg = linked.Token.Register(() => hostReadyTcs.TrySetResult(false));
+                        if (!await hostReadyTcs.Task)
+                        {
+                            _logger.LogError("[多世界] 等待房主就绪超时");
+                            return;
+                        }
+                    }
+                }
+                finally { client.HostReadyChanged -= readyHandler; }
+
+                // 拉取新配置，带重试机制（最多3次）
+                RoomConfig? hostConfig = null;
+                for (int retry = 1; retry <= 3; retry++)
+                {
+                    hostConfig = await client.GetRoomConfigAsync();
+                    if (hostConfig != null)
+                    {
+                        _logger.LogInformation("[多世界] 第 {Round} 轮成功拉取房主配置（第{N}次尝试）", round + 1, retry);
+                        break;
+                    }
+                    if (retry < 3)
+                    {
+                        _logger.LogWarning("[多世界] 第 {Round} 轮拉取房主配置失败（第{N}次尝试），2秒后重试", round + 1, retry);
+                        await Task.Delay(2000, _ct);
+                    }
+                }
+                
+                if (hostConfig != null)
+                {
+                    _config.SyncTimeoutSeconds = hostConfig.SyncTimeoutSeconds;
+                    _config.MinPlayersToSync = hostConfig.MinPlayersToSync;
+                    _config.SyncPointMinDistance = hostConfig.SyncPointMinDistance;
+                    _config.StartRouteIndex = hostConfig.StartRouteIndex;
+                    _config.UseFixedDebugRoutes = hostConfig.UseFixedDebugRoutes;
+                    _config.FixedDebugRoutePath = hostConfig.FixedDebugRoutePath;
+                    _config.DebugMode = hostConfig.DebugMode;
+                    _config.ReturnToFightPointAfterBattle = hostConfig.ReturnToFightPointAfterBattle;
+                    _config.ReturnToFightPointStaySeconds = hostConfig.ReturnToFightPointStaySeconds;
+                    _config.KazuhaPlayerIndex = hostConfig.KazuhaPlayerIndex;
+                    _config.PartyTimeoutSeconds = hostConfig.PartyTimeoutSeconds;
+                    _config.MultiWorldEnabled = hostConfig.MultiWorldEnabled;
+                    _config.MultiWorldCount = hostConfig.MultiWorldCount;
+                    _config.SelectedBuiltinRoute = hostConfig.SelectedBuiltinRoute;
+                }
+                else
+                {
+                    // 多世界模式下配置同步失败是严重错误，必须终止
+                    _logger.LogError("[多世界] 第 {Round} 轮成员无法获取房主配置（重试3次后仍失败），终止多世界模式", round + 1);
+                    _multiplayerCoordinator = null;
+                    return;
+                }
+
+                // 加入新房主世界
+                var joinOk = await autoParty.JoinHostWorldAsync(roundHostPlayer.PlayerUid, _ct);
+                if (!joinOk)
+                {
+                    _logger.LogError("[多世界] 加入第 {Round} 轮房主世界失败", round + 1);
+                    return;
+                }
+
+                // 先注册 AllWorldJoined 监听，再上报，避免信号在上报和等待之间丢失
+                var allJoinedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Action allJoinedHandler = () => allJoinedTcs.TrySetResult(true);
+                client.AllWorldJoined += allJoinedHandler;
+                try
+                {
+                    await client.ReportWorldJoinedAsync();
+
+                    using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(_config.PartyTimeoutSeconds));
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(_ct, timeoutCts.Token);
+                    using var reg = linked.Token.Register(() => allJoinedTcs.TrySetResult(false));
+                    if (!await allJoinedTcs.Task)
+                        _logger.LogWarning("[多世界] 等待全员就绪超时，继续执行");
+                }
+                finally { client.AllWorldJoined -= allJoinedHandler; }
+            }
+
+            // 重建 coordinator
+            var barrier = new SyncBarrier(client, _config.SyncTimeoutSeconds);
+            var resolver = new SyncPointResolver();
+            _multiplayerCoordinator = new MultiplayerCoordinator(client, barrier, resolver,
+                _config.MinPlayersToSync, _config.SyncTimeoutSeconds);
+            _multiplayerCoordinator.OnDegraded += reason =>
+                _logger.LogWarning("[联机] 已降级为单机模式，原因：{Reason}", reason);
+            _consistencyChecker = new RouteConsistencyChecker();
+            _executionEngine?.SetCoordinator(_multiplayerCoordinator);
+            _logger.LogInformation("[多世界] 第 {Round} 轮初始化完成", round + 1);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[多世界] 第 {Round} 轮初始化异常", round + 1);
+            _multiplayerCoordinator = null;
+        }
+    }
+
+    /// <summary>全员同步本轮结束</summary>
+    private async Task SyncRoundEndAsync(int round, CoordinatorClient client)
+    {
+        try
+        {
+            var syncId = $"round_end_{round}";
+            _logger.LogInformation("[多世界] 同步轮次结束: {SyncId}", syncId);
+            // 用 PartyTimeoutSeconds 作为超时，因为需要等所有人跑完本轮全部路线
+            var barrier = new SyncBarrier(client, _config.PartyTimeoutSeconds);
+            await barrier.WaitAsync(syncId, _ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[多世界] 轮次结束同步异常，继续");
+        }
+    }
+
+    /// <summary>离开当前世界（成员退出，房主关闭房间）</summary>
+    private async Task LeaveCurrentWorldAsync(bool amIHost, CoordinatorClient client)
+    {
+        var autoParty = new AutoPartyTask();
+        if (amIHost)
+        {
+            // 房主：等待成员有足够时间主动离开（LeaveWorldAsync 约需 5-20 秒）
+            // 然后关闭房间，被动踢出还未离开的成员
+            // 等待时间 = min(PartyTimeoutSeconds/10, 15) 秒，默认 15 秒
+            var waitMs = Math.Min(_config.PartyTimeoutSeconds / 10 * 1000, 15000);
+            _logger.LogInformation("[多世界] 房主等待成员离开（{T}s）后关闭房间", waitMs / 1000);
+            await Task.Delay(waitMs, _ct);
+            await client.CloseRoomAsync();
+            _logger.LogInformation("[多世界] 房主已关闭房间");
+            await Task.Delay(2000, _ct);
+            // 房主也需要退出多人世界，回到自己的世界
+            _logger.LogInformation("[多世界] 房主退出多人世界");
+            var left = await autoParty.LeaveWorldAsync(_ct);
+            if (!left)
+                _logger.LogWarning("[多世界] 房主退出多人世界未确认成功，继续下一轮");
+            await Task.Delay(1000, _ct);
+        }
+        else
+        {
+            // 成员：主动离开，回到自己的世界
+            _logger.LogInformation("[多世界] 成员离开当前世界");
+            var left = await autoParty.LeaveWorldAsync(_ct);
+            if (!left)
+                _logger.LogWarning("[多世界] 离开世界操作未确认成功，继续下一轮");
+            await Task.Delay(1000, _ct);
+        }
+    }
+
+    /// <summary>单世界锄地核心（从 RunTask 提取，供多世界循环复用）</summary>
+    private async Task RunSingleWorldCoreAsync(string accountName, List<List<string>>? groupTags = null)
+    {
+        groupTags ??= BuildGroupTags();
+        await RunSingleWorldAsync(accountName, groupTags);
+    }
+
+    private async Task RunSingleWorldAsync(string accountName, List<List<string>> groupTags)
+    {
+        // 根据操作模式执行
         var operationMode = _config.OperationMode;
 
         if (operationMode == "启用仅指定怪物模式")
         {
             await RunTargetMonsterMode(accountName, groupTags);
+        }
+        else if (_config.UseFixedDebugRoutes)
+        {
+            // 固定调试线路模式：使用三级优先级逻辑加载路线
+            _logger.LogInformation("[固定调试线路] 开始加载路线");
+            var fixedRoutes = LoadRoutesBasedOnConfig();
+            if (fixedRoutes.Count == 0)
+            {
+                _logger.LogWarning("[固定调试线路] 没有找到可用的路线文件");
+                return;
+            }
+            _logger.LogInformation("[固定调试线路] 共加载 {Count} 条路线，按文件名顺序执行", fixedRoutes.Count);
+
+            // 队伍校验
+            ValidateTeam();
+
+            await ProcessRoutesByGroup(fixedRoutes, accountName);
         }
         else
         {
@@ -243,6 +1483,171 @@ public class AutoHoeingTask : ISoloTask
         var targetGroup = _config.GroupIndex;
         var groupRoutes = routes.Where(r => r.Group == targetGroup && r.Selected).ToList();
 
+        // 步骤1：联机模式路线列表同步（必须在验证之前，确保两端用相同路线集合验证）        if (_config.MultiplayerEnabled && _coordinatorClientRef != null)
+        {
+            // 房主身份判断：优先使用 UID 匹配，仅在 PlayerUid 为空时使用 MultiplayerRole 兜底
+            bool isHost = !string.IsNullOrEmpty(_config.PlayerUid)
+                ? _coordinatorClientRef.HostPlayerUid == _config.PlayerUid
+                : _config.MultiplayerRole == "host";
+
+            if (isHost || string.IsNullOrEmpty(_coordinatorClientRef.HostPlayerUid))
+            {
+                // 房主：CD 过滤后上传最终路线文件名列表
+                var hostRouteNames = groupRoutes
+                    .Where(r => _config.StartRouteIndex > 0 || !_cdManager.IsOnCooldown(r))
+                    .Select(r => r.FileName)
+                    .ToList();
+                await _coordinatorClientRef.SetHostRouteListAsync(hostRouteNames);
+                _logger.LogInformation("[联机] 房主已上传路线列表，共 {Count} 条（CD过滤后）", hostRouteNames.Count);
+
+                // 用过滤后的列表替换 groupRoutes
+                var hostRouteSet = new HashSet<string>(hostRouteNames);
+                groupRoutes = groupRoutes.Where(r => hostRouteSet.Contains(r.FileName)).ToList();
+            }
+            else
+            {
+                // 成员：等待房主路线列表就绪事件，或轮询兜底
+                var routeListTcs = new TaskCompletionSource<List<string>>(TaskCreationOptions.RunContinuationsAsynchronously);
+                Action<List<string>> routeListHandler = names => routeListTcs.TrySetResult(names);
+                _coordinatorClientRef.HostRouteListReady += routeListHandler;
+                List<string> hostRouteNames;
+                try
+                {
+                    // 先尝试直接拉取（房主可能已经上传了）
+                    var existing = await _coordinatorClientRef.GetHostRouteListAsync();
+                    if (existing.Count > 0)
+                    {
+                        hostRouteNames = existing;
+                        _logger.LogInformation("[联机] 直接获取到房主路线列表，共 {Count} 条", hostRouteNames.Count);
+                    }
+                    else
+                    {
+                        // 等待推送事件，最多90秒
+                        _logger.LogInformation("[联机] 等待房主上传路线列表...");
+                        using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+                        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_ct, timeoutCts.Token);
+                        using var reg = linked.Token.Register(() => routeListTcs.TrySetResult([]));
+                        hostRouteNames = await routeListTcs.Task;
+                        if (hostRouteNames.Count > 0)
+                            _logger.LogInformation("[联机] 收到房主路线列表推送，共 {Count} 条", hostRouteNames.Count);
+                        else
+                        {
+                            _logger.LogError("[联机] 等待房主上传路线列表超时（90秒），停止锄地");
+                            return;
+                        }
+                    }
+                }
+                finally
+                {
+                    _coordinatorClientRef.HostRouteListReady -= routeListHandler;
+                }
+
+                // 先从完整路线列表查找（不限于当前 group 过滤后的结果）
+                var allRoutesDict = routes.ToDictionary(r => r.FileName);
+                var found = hostRouteNames
+                    .Where(name => allRoutesDict.ContainsKey(name))
+                    .Select(name => allRoutesDict[name])
+                    .ToList();
+
+                // 如果有路线在本地找不到，尝试从 pathing 目录重新加载全量路线
+                if (found.Count < hostRouteNames.Count)
+                {
+                    var pathingDir = Path.Combine(_dataDir, "pathing");
+                    var allRoutes = RouteInfoLoader.LoadRoutes(pathingDir, _monsterRepo, _config.IgnoreRate, new List<string>());
+                    var fullDict = allRoutes.ToDictionary(r => r.FileName);
+                    found = hostRouteNames
+                        .Where(name => fullDict.ContainsKey(name))
+                        .Select(name => fullDict[name])
+                        .ToList();
+
+                    var missing = hostRouteNames.Where(name => !fullDict.ContainsKey(name)).ToList();
+                    if (missing.Count > 0)
+                        _logger.LogWarning("[联机] 成员本地缺少以下路线文件（路线一致性验证将检测到差异）: {Files}", string.Join(", ", missing));
+                }
+                groupRoutes = found;
+                _logger.LogInformation("[联机] 成员已同步房主路线列表，共 {Count} 条", groupRoutes.Count);
+            }
+        }
+
+        // 步骤1.5：路线同步完成后的同步点，确保房主和成员同时进入验证阶段
+        if (_multiplayerCoordinator != null && _config.MultiplayerEnabled)
+        {
+            // 路线为0时直接跳过后续流程
+            if (groupRoutes.Count == 0)
+            {
+                _logger.LogWarning("[联机] 路线列表为空（可能全部在CD中），跳过本轮执行");
+                return;
+            }
+            try
+            {
+                _logger.LogInformation("[联机] 等待所有玩家完成路线同步...");
+                await _multiplayerCoordinator.WaitForAllPlayers("route_sync_done", _ct);
+                _logger.LogInformation("[联机] 所有玩家路线同步完成，开始验证");
+            }
+            catch (OperationCanceledException)
+            {
+                if (_ct.IsCancellationRequested) throw;
+                _logger.LogWarning("[联机] 路线同步等待超时，继续执行");
+            }
+        }
+
+        // 步骤2：路线一致性验证（在同步后的路线集合上验证）
+        if (_multiplayerCoordinator != null && _consistencyChecker != null && _coordinatorClientRef != null)
+        {
+            if (_config.DebugMode)
+            {
+                _logger.LogInformation("[联机] 调试模式：跳过路线一致性验证，共 {Count} 条路线", groupRoutes.Count);
+            }
+            else
+            {
+                _logger.LogInformation("[联机] 开始路线一致性验证，本次路线数量: {Count}", groupRoutes.Count);
+                using var verifyCts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+                verifyCts.CancelAfter(TimeSpan.FromSeconds(120));
+                try
+                {
+                    var verified = await _consistencyChecker.VerifyRoutesAsync(
+                        _coordinatorClientRef,
+                        groupRoutes.Select(r => r.FullPath),
+                        verifyCts.Token);
+                    if (verified == false)
+                    {
+                        _logger.LogError("[联机] 路线一致性验证失败，两端路线不一致，停止锄地");
+                        return;
+                    }
+                    else if (verified == null)
+                        _logger.LogWarning("[联机] 路线一致性验证超时，继续执行");
+                    else
+                        _logger.LogInformation("[联机] 路线一致性验证通过");
+                }
+                catch (OperationCanceledException)
+                {
+                    if (_ct.IsCancellationRequested) throw;
+                    _logger.LogWarning("[联机] 路线一致性验证超时，继续执行");
+                }
+            }
+        }
+
+        // 步骤3：路线验证同步等待（等待所有玩家完成验证后再开始执行）
+        if (_multiplayerCoordinator != null)
+        {
+            try
+            {
+                await _multiplayerCoordinator.WaitForRouteVerificationAsync(_ct);
+            }
+            catch (OperationCanceledException)
+            {
+                if (_ct.IsCancellationRequested) throw;
+                _logger.LogWarning("[联机] 路线验证同步等待超时，继续执行");
+            }
+        }
+
+        // 路线为0时直接返回，避免卡住
+        if (groupRoutes.Count == 0)
+        {
+            _logger.LogWarning("路径组{G} 没有可执行的路线（可能全部在CD中或未选中），跳过", targetGroup);
+            return;
+        }
+
         // 计算组内总计信息
         var totalElites = groupRoutes.Sum(r => r.EliteMonsterCount);
         var totalMonsters = groupRoutes.Sum(r => r.NormalMonsterCount);
@@ -257,13 +1662,24 @@ public class AutoHoeingTask : ISoloTask
         // 切换队伍
         if (!string.IsNullOrEmpty(_config.PartyName))
         {
-            _logger.LogInformation("切换至配置队伍: {Name}", _config.PartyName);
-            var switchSuccess = await new SwitchPartyTask().Start(_config.PartyName, _ct);
-            if (!switchSuccess)
+            if (_config.MultiplayerEnabled)
             {
-                _logger.LogWarning("切换队伍失败: {Name}，继续执行", _config.PartyName);
+                _logger.LogInformation("[联机] 联机模式下队伍已在准备阶段切换，跳过重复切换");
             }
-            await Delay(500, _ct);
+            else
+            {
+                _logger.LogInformation("切换至配置队伍: {Name}", _config.PartyName);
+                var switchSuccess = await new SwitchPartyTask().Start(_config.PartyName, _ct);
+                if (!switchSuccess)
+                {
+                    _logger.LogWarning("切换队伍失败: {Name}，继续执行", _config.PartyName);
+                }
+                await Delay(500, _ct);
+            }
+        }
+        else
+        {
+            _logger.LogInformation("[DEBUG] 未配置队伍名称，跳过切换队伍");
         }
 
         int count = 0;
@@ -271,8 +1687,19 @@ public class AutoHoeingTask : ISoloTask
         double remainingEstimatedTime = totalEstimatedTime;
         double skippedTime = 0;
 
-        foreach (var route in groupRoutes)
+        // 调试用：从指定索引开始（1-based，0表示从头）
+        var startIndex = Math.Max(0, _config.StartRouteIndex - 1);
+        if (startIndex > 0 && startIndex < groupRoutes.Count)
         {
+            _logger.LogInformation("[调试] 从第 {Start} 条路线开始执行（跳过前 {Skip} 条）",
+                startIndex + 1, startIndex);
+        }
+
+        _logger.LogInformation("[DEBUG] 开始遍历路线，共 {Count} 条，startIndex={Start}", groupRoutes.Count, startIndex);
+
+        foreach (var route in groupRoutes.Skip(startIndex))
+        {
+            _logger.LogInformation("[DEBUG] 进入路线循环，count={Count}，route={Name}", count + 1, route.FileName);
             _ct.ThrowIfCancellationRequested();
             count++;
 
@@ -283,8 +1710,9 @@ public class AutoHoeingTask : ISoloTask
                 break;
             }
 
-            // CD检查
-            if (_cdManager.IsOnCooldown(route))
+            // CD检查（StartRouteIndex > 0 时跳过CD检查，强制执行；填0则正常检测CD）
+            // 联机模式下成员不检测CD，由房主路线列表控制
+            if (!_config.MultiplayerEnabled && _config.StartRouteIndex <= 0 && _cdManager.IsOnCooldown(route))
             {
                 _logger.LogInformation("路线 {Name} 未刷新，跳过", route.FileName);
                 skippedTime += route.AdjustedTime;
@@ -292,8 +1720,8 @@ public class AutoHoeingTask : ISoloTask
                 continue;
             }
 
-            _logger.LogInformation("开始处理第 {G} 组第 {N}/{T} 个: {Name}",
-                targetGroup, count, groupRoutes.Count, route.FileName);
+            _logger.LogInformation("开始第 {N}/{T} 条线路: {Name}",
+                startIndex + count, groupRoutes.Count, route.FileName);
 
             // 白芙切换
             if (_shouldSwitchFurina)
@@ -314,7 +1742,9 @@ public class AutoHoeingTask : ISoloTask
             }
 
             // 料理buff
+            _logger.LogInformation("[DEBUG] 开始料理buff检查");
             await _cookingService.TryUseCooking(_config.CookingNames, _ct);
+            _logger.LogInformation("[DEBUG] 料理buff检查完成，准备执行路线");
 
             var sw = Stopwatch.StartNew();
 
@@ -349,8 +1779,8 @@ public class AutoHoeingTask : ISoloTask
                     var tsRemain = TimeSpan.FromSeconds(Math.Max(0, predictRemaining));
 
                     _logger.LogInformation(
-                        "当前进度：第 {G} 组第 {N}/{T} 个  {Name}已完成，该组预计剩余: {H} 时 {Min} 分 {S} 秒",
-                        targetGroup, count, groupRoutes.Count, route.FileName,
+                        "完成第 {N}/{T} 条线路: {Name}，该组预计剩余: {H}时{Min}分{S}秒",
+                        startIndex + count, groupRoutes.Count, route.FileName,
                         (int)tsRemain.TotalHours, tsRemain.Minutes, tsRemain.Seconds);
                 }
             }
@@ -359,6 +1789,78 @@ public class AutoHoeingTask : ISoloTask
                 _logger.LogError("执行路线 {Name} 出错: {Msg}", route.FileName, ex.Message);
             }
         }
+    }
+
+    /// <summary>
+    /// 根据配置加载路线，实现三级优先级逻辑
+    /// 优先级 1: 手动输入的 FixedDebugRoutePath
+    /// 优先级 2: 选中的 SelectedBuiltinRoute
+    /// 优先级 3: 默认行为（DebugRoutes 或正常路线选择）
+    /// </summary>
+    private List<RouteInfo> LoadRoutesBasedOnConfig()
+    {
+        // 优先级 1: 手动输入的调试目录
+        if (!string.IsNullOrWhiteSpace(_config.FixedDebugRoutePath))
+        {
+            _logger.LogInformation("[线路加载] 使用手动指定路径: {Path}", _config.FixedDebugRoutePath);
+            return LoadFixedDebugRoutes(_config.FixedDebugRoutePath);
+        }
+
+        // 优先级 2: 选中的内置线路
+        if (!string.IsNullOrWhiteSpace(_config.SelectedBuiltinRoute))
+        {
+            var assetsPath = Path.Combine(AppContext.BaseDirectory, "GameTask", "AutoHoeing", "Assets");
+            var selectedPath = Path.Combine(assetsPath, _config.SelectedBuiltinRoute);
+
+            if (Directory.Exists(selectedPath))
+            {
+                _logger.LogInformation("[线路加载] 使用内置线路: {Route}", _config.SelectedBuiltinRoute);
+                return LoadFixedDebugRoutes(selectedPath);
+            }
+            else
+            {
+                _logger.LogWarning("[线路加载] 选中的内置线路不存在: {Route}，回退到默认行为", _config.SelectedBuiltinRoute);
+            }
+        }
+
+        // 优先级 3: 默认行为（DebugRoutes 目录）
+        var defaultPath = Path.Combine(AppContext.BaseDirectory, "GameTask", "AutoHoeing", "Assets", "DebugRoutes");
+        _logger.LogInformation("[线路加载] 使用默认 DebugRoutes 目录");
+        return LoadFixedDebugRoutes(defaultPath);
+    }
+
+    /// <summary>
+    /// 从固定目录加载调试线路，按文件名排序，全部标记为 Selected 且 Group=目标组
+    /// </summary>
+    private List<RouteInfo> LoadFixedDebugRoutes(string dirPath)
+    {
+        var routes = new List<RouteInfo>();
+        if (!Directory.Exists(dirPath))
+        {
+            _logger.LogError("[固定调试线路] 目录不存在: {Dir}", dirPath);
+            return routes;
+        }
+
+        var files = Directory.GetFiles(dirPath, "*.json")
+            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        for (int i = 0; i < files.Length; i++)
+        {
+            routes.Add(new RouteInfo
+            {
+                FileName = Path.GetFileName(files[i]),
+                FullPath = files[i],
+                Index = i + 1,
+                Selected = true,
+                Available = true,
+                Group = _config.GroupIndex,
+                EstimatedTime = 60,
+                AdjustedTime = 60,
+            });
+        }
+
+        return routes;
     }
 
     private void ValidateTeam()
@@ -533,6 +2035,57 @@ public class AutoHoeingTask : ISoloTask
         _config.PriorityTags = Get("priorityTags", _config.PriorityTags);
         _config.ExcludeTags = Get("excludeTags", _config.ExcludeTags);
         _config.TargetMonsters = Get("targetMonsters", _config.TargetMonsters);
+
+        // 联机配置
+        _config.MultiplayerEnabled = Get("multiplayerEnabled", _config.MultiplayerEnabled);
+        _config.MultiplayerPartyName = Get("multiplayerPartyName", _config.MultiplayerPartyName);
+        _config.MultiplayerStartAvatarName = Get("multiplayerStartAvatarName", _config.MultiplayerStartAvatarName);
+        _config.MultiplayerRole = _settingsOverride.ContainsKey("multiplayerRole")
+            ? Get("multiplayerRole", _config.MultiplayerRole)
+            : _config.MultiplayerRole;
+        _config.MemberJoinMode = _settingsOverride.ContainsKey("memberJoinMode")
+            ? Get("memberJoinMode", _config.MemberJoinMode)
+            : _config.MemberJoinMode;
+        _config.TargetHostName = Get("targetHostName", _config.TargetHostName);
+        _config.CoordinatorServerUrl = Get("coordinatorServerUrl", _config.CoordinatorServerUrl);
+        _config.PlayerName = Get("playerName", _config.PlayerName);
+        _config.PlayerUid = Get("playerUid", _config.PlayerUid);
+        _config.ExpectedPlayerCount = Get("expectedPlayerCount", _config.ExpectedPlayerCount);
+        _config.RoomWhitelist = Get("roomWhitelist", _config.RoomWhitelist);
+        _config.PartyTimeoutSeconds = Get("partyTimeoutSeconds", _config.PartyTimeoutSeconds);
+        _config.PartyTimeoutAction = Get("partyTimeoutAction", _config.PartyTimeoutAction);
+
+        if (_config.MultiplayerEnabled)
+        {
+            // 联机模式：应用联机专属字段
+            _config.SyncTimeoutSeconds = Get("syncTimeoutSeconds", _config.SyncTimeoutSeconds);
+            _config.MinPlayersToSync = Get("minPlayersToSync", _config.MinPlayersToSync);
+            _config.SyncPointMinDistance = Get("syncPointMinDistance", _config.SyncPointMinDistance);
+            _config.StartRouteIndex = Get("startRouteIndex", _config.StartRouteIndex);
+            _config.KazuhaPlayerIndex = Get("kazuhaPlayerIndex", _config.KazuhaPlayerIndex);
+            _config.ReturnToFightPointAfterBattle = Get("returnToFightPointAfterBattle", _config.ReturnToFightPointAfterBattle);
+            _config.ReturnToFightPointStaySeconds = Get("returnToFightPointStaySeconds", _config.ReturnToFightPointStaySeconds);
+            _config.DebugMode = Get("debugMode", _config.DebugMode);
+            _config.UseFixedDebugRoutes = Get("useFixedDebugRoutes", _config.UseFixedDebugRoutes);
+            _config.FixedDebugRoutePath = Get("fixedDebugRoutePath", _config.FixedDebugRoutePath);
+        }
+        else
+        {
+            // 单机模式：强制重置联机专属字段为安全默认值，避免全局配置残留影响
+            _config.UseFixedDebugRoutes = false;
+            _config.DebugMode = false;
+            _config.StartRouteIndex = 0;
+            _config.SyncTimeoutSeconds = 60;
+            _config.MinPlayersToSync = 0;
+            _config.SyncPointMinDistance = 30.0;
+            _config.KazuhaPlayerIndex = 0;
+            _config.ReturnToFightPointAfterBattle = false;
+            _config.ReturnToFightPointStaySeconds = 5;
+            _config.FixedDebugRoutePath = "";
+        }
+
+        _config.MultiWorldEnabled = Get("multiWorldEnabled", _config.MultiWorldEnabled);
+        _config.MultiWorldCount = Get("multiWorldCount", _config.MultiWorldCount);
     }
 
     /// <summary>
@@ -594,6 +2147,80 @@ public class AutoHoeingTask : ISoloTask
 
             // ===== 第三部分：仅指定怪物模式 =====
             new() { Name = "targetMonsters", Label = "目标怪物\n建议按照怪物图鉴中的名字填写，有多个目标时使用中文逗号分隔", Type = "text", DefaultValue = config.TargetMonsters },
+
+            // ===== 第四部分：联机队伍和角色准备 =====
+            new() { Name = "multiplayerPartyName", Label = "联机队伍名称\n留空则使用当前队伍", Type = "text", DefaultValue = config.MultiplayerPartyName },
+            new() { Name = "multiplayerStartAvatarName", Label = "联机起始角色名称\n留空则使用当前角色，如：钟离、纳西妲", Type = "text", DefaultValue = config.MultiplayerStartAvatarName },
+
+            // ===== 第五部分：联机角色配置 =====
+            new() { Name = "multiplayerRole", Label = "联机角色", Type = "select", DefaultValue = config.MultiplayerRole,
+                Options = new() { "host", "member" } },
+            new() { Name = "memberJoinMode", Label = "成员加入方式", Type = "select", DefaultValue = config.MemberJoinMode,
+                Options = new() { "byHostName", "random" } },
+            new() { Name = "targetHostName", Label = "目标房主玩家名称\n仅在成员模式且加入方式为byHostName时生效", Type = "text", DefaultValue = config.TargetHostName },
+
+            // ===== 第六部分：联机服务器和同步配置 =====
+            new() { Name = "coordinatorServerUrl", Label = "协调服务器地址", Type = "text", DefaultValue = config.CoordinatorServerUrl },
+            new() { Name = "playerName", Label = "玩家名称\n联机时显示给其他玩家", Type = "text", DefaultValue = config.PlayerName },
+            new() { Name = "playerUid", Label = "玩家UID\n用于进入世界和多世界切换", Type = "text", DefaultValue = config.PlayerUid },
+            new() { Name = "expectedPlayerCount", Label = "房间期望人数（2-4）\n用于判断人齐条件", Type = "number", DefaultValue = config.ExpectedPlayerCount },
+            new() { Name = "roomWhitelist", Label = "房间白名单\n逗号分隔的玩家名称", Type = "text", DefaultValue = config.RoomWhitelist },
+            new() { Name = "partyTimeoutSeconds", Label = "组队等待超时（秒）\n超时后根据超时动作处理", Type = "number", DefaultValue = config.PartyTimeoutSeconds },
+            new() { Name = "partyTimeoutAction", Label = "组队超时动作", Type = "select", DefaultValue = config.PartyTimeoutAction.ToString(),
+                Options = new() { "0", "1" } },
+            new() { Name = "syncTimeoutSeconds", Label = "集合点等待超时（秒）", Type = "number", DefaultValue = config.SyncTimeoutSeconds },
+            new() { Name = "minPlayersToSync", Label = "最低开始人数\n低于此人数时集合点直接放行，0=自动等齐所有人", Type = "number", DefaultValue = config.MinPlayersToSync },
+            new() { Name = "kazuhaPlayerIndex", Label = "万叶玩家序号\n0=不指定，1-4=对应玩家序号", Type = "number", DefaultValue = config.KazuhaPlayerIndex },
+            new() { Name = "returnToFightPointAfterBattle", Label = "战斗完成后是否走回战斗点集合", Type = "bool", DefaultValue = config.ReturnToFightPointAfterBattle },
+            new() { Name = "returnToFightPointStaySeconds", Label = "走回战斗点后停留时间（秒）\n等待其他玩家拾取", Type = "number", DefaultValue = config.ReturnToFightPointStaySeconds },
+            new() { Name = "syncPointMinDistance", Label = "集合点与战斗点的最小距离阈值\n小于此距离的点不作为集合点", Type = "number", DefaultValue = config.SyncPointMinDistance },
+
+            // ===== 第七部分：多世界连续锄地配置 =====
+            new() { Name = "multiWorldEnabled", Label = "启用多世界连续锄地\n房主设定，完成一个世界后轮换到下一个玩家的世界", Type = "bool", DefaultValue = config.MultiWorldEnabled },
+            new() { Name = "multiWorldCount", Label = "多世界锄地轮数（1-4）\n由房主设定，按加入顺序依次成为房主", Type = "number", DefaultValue = config.MultiWorldCount },
         };
+    }
+
+    /// <summary>
+    /// 设置世界权限为确认后才能加入
+    /// 参考 AutoPermission JS 脚本的点击坐标（基于1920x1080）
+    /// </summary>
+    private async Task SetWorldPermissionToConfirmJoin()
+    {
+        if (_worldPermissionSet)
+        {
+            _logger.LogInformation("[联机] 世界权限已设置过，跳过");
+            return;
+        }
+        try
+        {
+            // 返回主界面再操作
+            var returnMainUiTask = new ReturnMainUiTask();
+            await returnMainUiTask.Start(_ct);
+            
+            _logger.LogInformation("[联机] 开始设置世界权限为确认后才能加入");
+            // 按F2打开联机界面
+            Simulation.SendInput.SimulateAction(GIActions.OpenCoOpScreen);
+            await Task.Delay(1500, _ct);
+            
+            // 点击"世界权限"选项（坐标来自 AutoPermission JS 脚本）
+            GameCaptureRegion.GameRegion1080PPosClick(330, 1010);
+            await Task.Delay(800, _ct);
+            
+            // 点击"确认后可加入"选项
+            GameCaptureRegion.GameRegion1080PPosClick(330, 960);
+            await Task.Delay(500, _ct);
+            
+            // 按ESC关闭联机界面
+            Simulation.SendInput.SimulateAction(GIActions.OpenCoOpScreen);
+            await Task.Delay(800, _ct);
+            
+            _logger.LogInformation("[联机] 世界权限已设置为确认后才能加入");
+            _worldPermissionSet = true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机] 设置世界权限时发生异常，将继续执行");
+        }
     }
 }

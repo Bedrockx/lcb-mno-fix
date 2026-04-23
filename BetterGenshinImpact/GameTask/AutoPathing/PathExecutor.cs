@@ -39,6 +39,7 @@ using BetterGenshinImpact.GameTask.Common.Exceptions;
 using BetterGenshinImpact.GameTask.Common.Map.Maps;
 using BetterGenshinImpact.Core.Recognition.OpenCv;
 using BetterGenshinImpact.GameTask.AutoFight;
+using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
 using BetterGenshinImpact.GameTask.Common.Job;
 
 namespace BetterGenshinImpact.GameTask.AutoPathing;
@@ -77,6 +78,17 @@ public class PathExecutor
     /// 判断是否中止地图追踪的条件
     /// </summary>
     public Func<ImageRegion, bool>? EndAction { get; set; }
+
+    /// <summary>
+    /// 联机协调器，为 null 时以单机模式运行，不引入任何额外逻辑。
+    /// </summary>
+    public MultiplayerCoordinator? MultiplayerCoordinator { get; set; }
+
+    /// <summary>
+    /// fight waypoint 索引 → syncPointId 的映射，由 SyncPointResolver 预计算。
+    /// key = waypointListIndex * 10000 + waypointIndex
+    /// </summary>
+    private Dictionary<int, string?> _syncPointMap = new();
 
     public CombatScenes? _combatScenes;
     // private readonly Dictionary<string, string> _actionAvatarIndexMap = new();
@@ -170,6 +182,43 @@ public class PathExecutor
         // 转换、按传送点分割路径
         var waypointsList = ConvertWaypointsForTrack(task.Positions, task);
 
+        // 联机模式：预计算所有战斗点的集合点映射
+        // key = listIdx * 10000 + syncPointIdx（集合点索引），value = syncPointId
+        if (MultiplayerCoordinator != null)
+        {
+            _syncPointMap = new Dictionary<int, string?>();
+            var resolver = new SyncPointResolver();
+            var minDist = TaskContext.Instance().Config.AutoHoeingConfig.SyncPointMinDistance;
+            int totalFightPoints = 0;
+            int mappedSyncPoints = 0;
+            for (int listIdx = 0; listIdx < waypointsList.Count; listIdx++)
+            {
+                var syncResult = resolver.ResolveWithIndex(waypointsList[listIdx], minDist);
+                foreach (var (fightIdx, syncPointIdx, syncPoint) in syncResult)
+                {
+                    totalFightPoints++;
+                    if (syncPoint != null && syncPointIdx >= 0)
+                    {
+                        var key = listIdx * 10000 + syncPointIdx;
+                        var syncId = $"{task.FileName}_{listIdx}_{fightIdx}";
+                        _syncPointMap[key] = syncId;
+                        mappedSyncPoints++;
+                        var isImmediate = syncPointIdx == fightIdx;
+                        Logger.LogDebug("[联机] 路线段{ListIdx} 战斗点{FightIdx} → 集合点索引{SyncIdx}{Immediate}: {SyncId}",
+                            listIdx, fightIdx, syncPointIdx,
+                            isImmediate ? "（传送后立即等待）" : "",
+                            syncId);
+                    }
+                    else
+                    {
+                        Logger.LogDebug("[联机] 路线段{ListIdx} 战斗点{FightIdx} → 无集合点（跳过同步）", listIdx, fightIdx);
+                    }
+                }
+            }
+            Logger.LogInformation("[联机] 路线 {Name} 预计算完成：{Total} 个战斗点，{Mapped} 个有集合点",
+                task.FileName, totalFightPoints, mappedSyncPoints);
+        }
+
         await Delay(100, ct);
         Navigation.WarmUp(task.Info.MapMatchMethod);
         
@@ -216,6 +265,19 @@ public class PathExecutor
                         }
                         
                         TryCloseSkipOtherOperations();
+
+                        // 联机模式：到达集合点时等待所有玩家
+                        if (MultiplayerCoordinator != null)
+                        {
+                            var mapKey = CurWaypoints.Item1 * 10000 + CurWaypoint.Item1;
+                            if (_syncPointMap.TryGetValue(mapKey, out var syncId) && syncId != null)
+                            {
+                                Logger.LogInformation("[联机] 到达集合点，等待所有玩家，syncId={SyncId}", syncId);
+                                await MultiplayerCoordinator.WaitForAllPlayers(syncId, ct);
+                                Logger.LogInformation("[联机] 集合完成，继续前进，syncId={SyncId}", syncId);
+                            }
+                        }
+
                         await RecoverWhenLowHp(waypoint,PartyConfig.RedBloodSwitchOnly); // 低血量恢复
 
                         if (waypoint.Type == WaypointType.Teleport.Code)
@@ -333,6 +395,23 @@ public class PathExecutor
                                     if (PartyConfig.AutoEatEnabled && PathingConditionConfig.AutoEatCount < 3)
                                     {
                                         PathingConditionConfig.AutoEatCount = 0;
+                                    }
+
+                                    // 联机模式：战斗完成后走回战斗点集合
+                                    if (MultiplayerCoordinator != null)
+                                    {
+                                        var config = TaskContext.Instance().Config.AutoHoeingConfig;
+                                        if (config.ReturnToFightPointAfterBattle)
+                                        {
+                                            Logger.LogInformation("[联机] 战斗完成，走回战斗点集合");
+                                            await MoveCloseTo(waypoint);
+                                            var stayMs = config.ReturnToFightPointStaySeconds * 1000;
+                                            if (stayMs > 0)
+                                            {
+                                                Logger.LogInformation("[联机] 到达战斗点，停留 {Sec}s 等待其他玩家", config.ReturnToFightPointStaySeconds);
+                                                await Delay(stayMs, ct);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2079,7 +2158,7 @@ public class PathExecutor
                             distanceTooFarRetryCount++;
                             // 坐标稳定但距离一直>500，可能是传送后首次识别就错了
                             // 累积超过10次后触发全局匹配重新定位
-                            if (distanceTooFarRetryCount > 10)
+                            if (distanceTooFarRetryCount > 5)
                             {
                                 Logger.LogWarning($"距离持续>500达{distanceTooFarRetryCount}次，触发全局匹配重新定位");
                                 Navigation.Reset();

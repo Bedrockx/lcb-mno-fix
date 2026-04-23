@@ -353,6 +353,18 @@ public partial class HotKeyPageViewModel : ObservableObject, IViewModel
         );
         timerDirectory.Children.Add(mapMaskEnabledHotKeySettingModel);
 
+        var skipPartyWaitHotKeySettingModel = new HotKeySettingModel(
+            "联机锄地立即开始(当前人数)",
+            nameof(Config.HotKeyConfig.SkipPartyWaitHotkey),
+            Config.HotKeyConfig.SkipPartyWaitHotkey,
+            Config.HotKeyConfig.SkipPartyWaitHotkeyType,
+            (_, _) =>
+            {
+                WeakReferenceMessenger.Default.Send(new PropertyChangedMessage<object>(this, "TriggerSkipPartyWait", "", ""));
+            }
+        );
+        timerDirectory.Children.Add(skipPartyWaitHotKeySettingModel);
+
         var turnAroundHotKeySettingModel = new HotKeySettingModel(
             "长按旋转视角 - 那维莱特转圈",
             nameof(Config.HotKeyConfig.TurnAroundHotkey),

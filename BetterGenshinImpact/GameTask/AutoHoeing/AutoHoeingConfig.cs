@@ -198,4 +198,172 @@ public partial class AutoHoeingConfig : ObservableObject
     /// </summary>
     [ObservableProperty]
     private string _targetMonsters = "";
+
+    // ========== 第四部分：联机配置 ==========
+
+    /// <summary>
+    /// 启用联机模式
+    /// </summary>
+    [ObservableProperty]
+    private bool _multiplayerEnabled = false;
+
+    /// <summary>
+    /// 联机队伍名称（为空则不切换）
+    /// </summary>
+    [ObservableProperty]
+    private string _multiplayerPartyName = "";
+
+    /// <summary>
+    /// 联机起始角色名称（为空则不切换）
+    /// </summary>
+    [ObservableProperty]
+    private string _multiplayerStartAvatarName = "";
+
+    /// <summary>
+    /// 协调服务器地址
+    /// </summary>
+    [ObservableProperty]
+    private string _coordinatorServerUrl = "https://bgi-sync.example.com";
+
+    /// <summary>
+    /// 当前房间码（运行时状态，不持久化）
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string CurrentRoomCode { get; set; } = "";
+
+    /// <summary>
+    /// 集合点等待超时（秒），默认 60
+    /// </summary>
+    [ObservableProperty]
+    private int _syncTimeoutSeconds = 60;
+
+    /// <summary>
+    /// 最低开始人数，低于此人数时集合点直接放行（不等待），默认0自动等齐所有人，设为1可单人调试
+    /// </summary>
+    [ObservableProperty]
+    private int _minPlayersToSync = 0;
+
+    /// <summary>
+    /// 从第几条路线开始执行（1-based，0表示从头开始），用于调试续点
+    /// </summary>
+    [ObservableProperty]
+    private int _startRouteIndex = 0;
+
+    /// <summary>
+    /// 玩家名称，联机时显示给其他玩家
+    /// </summary>
+    [ObservableProperty]
+    private string _playerName = "";
+
+    /// <summary>
+    /// 玩家 UID，用于进入世界和多世界切换
+    /// </summary>
+    [ObservableProperty]
+    private string _playerUid = "";
+
+    /// <summary>
+    /// 调试模式：跳过路线一致性验证，方便单人调试
+    /// </summary>
+    [ObservableProperty]
+    private bool _debugMode = false;
+
+    /// <summary>
+    /// 使用固定调试线路：启用后从指定目录按文件名顺序加载路线，跳过正常路线选择逻辑
+    /// </summary>
+    [ObservableProperty]
+    private bool _useFixedDebugRoutes = false;
+
+    /// <summary>
+    /// 固定调试线路目录路径，默认为内置 DebugRoutes 目录，可自定义
+    /// </summary>
+    [ObservableProperty]
+    private string _fixedDebugRoutePath = "";
+
+    /// <summary>
+    /// 选中的内置线路文件夹名称（为空表示未选择）
+    /// </summary>
+    [ObservableProperty]
+    private string _selectedBuiltinRoute = "";
+
+    /// <summary>
+    /// 集合点与战斗点的最小距离阈值，小于此距离的点不作为集合点，默认30
+    /// </summary>
+    [ObservableProperty]
+    private double _syncPointMinDistance = 30.0;
+
+    /// <summary>
+    /// 战斗完成后是否走回战斗点集合
+    /// </summary>
+    [ObservableProperty]
+    private bool _returnToFightPointAfterBattle = false;
+
+    /// <summary>
+    /// 走回战斗点后停留时间（秒），等待其他玩家拾取
+    /// </summary>
+    [ObservableProperty]
+    private int _returnToFightPointStaySeconds = 5;
+
+    /// <summary>
+    /// 万叶玩家序号（0=不指定，1-4=对应玩家序号）
+    /// </summary>
+    [ObservableProperty]
+    private int _kazuhaPlayerIndex = 0;
+
+    /// <summary>
+    /// 房间白名单，逗号分隔的玩家名称
+    /// </summary>
+    [ObservableProperty]
+    private string _roomWhitelist = "";
+
+    /// <summary>
+    /// 房间期望人数（2-4），用于判断人齐条件
+    /// </summary>
+    [ObservableProperty]
+    private int _expectedPlayerCount = 4;
+
+    /// <summary>
+    /// 组队等待超时（秒），超时后停止联机锄地
+    /// </summary>
+    [ObservableProperty]
+    private int _partyTimeoutSeconds = 600;
+
+    /// <summary>
+    /// 组队超时动作：0=结束任务，1=现有人数锄地
+    /// </summary>
+    [ObservableProperty]
+    private int _partyTimeoutAction = 0;
+
+    // ========== 第五部分：联机角色配置（配置组专用） ==========
+
+    /// <summary>
+    /// 联机角色：host=房主，member=成员
+    /// </summary>
+    [ObservableProperty]
+    private string _multiplayerRole = "host";
+
+    /// <summary>
+    /// 成员加入方式：byHostName=指定玩家名称，random=随机加入现有房间
+    /// </summary>
+    [ObservableProperty]
+    private string _memberJoinMode = "random";
+
+    /// <summary>
+    /// 成员加入时指定的房主玩家名称
+    /// </summary>
+    [ObservableProperty]
+    private string _targetHostName = "";
+
+    // ========== 第六部分：多世界连续锄地配置 ==========
+
+    /// <summary>
+    /// 启用多世界连续锄地（房主设定，完成一个世界后轮换到下一个玩家的世界）
+    /// </summary>
+    [ObservableProperty]
+    private bool _multiWorldEnabled = false;
+
+    /// <summary>
+    /// 多世界锄地轮数（1-4），由房主设定，按加入顺序依次成为房主
+    /// </summary>
+    [ObservableProperty]
+    private int _multiWorldCount = 2;
 }

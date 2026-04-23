@@ -24,6 +24,8 @@ using BetterGenshinImpact.View.Windows;
 using BetterGenshinImpact.ViewModel.Pages.View;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using CommunityToolkit.Mvvm.Messaging;
+using CommunityToolkit.Mvvm.Messaging.Messages;
 using System;
 using System.Collections.Frozen;
 using System.Collections.Generic;
@@ -221,6 +223,78 @@ public partial class TaskSettingsPageViewModel : ViewModel
     [ObservableProperty]
     private string _switchAutoHoeingButtonText = "启动";
 
+    [ObservableProperty]
+    private bool _hasRouteDiff;
+
+    [ObservableProperty]
+    private string _routeDiffMessage = "";
+
+    [ObservableProperty]
+    private string _multiplayerStatusText = "请先创建或加入房间";
+
+    [ObservableProperty]
+    private bool _canStartMultiplayer;
+
+    [ObservableProperty]
+    private bool _isRoomHost = true;
+
+    /// <summary>
+    /// 是否为房间成员（与 IsRoomHost 相反）
+    /// </summary>
+    public bool IsRoomMember => !IsRoomHost;
+
+    /// <summary>
+    /// 联机角色选择索引：0=房主，1=成员
+    /// </summary>
+    public int MultiplayerRoleIndex
+    {
+        get => Config.AutoHoeingConfig.MultiplayerRole == "member" ? 1 : 0;
+        set
+        {
+            if (value == 0)
+            {
+                Config.AutoHoeingConfig.MultiplayerRole = "host";
+                IsRoomHost = true;
+            }
+            else
+            {
+                Config.AutoHoeingConfig.MultiplayerRole = "member";
+                IsRoomHost = false;
+            }
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsRoomMember));
+        }
+    }
+
+    [ObservableProperty]
+    private bool _canSkipPartyWait = false;
+
+    [ObservableProperty]
+    private bool _isWaitingForParty = false; // 是否正在等待组队（进入F2页面）
+
+    [ObservableProperty]
+    private string _skipPartyWaitHotkeyText = "快捷键：未配置（可在快捷键设置中配置）";
+
+    [ObservableProperty]
+    private System.Collections.ObjectModel.ObservableCollection<BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models.PlayerInfo> _roomPlayers = new();
+
+    [ObservableProperty]
+    private string _roomPlayerCount = "0 人";
+
+    [ObservableProperty]
+    private string _roomPlayerSummary = "房间玩家 (0人)";
+
+    [ObservableProperty]
+    private string _currentRoomCode = "";
+
+    private BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.CoordinatorClient? _coordinatorClient;
+
+    /// <summary>
+    /// 内置线路列表
+    /// </summary>
+    [ObservableProperty]
+    private System.Collections.ObjectModel.ObservableCollection<BuiltinRouteViewModel> _builtinRoutes = new();
+
     /// <summary>
     /// 锄地一条龙是否可见（隐藏功能，点击独立任务标题10次解锁/锁定）
     /// </summary>
@@ -271,6 +345,132 @@ public partial class TaskSettingsPageViewModel : ViewModel
         _domainNameList = ["", .. MapLazyAssets.Instance.DomainNameList];
         _autoFightViewModel = new AutoFightViewModel(Config);
         _oneDragonFlowViewModel = new OneDragonFlowViewModel();
+
+        // 初始化快捷键文本
+        UpdateSkipPartyWaitHotkeyText();
+
+        // 监听快捷键配置变化
+        Config.HotKeyConfig.PropertyChanged += (sender, e) =>
+        {
+            if (e.PropertyName == nameof(Config.HotKeyConfig.SkipPartyWaitHotkey))
+            {
+                UpdateSkipPartyWaitHotkeyText();
+            }
+        };
+
+        // 监听锄地配置变化
+        Config.AutoHoeingConfig.PropertyChanged += (sender, e) =>
+        {
+            if (e.PropertyName == nameof(Config.AutoHoeingConfig.UseFixedDebugRoutes) ||
+                e.PropertyName == nameof(Config.AutoHoeingConfig.FixedDebugRoutePath))
+            {
+                UpdateBuiltinRouteButtonStates();
+            }
+        };
+
+        // 启动定时器检查等待状态
+        StartWaitingStatusChecker();
+
+        // 注册联机锄地快捷键消息
+        WeakReferenceMessenger.Default.Register<PropertyChangedMessage<object>>(this, (sender, msg) =>
+        {
+            if (msg.PropertyName == "TriggerSkipPartyWait")
+            {
+                if (CanSkipPartyWait && SkipPartyWaitCommand.CanExecute(null))
+                {
+                    SkipPartyWaitCommand.Execute(null);
+                }
+            }
+        });
+
+        // 初始化内置线路
+        InitializeBuiltinRoutes();
+    }
+
+    /// <summary>
+    /// 初始化内置线路列表
+    /// </summary>
+    public void InitializeBuiltinRoutes()
+    {
+        var scanner = new BetterGenshinImpact.GameTask.AutoHoeing.Services.RouteDirectoryScanner();
+        var folders = scanner.ScanBuiltinRoutes();
+
+        BuiltinRoutes.Clear();
+        foreach (var folder in folders)
+        {
+            BuiltinRoutes.Add(new BuiltinRouteViewModel
+            {
+                FolderName = folder.FolderName,
+                FullPath = folder.FullPath,
+                RouteCount = folder.RouteCount,
+                IsSelected = false, // 初始状态不选中，后续通过UpdateBuiltinRouteButtonStates设置
+                IsEnabled = false   // 初始状态不可用，后续通过UpdateBuiltinRouteButtonStates设置
+            });
+        }
+        
+        // 更新按钮状态
+        UpdateBuiltinRouteButtonStates();
+    }
+
+    /// <summary>
+    /// 选择内置线路
+    /// </summary>
+    [RelayCommand]
+    private void SelectBuiltinRoute(BuiltinRouteViewModel route)
+    {
+        // 取消所有其他选择
+        foreach (var r in BuiltinRoutes)
+        {
+            r.IsSelected = false;
+        }
+
+        // 选中当前路线
+        route.IsSelected = true;
+        Config.AutoHoeingConfig.SelectedBuiltinRoute = route.FolderName;
+    }
+
+    /// <summary>
+    /// 处理调试路径输入框变化
+    /// </summary>
+    public void OnDebugRoutePathChanged()
+    {
+        UpdateBuiltinRouteButtonStates();
+    }
+
+    /// <summary>
+    /// 更新内置线路按钮状态
+    /// </summary>
+    private void UpdateBuiltinRouteButtonStates()
+    {
+        var hasManualPath = !string.IsNullOrWhiteSpace(Config.AutoHoeingConfig.FixedDebugRoutePath);
+        var useFixedDebugRoutes = Config.AutoHoeingConfig.UseFixedDebugRoutes;
+
+        // 只有在启用固定调试线路且没有手动路径时，按钮才可用
+        var buttonsEnabled = useFixedDebugRoutes && !hasManualPath;
+
+        foreach (var route in BuiltinRoutes)
+        {
+            route.IsEnabled = buttonsEnabled;
+        }
+
+        // 手动路径清空且启用固定调试线路时恢复之前的选择
+        if (buttonsEnabled && !string.IsNullOrWhiteSpace(Config.AutoHoeingConfig.SelectedBuiltinRoute))
+        {
+            var selectedRoute = BuiltinRoutes.FirstOrDefault(r => r.FolderName == Config.AutoHoeingConfig.SelectedBuiltinRoute);
+            if (selectedRoute != null)
+            {
+                selectedRoute.IsSelected = true;
+            }
+        }
+        
+        // 如果手动路径非空或未启用固定调试线路，清除所有选择
+        if (!buttonsEnabled)
+        {
+            foreach (var route in BuiltinRoutes)
+            {
+                route.IsSelected = false;
+            }
+        }
     }
 
     partial void OnScanDropsAfterRewardEnabledUiChanged(bool value)
@@ -528,6 +728,292 @@ public partial class TaskSettingsPageViewModel : ViewModel
         await new TaskRunner()
             .RunSoloTaskAsync(new AutoHoeingTask());
         SwitchAutoHoeingEnabled = false;
+    }
+
+    [RelayCommand]
+    private async Task OnCreateRoom()
+    {
+        var config = Config.AutoHoeingConfig;
+        if (string.IsNullOrEmpty(config.CoordinatorServerUrl))
+        {
+            Toast.Warning("请先填写服务器地址");
+            return;
+        }
+        // 清理旧连接
+        UnsubscribeClientEvents();
+        if (_coordinatorClient != null)
+            await _coordinatorClient.DisposeAsync();
+
+        var client = new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.CoordinatorClient();
+        var connected = await client.ConnectAsync(config.CoordinatorServerUrl, CancellationToken.None);
+        if (!connected)
+        {
+            Toast.Error("连接服务器失败，请检查服务器地址");
+            return;
+        }
+        var whitelist = string.IsNullOrEmpty(config.RoomWhitelist)
+            ? null
+            : new System.Collections.Generic.List<string>(config.RoomWhitelist.Split(new[] { ',', '，' }, System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries));
+        var roomCode = await client.CreateRoomAsync(config.PlayerName, whitelist, config.PlayerUid, config.ExpectedPlayerCount);
+        if (roomCode != null)
+        {
+            _coordinatorClient = client;
+            SubscribeClientEvents(client);
+            config.CurrentRoomCode = roomCode;
+            CurrentRoomCode = roomCode;
+            MultiplayerStatusText = $"房间已创建：{roomCode}";
+            CanStartMultiplayer = true;
+            IsRoomHost = true;
+            CanSkipPartyWait = true;
+            RoomPlayers.Clear();
+            RoomPlayers.Add(new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models.PlayerInfo
+            {
+                PlayerName = string.IsNullOrEmpty(config.PlayerName) ? "房主" : config.PlayerName
+            });
+            RoomPlayerCount = "1 人";
+            var myName = string.IsNullOrEmpty(config.PlayerName) ? "房主" : config.PlayerName;
+            RoomPlayerSummary = $"房间玩家 (1人): {myName}";
+            Toast.Success($"房间创建成功，房间码：{roomCode}");
+        }
+    }
+
+    [RelayCommand]
+    private async Task OnJoinRoom()
+    {
+        var config = Config.AutoHoeingConfig;
+        if (string.IsNullOrEmpty(config.CurrentRoomCode))
+        {
+            Toast.Warning("请先输入房间码");
+            return;
+        }
+        if (string.IsNullOrEmpty(config.CoordinatorServerUrl))
+        {
+            Toast.Warning("请先填写服务器地址");
+            return;
+        }
+        // 清理旧连接
+        UnsubscribeClientEvents();
+        if (_coordinatorClient != null)
+            await _coordinatorClient.DisposeAsync();
+
+        var client = new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.CoordinatorClient();
+        var connected = await client.ConnectAsync(config.CoordinatorServerUrl, CancellationToken.None);
+        if (!connected)
+        {
+            Toast.Error("连接服务器失败，请检查服务器地址");
+            return;
+        }
+        var success = await client.JoinRoomAsync(config.CurrentRoomCode, config.PlayerName, config.PlayerUid);
+        if (success)
+        {
+            _coordinatorClient = client;
+            SubscribeClientEvents(client);
+            CurrentRoomCode = config.CurrentRoomCode;
+            MultiplayerStatusText = $"已加入房间：{config.CurrentRoomCode}";
+            CanStartMultiplayer = true;
+            IsRoomHost = false;
+            CanSkipPartyWait = false;
+            RoomPlayerCount = "加入成功";
+            Toast.Success($"成功加入房间 {config.CurrentRoomCode}");
+        }
+        else
+        {
+            Toast.Error("加入房间失败，请检查房间码");
+        }
+    }
+
+    [RelayCommand]
+    private async Task OnStartMultiplayerHoeing()
+    {
+        SwitchAutoHoeingEnabled = true;
+        await new TaskRunner().RunSoloTaskAsync(new AutoHoeingTask());
+        SwitchAutoHoeingEnabled = false;
+    }
+
+    [RelayCommand]
+    private void OnSkipPartyWait()
+    {
+        if (!BetterGenshinImpact.GameTask.AutoHoeing.AutoHoeingTask.IsWaitingForParty)
+        {
+            Toast.Warning("当前未在等待组队状态");
+            return;
+        }
+        BetterGenshinImpact.GameTask.AutoHoeing.AutoHoeingTask.SkipPartyWait = true;
+        Toast.Success("已发送立即开始信号");
+    }
+
+    private void UpdateSkipPartyWaitHotkeyText()
+    {
+        var hotkey = Config.HotKeyConfig.SkipPartyWaitHotkey;
+        if (string.IsNullOrEmpty(hotkey))
+        {
+            SkipPartyWaitHotkeyText = "快捷键：未配置（可在快捷键设置中配置）";
+        }
+        else
+        {
+            SkipPartyWaitHotkeyText = $"快捷键：{hotkey}";
+        }
+    }
+
+    private System.Threading.Timer? _waitingStatusTimer;
+
+    private void StartWaitingStatusChecker()
+    {
+        _waitingStatusTimer = new System.Threading.Timer(_ =>
+        {
+            var isWaiting = BetterGenshinImpact.GameTask.AutoHoeing.AutoHoeingTask.IsWaitingForParty;
+            if (IsWaitingForParty != isWaiting)
+            {
+                UIDispatcherHelper.Invoke(() =>
+                {
+                    IsWaitingForParty = isWaiting;
+                    CanSkipPartyWait = IsRoomHost && isWaiting;
+                });
+            }
+        }, null, TimeSpan.Zero, TimeSpan.FromMilliseconds(500));
+    }
+
+    [RelayCommand]
+    private async Task OnCloseRoom()
+    {
+        var config = Config.AutoHoeingConfig;
+        if (string.IsNullOrEmpty(config.CurrentRoomCode) && _coordinatorClient == null)
+        {
+            Toast.Warning("当前没有房间");
+            return;
+        }
+        if (_coordinatorClient != null)
+        {
+            UnsubscribeClientEvents();
+            await _coordinatorClient.CloseRoomAsync();
+            await _coordinatorClient.DisposeAsync();
+            _coordinatorClient = null;
+        }
+        config.CurrentRoomCode = "";
+        CurrentRoomCode = "";
+        CanStartMultiplayer = false;
+        IsRoomHost = true;
+        CanSkipPartyWait = false;
+        MultiplayerStatusText = "房间已关闭";
+        RoomPlayers.Clear();
+        RoomPlayerCount = "0 人";
+        RoomPlayerSummary = "房间玩家 (0人)";
+        Toast.Success("房间已关闭");
+    }
+
+    [RelayCommand]
+    private void OnCopyRoomCode()
+    {
+        var code = CurrentRoomCode;
+        if (string.IsNullOrEmpty(code))
+            code = Config.AutoHoeingConfig.CurrentRoomCode;
+        if (string.IsNullOrEmpty(code))
+        {
+            Toast.Warning("房间码为空");
+            return;
+        }
+        // 剪贴板可能被其他进程占用，重试 3 次
+        for (int i = 0; i < 3; i++)
+        {
+            try
+            {
+                System.Windows.Clipboard.SetDataObject(code, true);
+                Toast.Success($"已复制房间码：{code}");
+                return;
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                System.Threading.Thread.Sleep(50);
+            }
+        }
+        Toast.Warning("复制失败，剪贴板被占用，请手动复制");
+    }
+
+    [RelayCommand]
+    private async Task OnBrowseRooms()
+    {
+        var config = Config.AutoHoeingConfig;
+        if (string.IsNullOrEmpty(config.CoordinatorServerUrl))
+        {
+            Toast.Warning("请先填写服务器地址");
+            return;
+        }
+        var client = new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.CoordinatorClient();
+        var connected = await client.ConnectAsync(config.CoordinatorServerUrl, CancellationToken.None);
+        if (!connected)
+        {
+            Toast.Error("连接服务器失败");
+            return;
+        }
+        try
+        {
+            var rooms = await client.GetOnlineRoomsAsync();
+            var dialog = new BetterGenshinImpact.View.Dialogs.RoomBrowserDialog(rooms, async () =>
+            {
+                return await client.GetOnlineRoomsAsync();
+            });
+            dialog.Owner = Application.Current.MainWindow;
+            dialog.ShowDialog();
+
+            if (!string.IsNullOrEmpty(dialog.SelectedRoomCode))
+            {
+                config.CurrentRoomCode = dialog.SelectedRoomCode;
+
+                // 清理旧连接，复用浏览器的连接加入房间
+                UnsubscribeClientEvents();
+                if (_coordinatorClient != null)
+                    await _coordinatorClient.DisposeAsync();
+
+                var success = await client.JoinRoomAsync(dialog.SelectedRoomCode, config.PlayerName, config.PlayerUid);
+                if (success)
+                {
+                    _coordinatorClient = client;
+                    SubscribeClientEvents(client);
+                    CurrentRoomCode = dialog.SelectedRoomCode;
+                    MultiplayerStatusText = $"已加入房间：{dialog.SelectedRoomCode}";
+                    CanStartMultiplayer = true;
+                    IsRoomHost = false;
+                    CanSkipPartyWait = false;
+                    RoomPlayerCount = "加入成功";
+                    Toast.Success($"成功加入房间 {dialog.SelectedRoomCode}");
+                    return; // 不 dispose client，已保存
+                }
+                else
+                {
+                    Toast.Error("加入房间失败");
+                }
+            }
+        }
+        finally
+        {
+            if (_coordinatorClient != client) // 只在未保存时 dispose
+                await client.DisposeAsync();
+        }
+    }
+
+    private void OnPlayerListUpdated(System.Collections.Generic.List<BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models.PlayerInfo> players)
+    {
+        UIDispatcherHelper.Invoke(() =>
+        {
+            RoomPlayers.Clear();
+            foreach (var p in players)
+                RoomPlayers.Add(p);
+            RoomPlayerCount = $"{players.Count} 人";
+            RoomPlayerSummary = players.Count == 0
+                ? "房间玩家 (0人)"
+                : $"房间玩家 ({players.Count}人): {string.Join(", ", players.Select(p => p.PlayerName))}";
+        });
+    }
+
+    private void SubscribeClientEvents(BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.CoordinatorClient client)
+    {
+        client.PlayerListUpdated += OnPlayerListUpdated;
+    }
+
+    private void UnsubscribeClientEvents()
+    {
+        if (_coordinatorClient != null)
+            _coordinatorClient.PlayerListUpdated -= OnPlayerListUpdated;
     }
 
     [RelayCommand]
@@ -866,4 +1352,40 @@ public partial class TaskSettingsPageViewModel : ViewModel
             SwitchAutoRedeemCodeEnabled = false;
         }
     }
+}
+
+/// <summary>
+/// 内置线路 UI 视图模型
+/// </summary>
+public partial class BuiltinRouteViewModel : ObservableObject
+{
+    /// <summary>
+    /// 文件夹名称
+    /// </summary>
+    [ObservableProperty]
+    private string _folderName = "";
+
+    /// <summary>
+    /// 文件夹完整路径
+    /// </summary>
+    [ObservableProperty]
+    private string _fullPath = "";
+
+    /// <summary>
+    /// 路线文件数量
+    /// </summary>
+    [ObservableProperty]
+    private int _routeCount;
+
+    /// <summary>
+    /// 是否被选中
+    /// </summary>
+    [ObservableProperty]
+    private bool _isSelected;
+
+    /// <summary>
+    /// 是否启用（手动路径非空时禁用）
+    /// </summary>
+    [ObservableProperty]
+    private bool _isEnabled = true;
 }

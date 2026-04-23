@@ -1,6 +1,7 @@
 using BetterGenshinImpact.Core.Config;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.AutoHoeing.Models;
+using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
 using BetterGenshinImpact.GameTask.AutoPathing;
 using BetterGenshinImpact.GameTask.AutoPathing.Model;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,9 @@ public class RouteExecutionEngine
     private readonly PathingPartyConfig? _partyConfig;
 
     private volatile bool _running;
+    private MultiplayerCoordinator? _coordinator;
+
+    public void SetCoordinator(MultiplayerCoordinator? coordinator) => _coordinator = coordinator;
 
     public RouteExecutionEngine(
         TemplatePickupService pickupService,
@@ -82,8 +86,27 @@ public class RouteExecutionEngine
                 {
                     var executor = new PathExecutor(ct);
                     executor.PartyConfig = _partyConfig;
+                    
+                    // 联机模式：注入 MultiplayerCoordinator
+                    if (_config.MultiplayerEnabled && _coordinator != null)
+                    {
+                        executor.MultiplayerCoordinator = _coordinator;
+                        Logger.LogInformation("[联机] 已注入 MultiplayerCoordinator 到 PathExecutor，路线: {Name}", route.FileName);
+                    }
+                    else
+                    {
+                        Logger.LogDebug("[联机] MultiplayerEnabled={Enabled}，coordinator={HasCoord}，单机模式执行",
+                            _config.MultiplayerEnabled, _coordinator != null);
+                    }
+                    
+                    Logger.LogInformation("[DEBUG] 开始调用 executor.Pathing，路线: {Name}", route.FileName);
                     await executor.Pathing(task);
+                    Logger.LogInformation("[DEBUG] executor.Pathing 完成，SuccessEnd={End}，路线: {Name}", executor.SuccessEnd, route.FileName);
                     pathingFullyCompleted = executor.SuccessEnd;
+                }
+                else
+                {
+                    Logger.LogWarning("[DEBUG] BuildFromFilePath 返回 null，路线: {Name}", route.FileName);
                 }
             }
             catch (Exception ex)

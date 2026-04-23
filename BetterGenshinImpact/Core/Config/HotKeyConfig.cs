@@ -258,4 +258,11 @@ public partial class HotKeyConfig : ObservableObject
 
     [ObservableProperty]
     private string _mapMaskEnabledHotkeyType = HotKeyTypeEnum.KeyboardMonitor.ToString();
+
+    // 联机锄地立即开始
+    [ObservableProperty]
+    private string _skipPartyWaitHotkey = "";
+
+    [ObservableProperty]
+    private string _skipPartyWaitHotkeyType = HotKeyTypeEnum.KeyboardMonitor.ToString();
 }
