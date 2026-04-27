@@ -244,14 +244,18 @@ jobs:
           $validReleases = $releases | 
           Where-Object { -not $_.draft -and -not $_.prerelease } |
           Sort-Object { [DateTime]$_.published_at } -Descending
+          "release_count=$($validReleases.Count)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           if ($validReleases.Count -lt 3) {
-              Write-Error "至少需要 3 个正式 Release（当前找到 $($validReleases.Count) 个）"
-              exit 1
+              Write-Warning "正式 Release 不足 3 个（当前找到 $($validReleases.Count) 个），将跳过差分补丁构建"
+              "second_release_tag=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "third_release_tag=" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          } else {
+              "second_release_tag=$($validReleases[1].tag_name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+              "third_release_tag=$($validReleases[2].tag_name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           }
-          "second_release_tag=$($validReleases[1].tag_name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          "third_release_tag=$($validReleases[2].tag_name)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: 📥 Download 2nd last release
+        if: ${{ steps.release_tags.outputs.second_release_tag != '' }}
         uses: robinraju/release-downloader@v1.8
         with:
           repository: "babalae/better-genshin-impact"
@@ -259,6 +263,7 @@ jobs:
           fileName: "BetterGI_v*.7z"
           out-file-path: '2nd'
       - name: 📥 Download 3rd last release
+        if: ${{ steps.release_tags.outputs.third_release_tag != '' }}
         uses: robinraju/release-downloader@v1.8
         with:
           repository: "babalae/better-genshin-impact"
@@ -275,29 +280,38 @@ jobs:
               Rename-Item -Path ".\temp" -NewName ".\BetterGI"
           }
           cd ..
-          cd 2nd
-          7z x "BetterGI*.7z" -otemp
-          if (Test-Path -Path ".\temp\BetterGI" -PathType Container) {
-              Move-Item -Path ".\temp\BetterGI" -Destination ".\BetterGI"
-          } else {
-              Rename-Item -Path ".\temp" -NewName ".\BetterGI"
+          if (Test-Path "2nd") {
+            cd 2nd
+            7z x "BetterGI*.7z" -otemp
+            if (Test-Path -Path ".\temp\BetterGI" -PathType Container) {
+                Move-Item -Path ".\temp\BetterGI" -Destination ".\BetterGI"
+            } else {
+                Rename-Item -Path ".\temp" -NewName ".\BetterGI"
+            }
+            cd ..
           }
-          cd ..
-          cd 3rd
-          7z x "BetterGI*.7z" -otemp
-          if (Test-Path -Path ".\temp\BetterGI" -PathType Container) {
-              Move-Item -Path ".\temp\BetterGI" -Destination ".\BetterGI"
-          } else {
-              Rename-Item -Path ".\temp" -NewName ".\BetterGI"
+          if (Test-Path "3rd") {
+            cd 3rd
+            7z x "BetterGI*.7z" -otemp
+            if (Test-Path -Path ".\temp\BetterGI" -PathType Container) {
+                Move-Item -Path ".\temp\BetterGI" -Destination ".\BetterGI"
+            } else {
+                Rename-Item -Path ".\temp" -NewName ".\BetterGI"
+            }
+            cd ..
           }
-          cd ..
           ls .\last
-          ls .\2nd
-          ls .\3rd
+          if (Test-Path "2nd") { ls .\2nd }
+          if (Test-Path "3rd") { ls .\3rd }
       - name: 📦 Pack kachina-builder
         run: |
           cd dist
-          ..\kachina-builder.exe gen -j 6 -i BetterGI -m metadata.json -o hashed -r babalae/bettergi -t ${{ needs.validate.outputs.version }} --diff-vers ..\last\BetterGI --diff-vers ..\2nd\BetterGI --diff-vers ..\3rd\BetterGI --diff-ignore *[.txt,.onnx] -u .\BetterGI\BetterGI.update.exe
+          $diffArgs = @()
+          if (Test-Path "..\last\BetterGI") { $diffArgs += "--diff-vers", "..\last\BetterGI" }
+          if (Test-Path "..\2nd\BetterGI")  { $diffArgs += "--diff-vers", "..\2nd\BetterGI" }
+          if (Test-Path "..\3rd\BetterGI")  { $diffArgs += "--diff-vers", "..\3rd\BetterGI" }
+          $diffIgnore = if ($diffArgs.Count -gt 0) { @("--diff-ignore", "*[.txt,.onnx]") } else { @() }
+          ..\kachina-builder.exe gen -j 6 -i BetterGI -m metadata.json -o hashed -r babalae/bettergi -t ${{ needs.validate.outputs.version }} @diffArgs @diffIgnore -u .\BetterGI\BetterGI.update.exe
           ..\kachina-builder.exe pack -c ../Build/kachina.config.json -m metadata.json -d hashed -o BetterGI.Install.${{ needs.validate.outputs.version }}.exe
       - uses: actions/upload-artifact@v4
         with:
