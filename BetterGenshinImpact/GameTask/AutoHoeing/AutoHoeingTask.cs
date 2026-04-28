@@ -16,6 +16,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Vanara.PInvoke;
@@ -90,9 +91,30 @@ public class AutoHoeingTask : ISoloTask
         _ct = ct;
         _config = TaskContext.Instance().Config.AutoHoeingConfig;
 
-        // 如果有配置组传入的覆盖配置，应用到_config的副本
+        // 如果有配置组传入的覆盖配置，在全局配置的深拷贝上应用，避免污染全局状态
         if (_settingsOverride != null && _settingsOverride.Count > 0)
         {
+            var json = JsonSerializer.Serialize(_config);
+            _config = JsonSerializer.Deserialize<AutoHoeingConfig>(json) ?? _config;
+
+            // 重置所有可能被其他配置组污染的字段为默认值
+            // 这些字段若配置组 settings 里有显式配置，ApplySettingsOverride 会覆盖；
+            // 若没有配置，则保持干净的默认值，不受上一次执行的残留影响
+            _config.MultiplayerEnabled = false;
+            _config.UseFixedDebugRoutes = false;
+            _config.FixedDebugRoutePath = "";
+            _config.SelectedBuiltinRoute = "";
+            _config.DebugMode = false;
+            _config.StartRouteIndex = 0;
+            _config.SyncTimeoutSeconds = 60;
+            _config.MinPlayersToSync = 0;
+            _config.SyncPointMinDistance = 30.0;
+            _config.KazuhaPlayerIndex = 0;
+            _config.ReturnToFightPointAfterBattle = false;
+            _config.ReturnToFightPointStaySeconds = 5;
+            _config.MultiWorldEnabled = false;
+            _config.MultiWorldCount = 2;
+
             ApplySettingsOverride();
         }
 
@@ -1483,7 +1505,8 @@ public class AutoHoeingTask : ISoloTask
         var targetGroup = _config.GroupIndex;
         var groupRoutes = routes.Where(r => r.Group == targetGroup && r.Selected).ToList();
 
-        // 步骤1：联机模式路线列表同步（必须在验证之前，确保两端用相同路线集合验证）        if (_config.MultiplayerEnabled && _coordinatorClientRef != null)
+        // 步骤1：联机模式路线列表同步（必须在验证之前，确保两端用相同路线集合验证）
+        if (_config.MultiplayerEnabled && _coordinatorClientRef != null)
         {
             // 房主身份判断：优先使用 UID 匹配，仅在 PlayerUid 为空时使用 MultiplayerRole 兜底
             bool isHost = !string.IsNullOrEmpty(_config.PlayerUid)
@@ -1628,7 +1651,7 @@ public class AutoHoeingTask : ISoloTask
         }
 
         // 步骤3：路线验证同步等待（等待所有玩家完成验证后再开始执行）
-        if (_multiplayerCoordinator != null)
+        if (_multiplayerCoordinator != null && _config.MultiplayerEnabled)
         {
             try
             {
@@ -2061,28 +2084,26 @@ public class AutoHoeingTask : ISoloTask
             _config.SyncTimeoutSeconds = Get("syncTimeoutSeconds", _config.SyncTimeoutSeconds);
             _config.MinPlayersToSync = Get("minPlayersToSync", _config.MinPlayersToSync);
             _config.SyncPointMinDistance = Get("syncPointMinDistance", _config.SyncPointMinDistance);
-            _config.StartRouteIndex = Get("startRouteIndex", _config.StartRouteIndex);
             _config.KazuhaPlayerIndex = Get("kazuhaPlayerIndex", _config.KazuhaPlayerIndex);
             _config.ReturnToFightPointAfterBattle = Get("returnToFightPointAfterBattle", _config.ReturnToFightPointAfterBattle);
             _config.ReturnToFightPointStaySeconds = Get("returnToFightPointStaySeconds", _config.ReturnToFightPointStaySeconds);
-            _config.DebugMode = Get("debugMode", _config.DebugMode);
-            _config.UseFixedDebugRoutes = Get("useFixedDebugRoutes", _config.UseFixedDebugRoutes);
-            _config.FixedDebugRoutePath = Get("fixedDebugRoutePath", _config.FixedDebugRoutePath);
         }
         else
         {
-            // 单机模式：强制重置联机专属字段为安全默认值，避免全局配置残留影响
-            _config.UseFixedDebugRoutes = false;
-            _config.DebugMode = false;
-            _config.StartRouteIndex = 0;
+            // 单机模式：重置真正的联机专属字段为安全默认值，避免全局配置残留影响
             _config.SyncTimeoutSeconds = 60;
             _config.MinPlayersToSync = 0;
             _config.SyncPointMinDistance = 30.0;
             _config.KazuhaPlayerIndex = 0;
             _config.ReturnToFightPointAfterBattle = false;
             _config.ReturnToFightPointStaySeconds = 5;
-            _config.FixedDebugRoutePath = "";
         }
+
+        // 单机和联机均支持的字段
+        _config.StartRouteIndex = Get("startRouteIndex", _config.StartRouteIndex);
+        _config.DebugMode = Get("debugMode", _config.DebugMode);
+        _config.UseFixedDebugRoutes = Get("useFixedDebugRoutes", _config.UseFixedDebugRoutes);
+        _config.FixedDebugRoutePath = Get("fixedDebugRoutePath", _config.FixedDebugRoutePath);
 
         _config.MultiWorldEnabled = Get("multiWorldEnabled", _config.MultiWorldEnabled);
         _config.MultiWorldCount = Get("multiWorldCount", _config.MultiWorldCount);
