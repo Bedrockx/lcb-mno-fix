@@ -1004,7 +1004,7 @@ public class AutoFightTask : ISoloTask
                         }
 
                         #region check动作触发战斗结束检测
-                        if (command.Method == Method.Check)
+                        if (command.Method == Method.Check && _taskParam.FightFinishDetectEnabled)
                         {
                             if ((_taskParam.FinishDetectConfig.RotationMode &&
                              _taskParam.FinishDetectConfig.RotateFindEnemyEnabled) || _taskParam.FinishDetectConfig.PaimonEndModel)

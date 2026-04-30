@@ -46,6 +46,50 @@ using Microsoft.Extensions.DependencyInjection;
 using BetterGenshinImpact.Core.Config;
 using OpenCvSharp.Extensions;
 using BetterGenshinImpact.GameTask.AutoFight;
+using BetterGenshinImpact.Core.Config;
+using BetterGenshinImpact.Core.Recognition.OCR;
+using BetterGenshinImpact.Core.Recognition.ONNX;
+using BetterGenshinImpact.Core.Simulator;
+using BetterGenshinImpact.Core.Simulator.Extensions;
+using BetterGenshinImpact.GameTask.AutoFight.Assets;
+using BetterGenshinImpact.GameTask.AutoFight.Model;
+using BetterGenshinImpact.GameTask.AutoFight.Script;
+using BetterGenshinImpact.GameTask.AutoGeniusInvokation.Exception;
+using BetterGenshinImpact.GameTask.AutoPick.Assets;
+using BetterGenshinImpact.GameTask.Common.Map;
+using BetterGenshinImpact.GameTask.Model.Area;
+using BetterGenshinImpact.Helpers;
+using BetterGenshinImpact.Service.Notification;
+using BetterGenshinImpact.View.Drawable;
+using Microsoft.Extensions.Logging;
+using OpenCvSharp;
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using BetterGenshinImpact.Core.Recognition;
+using BetterGenshinImpact.GameTask.AutoTrackPath;
+using BetterGenshinImpact.GameTask.Common.BgiVision;
+using BetterGenshinImpact.GameTask.Common.Element.Assets;
+using BetterGenshinImpact.GameTask.Common.Job;
+using BetterGenshinImpact.Service.Notification.Model.Enum;
+using static BetterGenshinImpact.GameTask.Common.TaskControl;
+using static Vanara.PInvoke.Kernel32;
+using static Vanara.PInvoke.User32;
+using Microsoft.Extensions.Localization;
+using System.Globalization;
+using System.Text.RegularExpressions;
+using BetterGenshinImpact.GameTask.AutoArtifactSalvage;
+using System.Collections.ObjectModel;
+using BetterGenshinImpact.Core.Script.Dependence;
+using BetterGenshinImpact.GameTask.AutoDomain.Model;
+using BetterGenshinImpact.GameTask.Common;
+using Compunet.YoloSharp;
+using Microsoft.Extensions.DependencyInjection;
+using BetterGenshinImpact.GameTask.AutoFight;
+using BetterGenshinImpact.GameTask.AutoDomain.Assets;
 
 namespace BetterGenshinImpact.GameTask.AutoDomain;
 
@@ -1726,7 +1770,7 @@ public class AutoDomainTask : ISoloTask
         return (region1Top <= region2Bottom && region1Bottom >= region2Top);
     }
 
-    private  async Task ArtifactSalvage()
+    private async Task ArtifactSalvage()
     {
         if (!_taskParam.AutoArtifactSalvage)
         {
@@ -1741,7 +1785,13 @@ public class AutoDomainTask : ISoloTask
         await new AutoArtifactSalvageTask(new AutoArtifactSalvageTaskParam(star, javaScript: null, artifactSetFilter: null, maxNumToCheck: null, recognitionFailurePolicy: null)).Start(_ct);
     }
     
-    public static (bool, int) PressUseResin(List<Region> regionList, string resinName)
+    public static (bool, int) PressUseResin(ImageRegion ra, string resinName, string logPrefix = "自动秘境")
+    {
+        var regionList = ra.FindMulti(RecognitionObject.Ocr(ra.Width * 0.25, ra.Height * 0.2, ra.Width * 0.5, ra.Height * 0.6));
+        return PressUseResin(regionList, resinName, logPrefix);
+    }
+
+    public static (bool, int) PressUseResin(List<Region> regionList, string resinName, string logPrefix = "自动秘境")
     {
         var resinKey = regionList.FirstOrDefault(t => t.Text.Contains(resinName));
         if (resinKey != null)
@@ -1760,25 +1810,65 @@ public class AutoDomainTask : ISoloTask
                     // 解决水龙王按下左键后没松开，然后后续点击按下就没反应了。使用双击
                     Sleep(60);
                     useKey.Click();
-                    var num = GetResinNum(resinKey, resinName);
-                    Logger.LogInformation("自动秘境：使用 {ResinName}, 数量：{Num}", resinName, num);
+                    var num = GetResinNum(resinKey, resinName, logPrefix);
+                    Logger.LogInformation("{LogPrefix}：使用 {ResinName}, 数量：{Num}", logPrefix, resinName, num);
                     return (true, num);
                 }
                 else
                 {
-                    Logger.LogWarning("自动秘境：未找到 {ResinName} 的使用按键", resinName);
+                    Logger.LogWarning("{LogPrefix}：未找到 {ResinName} 的使用按键", logPrefix, resinName);
                 }
             }
             else
             {
-                Logger.LogWarning("自动秘境：未找到 {ResinName} 的使用按键", resinName);
+                Logger.LogWarning("{LogPrefix}：未找到 {ResinName} 的使用按键", logPrefix, resinName);
             }
         }
 
         return (false, 0);
     }
-    
-    private static int GetResinNum(Region region, string resinName)
+
+     private bool SwitchOriginalResinType(int expectedNum, CancellationToken ct)
+    {
+        return NewRetry.Do(() =>
+        {
+            using var ra0 = CaptureToRectArea();
+            var regionList = ra0.FindMulti(RecognitionObject.Ocr(ra0.Width * 0.25, ra0.Height * 0.2, ra0.Width * 0.5, ra0.Height * 0.6));
+            var has20 = regionList.Any(t => t.Text.Contains("20"));
+            var has40 = regionList.Any(t => t.Text.Contains("40"));
+            if (expectedNum == 20 && has20)
+            {
+                Logger.LogInformation("自动秘境：已切换到使用20原粹树脂");
+                return true;
+            }
+
+            if (expectedNum == 40 && has40)
+            {
+                Logger.LogInformation("自动秘境：已切换到使用40原粹树脂");
+                return true;
+            }
+
+            //切换20/40原粹树脂的按钮是亮的
+            var clickable = ra0.Find(AutoDomainAssets.Instance.ResinSwitchBtnRo);
+            if (clickable.IsExist())
+            {
+                Logger.LogDebug("自动秘境：切换原粹树脂使用数量");
+                clickable.Click();
+            }
+
+            //切换20/40原粹树脂的按钮是暗的
+            var disabled = ra0.Find(AutoDomainAssets.Instance.ResinSwitchBtnNoActiveRo);
+            if (disabled.IsExist())
+            {
+                Logger.LogWarning("自动秘境：切换原粹树脂的使用数量失败，可能是体力不足，当前目标：{Num}", expectedNum);
+                return false; // 不可点击  
+            }
+
+            throw new RetryException("未检测到按钮"); // 继续重试  
+        }, TimeSpan.FromMilliseconds(500), 10);
+    }
+
+    private static int GetResinNum(Region region, string resinName, string logPrefix)
     {
         if (resinName == "原粹树脂")
         {
