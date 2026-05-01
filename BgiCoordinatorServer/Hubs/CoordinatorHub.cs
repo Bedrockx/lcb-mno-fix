@@ -162,6 +162,30 @@ public class CoordinatorHub : Hub
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 上报成员异常恢复状态（需求 7）。
+    /// 服务器透传状态和版本号给房间内所有成员，不做版本管理。
+    /// </summary>
+    public async Task ReportMemberStatus(string status, long version)
+    {
+        var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        if (room == null || roomCode == null) return;
+
+        _roomManager.UpdateHeartbeat(Context.ConnectionId);
+
+        // 在 Players 列表中查找当前连接对应的 PlayerUid
+        string? playerUid;
+        lock (room)
+        {
+            var player = room.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+            if (player == null) return;
+            playerUid = player.PlayerUid;
+        }
+
+        // lock 外 await，避免死锁
+        await Clients.Group(roomCode!).SendAsync("MemberStatusChanged", playerUid, status, version);
+    }
+
     /// <summary>关闭房间（仅房主可操作）</summary>
     public async Task CloseRoom()
     {

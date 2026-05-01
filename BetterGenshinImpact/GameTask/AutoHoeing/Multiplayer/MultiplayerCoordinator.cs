@@ -46,6 +46,16 @@ public class MultiplayerCoordinator : IAsyncDisposable
             _logger.LogInformation("[联机] 万叶玩家索引更新为 {Idx}", idx);
         };
         _client.PlayerListUpdated += OnPlayerListUpdated;
+
+        // 成员异常恢复状态变化（需求 7）
+        _client.OnMemberStatusChanged += (playerUid, status) =>
+        {
+            _logger.LogInformation("[联机] 成员状态变化: {Uid} → {Status}", playerUid, status);
+            if (status == MemberStatus.Offline)
+            {
+                _logger.LogWarning("[联机] 成员 {Uid} 已离线", playerUid);
+            }
+        };
     }
 
     private void OnPlayerListUpdated(List<PlayerInfo> players)
@@ -150,6 +160,24 @@ public class MultiplayerCoordinator : IAsyncDisposable
         IsActive = false;
         _logger.LogWarning("MultiplayerCoordinator 已降级，原因：{Reason}", reason);
         OnDegraded?.Invoke(reason);
+    }
+
+    /// <summary>
+    /// 上报战斗状态。进入战斗时 isFighting=true，战斗结束时 isFighting=false。
+    /// 封装 CoordinatorClient.ReportMemberStatusAsync，PathExecutor 无需直接依赖 CoordinatorClient。
+    /// </summary>
+    public async Task ReportFightingStatusAsync(bool isFighting)
+    {
+        if (!IsActive) return;
+        try
+        {
+            var status = isFighting ? MemberStatus.Fighting : MemberStatus.Normal;
+            await _client.ReportMemberStatusAsync(status);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机] 上报战斗状态失败（静默忽略）");
+        }
     }
 
     public async ValueTask DisposeAsync()

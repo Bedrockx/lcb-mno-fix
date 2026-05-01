@@ -1,7 +1,9 @@
 #nullable enable
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models;
@@ -21,6 +23,11 @@ public class CoordinatorClient : IAsyncDisposable
     private string? _playerName;
     private string? _playerUid;
 
+    // === 成员异常恢复状态（需求 7）===
+    private readonly ConcurrentDictionary<string, MemberStatus> _memberStatuses = new();
+    private readonly ConcurrentDictionary<string, long> _memberStatusVersions = new();
+    private long _statusVersion;
+
     public event Action<List<PlayerInfo>>? PlayerListUpdated;
     public event Action<string>? AllArrived;
     public event Action<string>? AllFightDone;
@@ -33,6 +40,7 @@ public class CoordinatorClient : IAsyncDisposable
     public event Action? AllWorldJoined;
     public event Action<bool>? HostReadyChanged;
     public event Action<List<string>>? HostRouteListReady;
+    public event Action<string, MemberStatus>? OnMemberStatusChanged;
 
     public bool IsConnected =>
         _connection?.State == HubConnectionState.Connected;
@@ -40,6 +48,15 @@ public class CoordinatorClient : IAsyncDisposable
     public int CurrentRoomPlayerCount { get; private set; }
     public string HostPlayerUid { get; private set; } = "";
     public List<PlayerInfo> CurrentPlayerList { get; private set; } = new();
+
+    /// <summary>是否有成员处于 Fighting 状态</summary>
+    public bool HasFightingMembers => _memberStatuses.Values.Any(s => s == MemberStatus.Fighting);
+    /// <summary>是否有成员处于 Rejoining 状态</summary>
+    public bool HasRejoiningMembers => _memberStatuses.Values.Any(s => s == MemberStatus.Rejoining);
+    /// <summary>是否有成员处于 Reviving 状态</summary>
+    public bool HasRevivingMembers => _memberStatuses.Values.Any(s => s == MemberStatus.Reviving);
+    /// <summary>当前成员状态字典（只读视图）</summary>
+    public IReadOnlyDictionary<string, MemberStatus> MemberStatuses => _memberStatuses;
 
     public async Task<bool> ConnectAsync(string serverUrl, CancellationToken ct)
     {
@@ -56,6 +73,15 @@ public class CoordinatorClient : IAsyncDisposable
                     if (list.Count > 0)
                         HostPlayerUid = list[0].PlayerUid;
                     CurrentPlayerList = new List<PlayerInfo>(list);
+
+                    // 清理不在玩家列表中的过期状态条目（需求 7）
+                    var activeUids = list.Select(p => p.PlayerUid).ToHashSet();
+                    foreach (var key in _memberStatuses.Keys.Where(k => !activeUids.Contains(k)).ToList())
+                    {
+                        _memberStatuses.TryRemove(key, out _);
+                        _memberStatusVersions.TryRemove(key, out _);
+                    }
+
                     PlayerListUpdated?.Invoke(list);
                 });
 
@@ -88,6 +114,33 @@ public class CoordinatorClient : IAsyncDisposable
 
             _connection.On<List<string>>("HostRouteListReady",
                 routeNames => HostRouteListReady?.Invoke(routeNames));
+
+            // 成员异常恢复状态变化（需求 7）
+            _connection.On<string, string, long>("MemberStatusChanged",
+                (playerUid, statusStr, version) =>
+                {
+                    if (!Enum.TryParse<MemberStatus>(statusStr, out var status)) return;
+
+                    // 版本号检查：只接受更大版本号的更新，防止网络延迟导致的乱序覆盖
+                    var accepted = _memberStatusVersions.AddOrUpdate(
+                        playerUid,
+                        _ => version, // 新条目直接接受
+                        (_, oldVersion) => version > oldVersion ? version : oldVersion
+                    );
+                    if (accepted != version) return; // 版本号不够大，丢弃
+
+                    if (status == MemberStatus.Offline)
+                    {
+                        _memberStatuses.TryRemove(playerUid, out _);
+                        _memberStatusVersions.TryRemove(playerUid, out _);
+                    }
+                    else
+                    {
+                        _memberStatuses[playerUid] = status;
+                    }
+
+                    OnMemberStatusChanged?.Invoke(playerUid, status);
+                });
 
             _connection.Closed += OnConnectionClosed;
 
@@ -411,6 +464,24 @@ public class CoordinatorClient : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "ResetWorldJoinedAsync 失败");
+        }
+    }
+
+    /// <summary>
+    /// 上报成员异常恢复状态。断线时静默失败，不抛异常。
+    /// 携带递增版本号，接收方只接受更大版本号的更新，防止网络延迟导致的乱序覆盖。
+    /// </summary>
+    public async Task ReportMemberStatusAsync(MemberStatus status)
+    {
+        if (_connection == null || !IsConnected) return; // 断线时静默失败
+        try
+        {
+            var version = Interlocked.Increment(ref _statusVersion);
+            await _connection.InvokeAsync("ReportMemberStatus", status.ToString(), version);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "ReportMemberStatusAsync 失败（静默忽略），状态: {Status}", status);
         }
     }
 

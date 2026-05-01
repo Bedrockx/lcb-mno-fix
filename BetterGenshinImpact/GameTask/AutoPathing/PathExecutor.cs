@@ -386,7 +386,39 @@ public class PathExecutor
                                 // 执行 action11
                                 
                                 //如果上一节点和当前节点坐标一致，不执行action以避免卡死
-                                await AfterMoveToTarget(waypoint,nextWaypoint);
+                                // 联机模式战斗超时包裹（需求 4）
+                                if (waypoint.Action == ActionEnum.Fight.Code && MultiplayerCoordinator != null)
+                                {
+                                    var fightTimeoutSeconds = TaskContext.Instance().Config.AutoFightConfig.Timeout;
+                                    await MultiplayerCoordinator.ReportFightingStatusAsync(true);
+
+                                    var fightTimedOut = false;
+                                    using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(fightTimeoutSeconds));
+                                    using var registration = timeoutCts.Token.Register(() =>
+                                    {
+                                        if (!ct.IsCancellationRequested) // 外部未取消时才算超时
+                                        {
+                                            Logger.LogWarning("[联机] 战斗超时（{Timeout}s），强制结束，坐标=({X},{Y})",
+                                                fightTimeoutSeconds, waypoint.X, waypoint.Y);
+                                            AutoFightTask.FightEndFlag = true;
+                                            fightTimedOut = true;
+                                        }
+                                    });
+
+                                    try
+                                    {
+                                        await AfterMoveToTarget(waypoint, nextWaypoint);
+                                    }
+                                    finally
+                                    {
+                                        await MultiplayerCoordinator.ReportFightingStatusAsync(false);
+                                    }
+                                    // registration 和 timeoutCts 在此处已 Dispose，回调注册已取消
+                                }
+                                else
+                                {
+                                    await AfterMoveToTarget(waypoint, nextWaypoint);
+                                }
                                 
                                 if (waypoint.Action == ActionEnum.Fight.Code)
                                 {
