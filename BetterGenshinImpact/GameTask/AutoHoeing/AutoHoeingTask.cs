@@ -101,7 +101,6 @@ public class AutoHoeingTask : ISoloTask
             // 这些字段若配置组 settings 里有显式配置，ApplySettingsOverride 会覆盖；
             // 若没有配置，则保持干净的默认值，不受上一次执行的残留影响
             _config.MultiplayerEnabled = false;
-            // _config.SelectedBuiltinRoute 不重置，由 ApplySettingsOverride 从 settings 中读取（若有）
             _config.DebugMode = false;
             _config.StartRouteIndex = 0;
             _config.SyncTimeoutSeconds = 60;
@@ -2097,6 +2096,15 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaPlayerIndex = 0;
             _config.ReturnToFightPointAfterBattle = false;
             _config.ReturnToFightPointStaySeconds = 5;
+
+            // 单机模式：重置固定调试线路字段，避免联机全局配置残留影响
+            // 如果 settings 显式包含这些键，后续 ContainsKey 逻辑会覆盖回来
+            if (!_settingsOverride!.ContainsKey("useFixedDebugRoutes"))
+                _config.UseFixedDebugRoutes = false;
+            if (!_settingsOverride.ContainsKey("fixedDebugRoutePath"))
+                _config.FixedDebugRoutePath = "";
+            if (!_settingsOverride.ContainsKey("selectedBuiltinRoute"))
+                _config.SelectedBuiltinRoute = "";
         }
 
         // 单机和联机均支持的字段
