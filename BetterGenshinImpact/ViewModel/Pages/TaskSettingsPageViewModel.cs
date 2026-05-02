@@ -299,7 +299,7 @@ public partial class TaskSettingsPageViewModel : ViewModel
     /// 锄地一条龙是否可见（隐藏功能，点击独立任务标题10次解锁/锁定）
     /// </summary>
     [ObservableProperty]
-    private bool _autoHoeingVisible;
+    private bool _autoHoeingVisible = true;
 
     /// <summary>
     /// 全局解锁状态，供配置组等其他地方查询
@@ -308,24 +308,24 @@ public partial class TaskSettingsPageViewModel : ViewModel
 
     private int _autoHoeingUnlockClickCount;
 
-    /// <summary>
-    /// 独立任务标题点击计数，达到10次切换锄地一条龙的显示/隐藏状态
-    /// </summary>
-    [RelayCommand]
-    private void OnSoloTaskTitleClick()
-    {
-        _autoHoeingUnlockClickCount++;
-        if (_autoHoeingUnlockClickCount >= 10)
-        {
-            _autoHoeingUnlockClickCount = 0;
-            var newState = !AutoHoeingVisible;
-            AutoHoeingVisible = newState;
-            AutoHoeingUnlocked = newState;
-            Config.CommonConfig.AutoHoeingUnlocked = newState;
-            Wpf.Ui.Violeta.Controls.Toast.Success(newState ? "锄地一条龙已解锁" : "锄地一条龙已锁定");
-            WeakReferenceMessenger.Default.Send(new PropertyChangedMessage<object>(this, "AutoHoeingUnlocked", !newState, newState));
-        }
-    }
+    // /// <summary>
+    // /// 独立任务标题点击计数，达到10次切换锄地一条龙的显示/隐藏状态
+    // /// </summary>
+    // [RelayCommand]
+    // private void OnSoloTaskTitleClick()
+    // {
+    //     _autoHoeingUnlockClickCount++;
+    //     if (_autoHoeingUnlockClickCount >= 10)
+    //     {
+    //         _autoHoeingUnlockClickCount = 0;
+    //         var newState = !AutoHoeingVisible;
+    //         AutoHoeingVisible = newState;
+    //         AutoHoeingUnlocked = newState;
+    //         Config.CommonConfig.AutoHoeingUnlocked = newState;
+    //         Wpf.Ui.Violeta.Controls.Toast.Success(newState ? "锄地一条龙已解锁" : "锄地一条龙已锁定");
+    //         WeakReferenceMessenger.Default.Send(new PropertyChangedMessage<object>(this, "AutoHoeingUnlocked", !newState, newState));
+    //     }
+    // }
 
     public TaskSettingsPageViewModel(IConfigService configService, INavigationService navigationService, TaskTriggerDispatcher taskTriggerDispatcher)
     {
@@ -336,8 +336,10 @@ public partial class TaskSettingsPageViewModel : ViewModel
         _scanDropsAfterRewardEnabledUi = Config.AutoLeyLineOutcropConfig.ScanDropsAfterRewardEnabled;
 
         // 从持久化配置恢复锄地一条龙解锁状态
-        _autoHoeingVisible = Config.CommonConfig.AutoHoeingUnlocked;
-        AutoHoeingUnlocked = Config.CommonConfig.AutoHoeingUnlocked;
+        // _autoHoeingVisible = Config.CommonConfig.AutoHoeingUnlocked;
+        // AutoHoeingUnlocked = Config.CommonConfig.AutoHoeingUnlocked;
+        _autoHoeingVisible = true;
+        AutoHoeingUnlocked = true;
 
         //_strategyList = LoadCustomScript(Global.Absolute(@"User\AutoGeniusInvokation"));
 
@@ -928,6 +930,20 @@ public partial class TaskSettingsPageViewModel : ViewModel
             }
         }
         Toast.Warning("复制失败，剪贴板被占用，请手动复制");
+    }
+    
+    [RelayCommand]
+    private void Openutorial()
+    {
+        var tutorialPath = Path.Combine(AppContext.BaseDirectory, "联机锄地使用教程.md");
+        if (File.Exists(tutorialPath))
+        {
+            Process.Start(new ProcessStartInfo(tutorialPath) { UseShellExecute = true });
+        }
+        else
+        {
+            Toast.Warning("未找到文件");
+        }
     }
 
     [RelayCommand]
