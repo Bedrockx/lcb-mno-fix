@@ -37,6 +37,10 @@ public class MultiplayerCoordinator : IAsyncDisposable
     private readonly HashSet<string> _offlineMembers = new();
     private readonly object _offlineLock = new();
 
+    // === 路线跳过对齐修复（sync-point-route-skip-alignment）===
+    private volatile bool _skipNextSyncPoint;
+    private readonly Action<string, int> _onRouteSkippedHandler;
+
     public bool IsActive { get; private set; } = true;
     public bool IsKazuhaPlayer => _kazuhaPlayerIndex > 0 && _myPlayerIndex == _kazuhaPlayerIndex;
 
@@ -122,6 +126,14 @@ public class MultiplayerCoordinator : IAsyncDisposable
             _logger.LogError("[联机] 收到 RoomClosed: {Reason}，触发协调停止", reason);
             _ = TriggerCoordinatedStop(false, $"房间已关闭: {reason}");
         };
+
+        // 路线跳过事件处理（sync-point-route-skip-alignment 修复）
+        _onRouteSkippedHandler = (playerUid, routeIndex) =>
+        {
+            _logger.LogInformation("[联机] 收到路线跳过通知: {Uid} 跳过路线 {Index}，立即放行当前同步点", playerUid, routeIndex);
+            _barrier.SignalRouteSkipped();
+        };
+        _client.RouteSkipped += _onRouteSkippedHandler;
     }
 
     private void OnPlayerListUpdated(List<PlayerInfo> players)
@@ -154,6 +166,14 @@ public class MultiplayerCoordinator : IAsyncDisposable
         if (_consecutiveSyncTimeoutFired)
         {
             _logger.LogWarning("[联机] 连续超时退出已触发，跳过集合等待 syncId={SyncId}", syncId);
+            return;
+        }
+
+        // 检查是否跳过下一个同步点（sync-point-route-skip-alignment 修复）
+        if (_skipNextSyncPoint)
+        {
+            _skipNextSyncPoint = false;
+            _logger.LogInformation("[联机] 跳过下一个同步点: {SyncId}（路线跳过后的首个同步点）", syncId);
             return;
         }
 
@@ -257,6 +277,34 @@ public class MultiplayerCoordinator : IAsyncDisposable
         {
             _logger.LogWarning(ex, "[联机] WaitForAllPlayers 异常，syncId={SyncId}，跳过同步继续执行", syncId);
         }
+    }
+
+    /// <summary>
+    /// 通知路线跳过（sync-point-route-skip-alignment 修复）
+    /// 检查 IsActive && !IsExitTriggered，调用 _client.SendRouteSkippedAsync，异常静默忽略
+    /// </summary>
+    public async Task NotifyRouteSkippedAsync(int routeIndex)
+    {
+        if (!IsActive || IsExitTriggered) return;
+        try
+        {
+            await _client.SendRouteSkippedAsync(routeIndex);
+            _logger.LogInformation("[联机] 已发送路线跳过通知: 路线 {Index}", routeIndex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机] 发送路线跳过通知失败（静默忽略）");
+        }
+    }
+
+    /// <summary>
+    /// 设置跳过下一个同步点（sync-point-route-skip-alignment 修复）
+    /// 跳过路线后调用，使进入下一条路线时的首个同步点立即放行
+    /// </summary>
+    public void SetSkipNextSyncPoint()
+    {
+        _skipNextSyncPoint = true;
+        _logger.LogDebug("[联机] 已设置跳过下一个同步点标志");
     }
 
     /// <summary>
@@ -472,13 +520,19 @@ public class MultiplayerCoordinator : IAsyncDisposable
         Interlocked.Exchange(ref _exitTriggered, 0); // 重置退出标志
         lock (_offlineLock) { _offlineMembers.Clear(); }
         IsActive = true;
-        _logger.LogInformation("[联机] ResetForNewRound: 状态已重置");
+        
+        // 路线跳过对齐修复重置（sync-point-route-skip-alignment 修复）
+        _skipNextSyncPoint = false;
+        _barrier.Reset();
+        
+        _logger.LogInformation("[联机] ResetForNewRound: 状态已重置（包含路线跳过对齐状态）");
     }
 
     public async ValueTask DisposeAsync()
     {
         _client.PlayerListUpdated -= OnPlayerListUpdated;
         _client.OnMemberStatusChanged -= _onMemberStatusChangedHandler;
+        _client.RouteSkipped -= _onRouteSkippedHandler;
         await _client.DisposeAsync();
     }
 }

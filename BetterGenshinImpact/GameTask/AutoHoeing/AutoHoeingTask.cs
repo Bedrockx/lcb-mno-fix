@@ -1745,6 +1745,90 @@ public class AutoHoeingTask : ISoloTask
         var targetGroup = _config.GroupIndex;
         var groupRoutes = routes.Where(r => r.Group == targetGroup && r.Selected).ToList();
 
+        // === 路线跳过对齐修复（sync-point-route-skip-alignment）===
+        // 每轮开始时重置成员路线进度缓存，防止跨轮误判
+        if (_coordinatorClientRef != null)
+        {
+            _coordinatorClientRef.ResetMemberProgressCache();
+            _logger.LogDebug("[联机] 新一轮开始：成员路线进度缓存已重置");
+        }
+        
+        // 连续不跳过重试计数（防止无限循环）
+        int consecutiveNoSkipRetryCount = 0;
+        const int MaxNoSkipRetries = 3;
+        
+        // 智能跳过决策辅助方法
+        bool ShouldSkipRoute(int currentRouteIndex)
+        {
+            if (_multiplayerCoordinator == null || _coordinatorClientRef == null)
+                return true; // 单机模式或无协调器时无条件跳过
+            
+            // 获取所有对方玩家中最小路线索引
+            int? minPeerRouteIndex = GetMinPeerRouteIndex();
+            
+            // 查询失败兜底：返回 true（无条件跳过）
+            if (minPeerRouteIndex == null)
+            {
+                _logger.LogWarning("[联机] 智能跳过决策：查询对方进度失败，兜底为无条件跳过");
+                return true;
+            }
+            
+            // 目标路线索引 = 当前路线索引 + 1（跳过后将进入的路线）
+            int targetRouteIndex = currentRouteIndex + 1;
+            
+            // 对方路线索引 <= 目标路线索引 → 不跳过（对方还在目标路线或更早）
+            if (minPeerRouteIndex <= targetRouteIndex)
+            {
+                _logger.LogInformation("[联机] 智能跳过决策：不跳过路线 {Current}（对方进度 {Peer} <= 目标路线 {Target}）",
+                    currentRouteIndex, minPeerRouteIndex, targetRouteIndex);
+                return false;
+            }
+            
+            // 对方已超前 → 跳过
+            _logger.LogInformation("[联机] 智能跳过决策：跳过路线 {Current}（对方进度 {Peer} > 目标路线 {Target}）",
+                currentRouteIndex, minPeerRouteIndex, targetRouteIndex);
+            return true;
+        }
+        
+        // 获取所有对方玩家中最小路线索引
+        int? GetMinPeerRouteIndex()
+        {
+            if (_coordinatorClientRef == null || _coordinatorClientRef.CurrentPlayerList == null)
+                return null;
+            
+            // 过滤掉自己
+            var myUid = _config.PlayerUid;
+            var peerPlayers = _coordinatorClientRef.CurrentPlayerList
+                .Where(p => p.PlayerUid != myUid)
+                .ToList();
+            
+            if (peerPlayers.Count == 0)
+            {
+                _logger.LogDebug("[联机] 无对方玩家，返回 null");
+                return null;
+            }
+            
+            // 获取所有对方玩家的路线索引，取最小值（最落后玩家）
+            int? minIndex = null;
+            foreach (var player in peerPlayers)
+            {
+                var peerIndex = _coordinatorClientRef.GetPeerRouteIndex(player.PlayerUid);
+                if (peerIndex.HasValue)
+                {
+                    minIndex = minIndex.HasValue ? Math.Min(minIndex.Value, peerIndex.Value) : peerIndex.Value;
+                    _logger.LogDebug("[联机] 玩家 {Uid} 路线索引: {Index}", player.PlayerUid, peerIndex.Value);
+                }
+                else
+                {
+                    _logger.LogDebug("[联机] 玩家 {Uid} 路线索引: 未缓存", player.PlayerUid);
+                }
+            }
+            
+            _logger.LogDebug("[联机] 最小对方路线索引: {Index}", minIndex?.ToString() ?? "null");
+            return minIndex;
+        }
+        // === 路线跳过对齐修复结束 ===
+
         // 步骤1：联机模式路线列表同步（必须在验证之前，确保两端用相同路线集合验证）
         if (_config.MultiplayerEnabled && _coordinatorClientRef != null)
         {
@@ -2053,6 +2137,57 @@ public class AutoHoeingTask : ISoloTask
                             try { await _coordinatorClientRef.ReportMemberStatusAsync(MemberStatus.Rejoining); } catch { }
                         }
 
+                        // === 路线跳过对齐修复（sync-point-route-skip-alignment）===
+                        // 智能跳过决策与进度广播
+                        if (_multiplayerCoordinator != null)
+                        {
+                            // 获取当前路线索引
+                            int currentRouteIndex = startIndex + count - 1; // count 已递增，需要减1
+                            
+                            // 智能跳过决策
+                            bool shouldSkip = ShouldSkipRoute(currentRouteIndex);
+                            
+                            if (!shouldSkip)
+                            {
+                                // 不跳过路线：递增连续不跳过重试计数
+                                consecutiveNoSkipRetryCount++;
+                                _logger.LogInformation("[联机] 智能跳过决策：不跳过路线 {Index}（对方进度 <= 目标路线），重试计数: {Retry}/{Max}",
+                                    currentRouteIndex, consecutiveNoSkipRetryCount, MaxNoSkipRetries);
+                                
+                                if (consecutiveNoSkipRetryCount >= MaxNoSkipRetries)
+                                {
+                                    // 达到上限，强制跳过
+                                    _logger.LogWarning("[联机] 连续不跳过重试达到上限（{Max}次），强制跳过路线 {Index}",
+                                        MaxNoSkipRetries, currentRouteIndex);
+                                    shouldSkip = true;
+                                    consecutiveNoSkipRetryCount = 0;
+                                }
+                                else
+                                {
+                                    // 继续重试当前路线
+                                    _logger.LogInformation("[联机] 继续重试当前路线 {Index}（新 PathExecutor 实例）", currentRouteIndex);
+                                    continue; // 重新执行当前路线
+                                }
+                            }
+                            
+                            if (shouldSkip)
+                            {
+                                // 确认跳过：重置重试计数，广播进度，通知对方
+                                consecutiveNoSkipRetryCount = 0;
+                                
+                                // 立即广播新进度（解决进度广播时机窗口期）
+                                await _coordinatorClientRef.SendMemberProgressAsync(currentRouteIndex + 1);
+                                _logger.LogDebug("[联机] 已广播跳过后进度: 路线 {Index}", currentRouteIndex + 1);
+                                
+                                // 通知对方路线跳过
+                                await _multiplayerCoordinator.NotifyRouteSkippedAsync(currentRouteIndex);
+                                
+                                // 设置跳过下一个同步点标志
+                                _multiplayerCoordinator.SetSkipNextSyncPoint();
+                            }
+                        }
+                        // === 路线跳过对齐修复结束 ===
+
                         // 检查连续跳过是否达到上限
                         if (consecutiveSkipCount >= _config.MaxConsecutiveSkips)
                         {
@@ -2081,6 +2216,7 @@ public class AutoHoeingTask : ISoloTask
                     if (execResult.FullyCompleted)
                     {
                         consecutiveSkipCount = 0; // 正常完成，归零连续跳过计数
+                        consecutiveNoSkipRetryCount = 0; // 路线跳过对齐修复：正常完成时重置不跳过重试计数
                         // 联机模式：路线正常完成，确保状态为 Normal（可能之前是 Rejoining/Reviving）
                         if (_coordinatorClientRef != null && _multiplayerCoordinator != null)
                         {

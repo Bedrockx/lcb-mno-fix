@@ -394,6 +394,64 @@ public class CoordinatorHub : Hub
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 路线跳过通知（sync-point-route-skip-alignment 修复）
+    /// 玩家跳过路线时调用，广播给房间内所有玩家（包括自己，由客户端过滤）
+    /// </summary>
+    public async Task RouteSkipped(int routeIndex)
+    {
+        var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        if (room == null || roomCode == null)
+        {
+            _logger.LogWarning("[RouteSkipped] 连接 {ConnId} 未在任何房间中，忽略路线跳过通知", Context.ConnectionId);
+            return;
+        }
+
+        string playerUid;
+        lock (room)
+        {
+            var player = room.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+            if (player == null)
+            {
+                _logger.LogWarning("[RouteSkipped] 连接 {ConnId} 不在房间玩家列表中", Context.ConnectionId);
+                return;
+            }
+            playerUid = player.PlayerUid;
+        }
+
+        _logger.LogInformation("[RouteSkipped] 玩家 {Uid} 跳过路线 {Index}，房间 {Code}", playerUid, routeIndex, roomCode);
+        await Clients.Group(roomCode).SendAsync("RouteSkipped", playerUid, routeIndex);
+    }
+
+    /// <summary>
+    /// 更新成员路线进度（sync-point-route-skip-alignment 修复）
+    /// 玩家路线进度更新时调用，只广播给房间内其他玩家（不包括自己）
+    /// </summary>
+    public async Task UpdateMemberProgress(int routeIndex)
+    {
+        var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        if (room == null || roomCode == null)
+        {
+            _logger.LogWarning("[UpdateMemberProgress] 连接 {ConnId} 未在任何房间中，忽略进度更新", Context.ConnectionId);
+            return;
+        }
+
+        string playerUid;
+        lock (room)
+        {
+            var player = room.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId);
+            if (player == null)
+            {
+                _logger.LogWarning("[UpdateMemberProgress] 连接 {ConnId} 不在房间玩家列表中", Context.ConnectionId);
+                return;
+            }
+            playerUid = player.PlayerUid;
+        }
+
+        _logger.LogDebug("[UpdateMemberProgress] 玩家 {Uid} 路线进度更新为 {Index}，房间 {Code}", playerUid, routeIndex, roomCode);
+        await Clients.OthersInGroup(roomCode).SendAsync("MemberProgressUpdated", playerUid, routeIndex);
+    }
+
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
         var affectedCodes = _roomManager.LeaveRoom(Context.ConnectionId);

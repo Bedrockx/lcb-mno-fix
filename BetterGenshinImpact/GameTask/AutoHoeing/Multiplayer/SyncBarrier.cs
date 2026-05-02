@@ -13,6 +13,10 @@ public class SyncBarrier
     private readonly CoordinatorClient _client;
     private readonly TimeSpan _timeout;
 
+    // === 路线跳过对齐修复（sync-point-route-skip-alignment）===
+    private CancellationTokenSource? _routeSkippedCts;
+    private volatile bool _routeSkippedSignalPending;
+
     public SyncBarrier(CoordinatorClient client, int timeoutSeconds = 60)
     {
         _client = client;
@@ -22,10 +26,24 @@ public class SyncBarrier
     public async Task<bool> WaitAsync(string syncPointId, CancellationToken ct)
     {
         _logger.LogInformation("[SyncBarrier] 开始等待集合点: {SyncId}，超时={Timeout}s", syncPointId, _timeout.TotalSeconds);
+        
+        // 检查是否有待处理的路线跳过信号（sync-point-route-skip-alignment 修复）
+        if (_routeSkippedSignalPending)
+        {
+            _routeSkippedSignalPending = false;
+            _logger.LogInformation("[SyncBarrier] 检测到路线跳过信号，立即放行集合点: {SyncId}", syncPointId);
+            return false;
+        }
+        
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         using var timeoutCts = new CancellationTokenSource(_timeout);
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        
+        // 创建路线跳过专用的 CancellationTokenSource（sync-point-route-skip-alignment 修复）
+        var routeSkippedCts = new CancellationTokenSource();
+        Interlocked.Exchange(ref _routeSkippedCts, routeSkippedCts);
+        
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token, routeSkippedCts.Token);
 
         Action<string>? handler = null;
         handler = (arrivedSyncPointId) =>
@@ -63,6 +81,8 @@ public class SyncBarrier
         finally
         {
             _client.AllArrived -= handler;
+            // 清理路线跳过专用的 CancellationTokenSource（sync-point-route-skip-alignment 修复）
+            Interlocked.Exchange(ref _routeSkippedCts, null)?.Dispose();
         }
     }
 
@@ -73,10 +93,24 @@ public class SyncBarrier
     public async Task<bool> WaitExtraAsync(string syncPointId, int extraWaitSeconds, CancellationToken ct)
     {
         _logger.LogInformation("[SyncBarrier] 开始额外等待: {SyncId}，额外超时={Extra}s", syncPointId, extraWaitSeconds);
+        
+        // 检查是否有待处理的路线跳过信号（sync-point-route-skip-alignment 修复）
+        if (_routeSkippedSignalPending)
+        {
+            _routeSkippedSignalPending = false;
+            _logger.LogInformation("[SyncBarrier] 额外等待期间检测到路线跳过信号，立即放行: {SyncId}", syncPointId);
+            return false;
+        }
+        
         var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(extraWaitSeconds));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+        
+        // 创建路线跳过专用的 CancellationTokenSource（sync-point-route-skip-alignment 修复）
+        var routeSkippedCts = new CancellationTokenSource();
+        Interlocked.Exchange(ref _routeSkippedCts, routeSkippedCts);
+        
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token, routeSkippedCts.Token);
 
         Action<string>? handler = null;
         handler = (arrivedSyncPointId) =>
@@ -112,6 +146,30 @@ public class SyncBarrier
         finally
         {
             _client.AllArrived -= handler;
+            // 清理路线跳过专用的 CancellationTokenSource（sync-point-route-skip-alignment 修复）
+            Interlocked.Exchange(ref _routeSkippedCts, null)?.Dispose();
         }
+    }
+
+    /// <summary>
+    /// 信号路线跳过（sync-point-route-skip-alignment 修复）
+    /// 设置 _routeSkippedSignalPending 标志并取消当前等待
+    /// </summary>
+    public void SignalRouteSkipped()
+    {
+        _routeSkippedSignalPending = true;
+        Interlocked.Exchange(ref _routeSkippedCts, null)?.Cancel();
+        _logger.LogInformation("[SyncBarrier] 路线跳过信号已发送");
+    }
+
+    /// <summary>
+    /// 重置路线跳过状态（sync-point-route-skip-alignment 修复）
+    /// 每轮开始时调用，防止跨轮残留信号
+    /// </summary>
+    public void Reset()
+    {
+        _routeSkippedSignalPending = false;
+        Interlocked.Exchange(ref _routeSkippedCts, null)?.Dispose();
+        _logger.LogDebug("[SyncBarrier] 路线跳过状态已重置");
     }
 }

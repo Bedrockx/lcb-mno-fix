@@ -33,6 +33,10 @@ public class CoordinatorClient : IAsyncDisposable
     private DateTime _routeStartTime;
     private double _routeEstimatedSeconds;
 
+    // === 路线跳过对齐修复（sync-point-route-skip-alignment）===
+    private readonly ConcurrentDictionary<string, int> _memberProgressCache = new(); // key=playerUid, value=routeIndex
+    public event Action<string, int>? RouteSkipped; // playerUid, skippedRouteIndex
+
     // === SignalR 断线重连（需求 3）===
     private volatile bool _isReconnecting;
     private volatile bool _isInRoom;
@@ -159,6 +163,23 @@ public class CoordinatorClient : IAsyncDisposable
                     }
 
                     OnMemberStatusChanged?.Invoke(playerUid, status);
+                });
+
+            // 路线跳过通知（sync-point-route-skip-alignment 修复）
+            _connection.On<string, int>("RouteSkipped",
+                (playerUid, routeIndex) =>
+                {
+                    // 过滤自己发出的通知
+                    if (playerUid == _playerUid) return;
+                    RouteSkipped?.Invoke(playerUid, routeIndex);
+                });
+
+            // 成员路线进度更新（sync-point-route-skip-alignment 修复）
+            _connection.On<string, int>("MemberProgressUpdated",
+                (playerUid, routeIndex) =>
+                {
+                    _memberProgressCache[playerUid] = routeIndex;
+                    _logger.LogDebug("[联机] 成员路线进度缓存更新: {Uid} → {Index}", playerUid, routeIndex);
                 });
 
             _connection.Closed += OnConnectionClosed;
@@ -587,6 +608,61 @@ public class CoordinatorClient : IAsyncDisposable
             _logger.LogWarning(ex, "GetMemberProgressAsync 失败: {Uid}", playerUid);
             return null;
         }
+    }
+
+    /// <summary>
+    /// 发送路线跳过通知（sync-point-route-skip-alignment 修复）
+    /// 未连接时静默忽略，异常时 catch + 警告日志
+    /// </summary>
+    public async Task SendRouteSkippedAsync(int routeIndex)
+    {
+        if (_connection == null || !IsConnected) return;
+        try
+        {
+            await _connection.InvokeAsync("RouteSkipped", routeIndex);
+            _logger.LogInformation("[联机] 发送路线跳过通知: 路线 {Index}", routeIndex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SendRouteSkippedAsync 失败");
+        }
+    }
+
+    /// <summary>
+    /// 发送成员路线进度更新（sync-point-route-skip-alignment 修复）
+    /// 调用服务器 UpdateMemberProgress，只广播给其他玩家
+    /// </summary>
+    public async Task SendMemberProgressAsync(int routeIndex)
+    {
+        if (_connection == null || !IsConnected) return;
+        try
+        {
+            await _connection.InvokeAsync("UpdateMemberProgress", routeIndex);
+            _logger.LogDebug("[联机] 发送成员路线进度: {Index}", routeIndex);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "SendMemberProgressAsync 失败");
+        }
+    }
+
+    /// <summary>
+    /// 获取对方路线索引（sync-point-route-skip-alignment 修复）
+    /// 直接读本地缓存，返回 int?（缓存未命中返回 null）
+    /// </summary>
+    public int? GetPeerRouteIndex(string peerUid)
+    {
+        return _memberProgressCache.TryGetValue(peerUid, out var idx) ? idx : (int?)null;
+    }
+
+    /// <summary>
+    /// 重置成员路线进度缓存（sync-point-route-skip-alignment 修复）
+    /// 每轮开始时调用，防止跨轮误判
+    /// </summary>
+    public void ResetMemberProgressCache()
+    {
+        _memberProgressCache.Clear();
+        _logger.LogDebug("[联机] 成员路线进度缓存已重置（新一轮开始）");
     }
 
     public async Task CloseRoomAsync()
