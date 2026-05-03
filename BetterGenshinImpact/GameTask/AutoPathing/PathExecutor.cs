@@ -371,15 +371,46 @@ public class PathExecutor
                                 await ValidateGameWithTask(task,true);
                             }
 
-                            // 联机模式：传送完成后检查是否需要同步等待（传送点必同步 或 SyncPointResolver 回退到传送点）
+                            // 联机模式：传送完成后检查是否需要同步等待
+                            // 异常等待点：强制等待，不依赖 SyncAtEveryTeleport 配置
+                            // 正常同步点：按配置决定是否等待
                             if (MultiplayerCoordinator != null)
                             {
-                                var tpMapKey = CurWaypoints.Item1 * 10000 + CurWaypoint.Item1;
-                                if (_syncPointMap.TryGetValue(tpMapKey, out var tpSyncId) && tpSyncId != null)
+                                // 优先检查服务端指令的等待点（multiplayer-abnormal-wait-coordination）
+                                if (MultiplayerCoordinator.HasPendingWaitPoint)
                                 {
-                                    Logger.LogInformation("[联机] 传送完成，等待所有玩家同步，syncId={SyncId}", tpSyncId);
-                                    await MultiplayerCoordinator.WaitForAllPlayers(tpSyncId, ct);
-                                    Logger.LogInformation("[联机] 传送同步完成，继续前进，syncId={SyncId}", tpSyncId);
+                                    var pendingPoint = MultiplayerCoordinator.GetPendingWaitPoint();
+                                    if (pendingPoint != null && pendingPoint.IsForced)
+                                    {
+                                        Logger.LogInformation("[联机] 传送完成，检测到服务端指令的统一等待点 {SyncId}，强制等待", pendingPoint.SyncPointId);
+                                        await MultiplayerCoordinator.WaitForAllPlayers(pendingPoint.SyncPointId, ct);
+                                        Logger.LogInformation("[联机] 服务端指令等待点同步完成，继续前进，syncId={SyncId}", pendingPoint.SyncPointId);
+                                        MultiplayerCoordinator.ClearPendingWaitPoint();
+                                    }
+                                }
+                                else
+                                {
+                                    var tpMapKey = CurWaypoints.Item1 * 10000 + CurWaypoint.Item1;
+                                    if (_syncPointMap.TryGetValue(tpMapKey, out var tpSyncId) && tpSyncId != null)
+                                    {
+                                        // 检查是否是异常等待点
+                                        bool isAbnormalWaitingPoint = MultiplayerCoordinator.IsAbnormalWaitingAtPoint(tpSyncId);
+                                        
+                                        // 异常等待点：强制同步等待
+                                        if (isAbnormalWaitingPoint)
+                                        {
+                                            Logger.LogInformation("[联机] 传送完成，进入异常等待点 {SyncId}，强制等待", tpSyncId);
+                                            await MultiplayerCoordinator.WaitForAllPlayers(tpSyncId, ct);
+                                            Logger.LogInformation("[联机] 异常等待点同步完成，继续前进，syncId={SyncId}", tpSyncId);
+                                        }
+                                        // 正常同步点：按配置决定是否等待
+                                        else if (TaskContext.Instance().Config.AutoHoeingConfig.SyncAtEveryTeleport || tpSyncId != null)
+                                        {
+                                            Logger.LogInformation("[联机] 传送完成，等待所有玩家同步，syncId={SyncId}", tpSyncId);
+                                            await MultiplayerCoordinator.WaitForAllPlayers(tpSyncId, ct);
+                                            Logger.LogInformation("[联机] 传送同步完成，继续前进，syncId={SyncId}", tpSyncId);
+                                        }
+                                    }
                                 }
                             }
                         }

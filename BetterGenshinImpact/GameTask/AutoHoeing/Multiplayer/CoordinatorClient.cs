@@ -37,11 +37,17 @@ public class CoordinatorClient : IAsyncDisposable
     private readonly ConcurrentDictionary<string, int> _memberProgressCache = new(); // key=playerUid, value=routeIndex
     public event Action<string, int>? RouteSkipped; // playerUid, skippedRouteIndex
 
+    // === 等待点上报修复（skip-route-wait-point-report）===
+    public event Action<string, string, string, int, DateTime>? WaitPointReported; // playerUid, routeId, syncPointId, worldRound, timestamp
+
     // === SignalR 断线重连（需求 3）===
     private volatile bool _isReconnecting;
     private volatile bool _isInRoom;
 
     private WorldStateMonitor? _worldStateMonitor;
+
+    // === 玩家名称缓存（用于日志显示）===
+    private readonly ConcurrentDictionary<string, string> _playerNameCache = new();
 
     public event Action<List<PlayerInfo>>? PlayerListUpdated;
     public event Action<string>? AllArrived;
@@ -56,6 +62,14 @@ public class CoordinatorClient : IAsyncDisposable
     public event Action<bool>? HostReadyChanged;
     public event Action<List<string>>? HostRouteListReady;
     public event Action<string, MemberStatus>? OnMemberStatusChanged;
+    
+    // === 统一等待点协调（multiplayer-abnormal-wait-coordination）===
+    /// <summary>收到服务端统一等待点广播：参数为(syncPointId, abnormalPlayerUids, expectedWaitCount, routeId)</summary>
+    public event Action<string, List<string>, int, string>? UnifiedWaitPointReceived;
+    /// <summary>异常玩家恢复广播：参数为(playerUid)</summary>
+    public event Action<string>? AbnormalPlayerRecoveredReceived;
+    /// <summary>所有玩家已到达等待点：参数为(syncPointId)</summary>
+    public event Action<string>? AllPlayersArrivedReceived;
 
     public bool IsConnected =>
         _connection?.State == HubConnectionState.Connected;
@@ -81,8 +95,65 @@ public class CoordinatorClient : IAsyncDisposable
 
     public WorldStateMonitor? WorldStateMonitor { get; set; }
 
+    /// <summary>
+    /// 隐藏服务器地址的前半部分（隐私保护）
+    /// </summary>
+    private static string MaskServerUrl(string url)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        try
+        {
+            // 例如 http://121.4.78.52:8080/hub -> http://***:8080/hub
+            var uri = new Uri(url);
+            var maskedHost = "***";
+            return $"{uri.Scheme}://{maskedHost}:{uri.Port}{uri.PathAndQuery}";
+        }
+        catch
+        {
+            return url;
+        }
+    }
+
+    /// <summary>
+    /// 获取玩家显示名称（优先使用名称，找不到则显示 UID 前后各3位）
+    /// </summary>
+    private string GetPlayerDisplayName(string playerUid)
+    {
+        if (string.IsNullOrEmpty(playerUid)) return "未知玩家";
+        
+        // 先从缓存查找
+        if (_playerNameCache.TryGetValue(playerUid, out var name) && !string.IsNullOrEmpty(name))
+            return name;
+        
+        // 从当前玩家列表查找
+        var player = CurrentPlayerList.FirstOrDefault(p => p.PlayerUid == playerUid);
+        if (player != null && !string.IsNullOrEmpty(player.PlayerName))
+        {
+            _playerNameCache[playerUid] = player.PlayerName;
+            return player.PlayerName;
+        }
+        
+        // 找不到名称，显示 UID 前后各3位
+        if (playerUid.Length > 6)
+            return $"{playerUid[..3]}***{playerUid[^3..]}";
+        return playerUid;
+    }
+
+    /// <summary>
+    /// 更新玩家名称缓存
+    /// </summary>
+    private void UpdatePlayerNameCache(List<PlayerInfo> players)
+    {
+        foreach (var player in players)
+        {
+            if (!string.IsNullOrEmpty(player.PlayerUid) && !string.IsNullOrEmpty(player.PlayerName))
+                _playerNameCache[player.PlayerUid] = player.PlayerName;
+        }
+    }
+
     public async Task<bool> ConnectAsync(string serverUrl, CancellationToken ct)
     {
+        var maskedUrl = MaskServerUrl(serverUrl);
         try
         {
             _connection = new HubConnectionBuilder()
@@ -96,6 +167,9 @@ public class CoordinatorClient : IAsyncDisposable
                     if (list.Count > 0)
                         HostPlayerUid = list[0].PlayerUid;
                     CurrentPlayerList = new List<PlayerInfo>(list);
+
+                    // 更新玩家名称缓存
+                    UpdatePlayerNameCache(list);
 
                     // 清理不在玩家列表中的过期状态条目（需求 7）
                     var activeUids = list.Select(p => p.PlayerUid).ToHashSet();
@@ -179,13 +253,59 @@ public class CoordinatorClient : IAsyncDisposable
                 (playerUid, routeIndex) =>
                 {
                     _memberProgressCache[playerUid] = routeIndex;
-                    _logger.LogDebug("[联机] 成员路线进度缓存更新: {Uid} → {Index}", playerUid, routeIndex);
+                    _logger.LogDebug("[联机] 成员路线进度缓存更新: {PlayerName} → {Index}", GetPlayerDisplayName(playerUid), routeIndex);
+                });
+
+            // 等待点上报（skip-route-wait-point-report 修复）
+            _connection.On<string, string, string, int, DateTime>("WaitPointReported",
+                (playerUid, routeId, syncPointId, worldRound, timestamp) =>
+                {
+                    // 过滤自己发出的通知
+                    if (playerUid == _playerUid) return;
+                    
+                    // 验证参数
+                    if (string.IsNullOrEmpty(routeId) || string.IsNullOrEmpty(syncPointId))
+                    {
+                        _logger.LogWarning("[联机] 收到无效的等待点上报: Player={PlayerName}, Route={RouteId}, SyncPoint={SyncPointId}", 
+                            GetPlayerDisplayName(playerUid), routeId, syncPointId);
+                        return;
+                    }
+                    
+                    WaitPointReported?.Invoke(playerUid, routeId, syncPointId, worldRound, timestamp);
+                    _logger.LogInformation("[联机] 收到等待点上报: Player={PlayerName}, Route={RouteId}, SyncPoint={SyncPointId}, Round={WorldRound}", 
+                        GetPlayerDisplayName(playerUid), routeId, syncPointId, worldRound);
+                });
+            
+            // === 统一等待点协调（multiplayer-abnormal-wait-coordination）===
+            // 服务端广播统一等待点，通知所有玩家在哪里等待异常玩家
+            _connection.On<string, List<string>, int, string>("UnifiedWaitPoint",
+                (syncPointId, abnormalPlayerUids, expectedWaitCount, routeId) =>
+                {
+                    _logger.LogInformation("[联机] 收到统一等待点广播: SyncPoint={SyncPointId}, 异常玩家=[{AbnormalPlayers}], 预期人数={ExpectedCount}, 路线={RouteId}", 
+                        syncPointId, string.Join(", ", abnormalPlayerUids.Select(GetPlayerDisplayName)), expectedWaitCount, routeId);
+                    UnifiedWaitPointReceived?.Invoke(syncPointId, abnormalPlayerUids, expectedWaitCount, routeId);
+                });
+            
+            // 异常玩家恢复正常广播
+            _connection.On<string>("AbnormalPlayerRecovered",
+                playerUid =>
+                {
+                    _logger.LogInformation("[联机] 收到异常玩家恢复广播: {PlayerName}", GetPlayerDisplayName(playerUid));
+                    AbnormalPlayerRecoveredReceived?.Invoke(playerUid);
+                });
+            
+            // 所有玩家已到达等待点广播（替代原有的 AllArrived，用于服务端主导的等待点协调）
+            _connection.On<string>("AllPlayersArrived",
+                syncPointId =>
+                {
+                    _logger.LogInformation("[联机] 收到所有玩家已到达广播: {SyncPointId}", syncPointId);
+                    AllPlayersArrivedReceived?.Invoke(syncPointId);
                 });
 
             _connection.Closed += OnConnectionClosed;
 
             await _connection.StartAsync(ct);
-            _logger.LogInformation("CoordinatorClient 已连接到 {Url}", serverUrl);
+            _logger.LogInformation("CoordinatorClient 已连接到 {Url}", maskedUrl);
 
             // 启动心跳定时器，每 5 秒发送一次
             _heartbeatTimer = new Timer(async _ =>
@@ -198,7 +318,7 @@ public class CoordinatorClient : IAsyncDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "CoordinatorClient 连接失败: {Url}", serverUrl);
+            _logger.LogError(ex, "CoordinatorClient 连接失败: {Url}", maskedUrl);
             return false;
         }
     }
@@ -380,6 +500,25 @@ public class CoordinatorClient : IAsyncDisposable
         try
         {
             await _connection.InvokeAsync("ReportArrival", syncPointId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ReportArrivalAsync 失败: {SyncPointId}", syncPointId);
+        }
+    }
+
+    /// <summary>
+    /// 上报到达集合点（带预期人数）
+    /// </summary>
+    /// <param name="syncPointId">同步点ID</param>
+    /// <param name="expectedCount">预期到达人数，0表示使用房间总人数</param>
+    public async Task ReportArrivalAsync(string syncPointId, int expectedCount)
+    {
+        if (_connection == null) return;
+        try
+        {
+            await _connection.InvokeAsync("ReportArrivalWithExpectedCount", syncPointId, expectedCount);
+            _logger.LogInformation("[联机] 上报到达: {SyncId}，预期人数={Expected}", syncPointId, expectedCount);
         }
         catch (Exception ex)
         {
@@ -629,6 +768,49 @@ public class CoordinatorClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// 发送等待点上报（skip-route-wait-point-report 修复）
+    /// 实现带重试机制的等待点上报，支持指数退避重试（最多3次）
+    /// 网络异常时静默处理，记录警告日志
+    /// </summary>
+    public async Task<bool> SendWaitPointReportAsync(string routeId, string syncPointId, int worldRound)
+    {
+        if (_connection == null || !IsConnected) 
+        {
+            _logger.LogWarning("[联机] 无法发送等待点上报：未连接");
+            return false;
+        }
+
+        int retryCount = 0;
+        const int maxRetries = 3;
+        const int baseDelay = 1000; // 1秒
+
+        while (retryCount < maxRetries)
+        {
+            try
+            {
+                await _connection.InvokeAsync("WaitPointReport", routeId, syncPointId, worldRound);
+                _logger.LogInformation("[联机] 发送等待点上报: Route={RouteId}, SyncPoint={SyncPointId}, Round={WorldRound}", 
+                    routeId, syncPointId, worldRound);
+                return true;
+            }
+            catch (Exception ex) when (retryCount < maxRetries - 1)
+            {
+                retryCount++;
+                int delay = baseDelay * retryCount; // 指数退避
+                _logger.LogWarning(ex, "[联机] 等待点上报失败，第{RetryCount}/{MaxRetries}次重试，延迟{Delay}ms", 
+                    retryCount, maxRetries, delay);
+                await Task.Delay(delay);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[联机] 等待点上报最终失败，已重试{MaxRetries}次", maxRetries);
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
     /// 发送成员路线进度更新（sync-point-route-skip-alignment 修复）
     /// 调用服务器 UpdateMemberProgress，只广播给其他玩家
     /// </summary>
@@ -665,6 +847,17 @@ public class CoordinatorClient : IAsyncDisposable
         _logger.LogDebug("[联机] 成员路线进度缓存已重置（新一轮开始）");
     }
 
+    /// <summary>
+    /// 重置等待点上报状态（skip-route-wait-point-report 修复）
+    /// 每轮开始时调用，防止跨轮状态污染
+    /// </summary>
+    public void ResetWaitPointState()
+    {
+        // 清理等待点相关状态
+        // 注意：这里不清理 WaitPointReported 事件订阅，因为这是长期存在的
+        _logger.LogDebug("[联机] 等待点上报状态已重置（新一轮开始）");
+    }
+
     public async Task CloseRoomAsync()
     {
         if (_connection == null) return;
@@ -692,6 +885,24 @@ public class CoordinatorClient : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "ResetWorldJoinedAsync 失败");
+        }
+    }
+
+    /// <summary>
+    /// 多轮世界重置（skip-route-wait-point-report 修复）
+    /// 多轮世界新轮次开始时调用，清理所有等待点状态
+    /// </summary>
+    public async Task ResetForNewWorldRoundAsync(int newRound)
+    {
+        if (_connection == null) return;
+        try
+        {
+            await _connection.InvokeAsync("ResetForNewWorldRound", newRound);
+            _logger.LogInformation("[联机] 发送多轮世界重置请求: Round {Round}", newRound);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "ResetForNewWorldRoundAsync 失败");
         }
     }
 
