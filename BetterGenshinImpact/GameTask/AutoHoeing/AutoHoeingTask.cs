@@ -85,10 +85,10 @@ public class AutoHoeingTask : ISoloTask
         if (string.IsNullOrEmpty(url)) return url ?? "";
         try
         {
-            // 例如 http://121.4.78.52:8080/hub -> http://***:8080/hub
+            // 例如 http://121.4.78.52:8080/hub -> http://***:****/***
             var uri = new Uri(url);
-            var maskedHost = "***";
-            return $"{uri.Scheme}://{maskedHost}:{uri.Port}{uri.PathAndQuery}";
+            var maskedPath = string.IsNullOrEmpty(uri.AbsolutePath) || uri.AbsolutePath == "/" ? "" : "/***";
+            return $"{uri.Scheme}://***:****{maskedPath}";
         }
         catch
         {

@@ -254,8 +254,16 @@ public class CoordinatorClient : IAsyncDisposable
     private string MaskServerUrl(string url)
     {
         if (string.IsNullOrEmpty(url)) return url;
-        var uri = new Uri(url);
-        return $"{uri.Scheme}://{uri.Host}:****";
+        try
+        {
+            var uri = new Uri(url);
+            var maskedPath = string.IsNullOrEmpty(uri.AbsolutePath) || uri.AbsolutePath == "/" ? "" : "/***";
+            return $"{uri.Scheme}://***:****{maskedPath}";
+        }
+        catch
+        {
+            return url;
+        }
     }
 
     /// <summary>
@@ -312,7 +320,7 @@ public class CoordinatorClient : IAsyncDisposable
         if (_connection == null) return false;
         try
         {
-            var result = await _connection.InvokeAsync<bool>("JoinRoom", roomCode, playerName);
+            var result = await _connection.InvokeAsync<bool>("JoinRoom", roomCode, playerName, playerUid);
             _currentRoomCode = roomCode;
             _playerName = playerName;
             _playerUid = playerUid;
@@ -445,8 +453,24 @@ public class CoordinatorClient : IAsyncDisposable
         if (_connection == null || !IsConnected) return null;
         try
         {
-            var result = await _connection.InvokeAsync<Dictionary<string, int>?>("GetAllMemberProgress", ct);
-            return result;
+            // 服务器只有 GetMemberProgress(playerUid)，需要遍历所有玩家查询
+            var result = new Dictionary<string, int>();
+            foreach (var player in CurrentPlayerList)
+            {
+                try
+                {
+                    var progress = await _connection.InvokeAsync<MemberProgress?>("GetMemberProgress", player.PlayerUid, ct);
+                    if (progress != null)
+                    {
+                        result[player.PlayerUid] = progress.RouteIndex;
+                    }
+                }
+                catch
+                {
+                    // 忽略单个玩家的查询失败
+                }
+            }
+            return result.Count > 0 ? result : null;
         }
         catch (Exception ex)
         {
@@ -572,7 +596,7 @@ public class CoordinatorClient : IAsyncDisposable
         if (_connection == null || !IsConnected) return;
         try
         {
-            await _connection.InvokeAsync("ReportWorldJoined", PlayerUid ?? "");
+            await _connection.InvokeAsync("ReportWorldJoined");
             _logger.LogInformation("[联机] 上报已加入世界");
         }
         catch (Exception ex)
