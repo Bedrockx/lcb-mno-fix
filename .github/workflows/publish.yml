@@ -354,17 +354,25 @@ jobs:
 
           # 兼容性补丁：MicaSetup v2.5.x 的 net472 项目里使用了
           # string.Contains(string, StringComparison) 这个 .NET Core+ 才有的重载，
-          # 在 net472 下编译失败。需要替换为 .IndexOf(..., StringComparison.X) >= 0。
+          # 在 net472 下编译失败。需要替换为 .IndexOf(..., StringComparison.X) 形式。
           # 注意：MicaSetup 的 .cs 源文件被打包在 template/default.7z 里，
           # 由 makemica.exe 在执行时解出并交给 msbuild 编译。
           # 因此这里既要修补磁盘上的散文件（防御性），
           # 也要修补 default.7z 内部的源文件（实际生效的来源）。
+          # 注意运算符优先级：! 比 >= 紧，所以
+          #   !x.Contains(y, sc)  必须替换为  x.IndexOf(y, sc) < 0
+          #    x.Contains(y, sc)  替换为      x.IndexOf(y, sc) >= 0
+          # 否则会出 CS0023 (Operator '!' cannot be applied to operand of type 'int')。
+          $negRegex = '!(?<recv>\w+(?:\.\w+|\[[^\[\]]*\]|\([^()]*\))*)\.Contains\((?<arg>[^,()]+(?:\([^()]*\))?)\s*,\s*StringComparison\.(?<cmp>\w+)\)'
+          $negReplacement = '${recv}.IndexOf(${arg}, StringComparison.${cmp}) < 0'
           $regex = '\.Contains\((?<arg>[^,()]+(?:\([^()]*\))?)\s*,\s*StringComparison\.(?<cmp>\w+)\)'
           $replacement = '.IndexOf(${arg}, StringComparison.${cmp}) >= 0'
 
           function Patch-CsFile($path) {
               $content = Get-Content -LiteralPath $path -Raw
-              $patched = [regex]::Replace($content, $regex, $replacement)
+              # 先处理带 ! 的，再处理普通的，避免普通替换吃掉 ! 形式的语义
+              $patched = [regex]::Replace($content, $negRegex, $negReplacement)
+              $patched = [regex]::Replace($patched, $regex, $replacement)
               if ($patched -ne $content) {
                   Set-Content -LiteralPath $path -Value $patched -Encoding UTF8
                   Write-Host "  -> patched: $path"
