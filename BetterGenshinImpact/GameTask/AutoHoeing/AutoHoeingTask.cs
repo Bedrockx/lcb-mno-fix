@@ -929,8 +929,11 @@ public class AutoHoeingTask : ISoloTask
         }
         
         _logger.LogInformation("[联机] 开始准备联机队伍和角色");
-        
-        // 0. 设置世界权限为确认后才能加入
+
+        // 0a. 检测当前是否在多人联机世界，如是则先退出
+        await EnsureInOwnWorldBeforeMultiplayerAsync();
+
+        // 0b. 设置世界权限为确认后才能加入
         await SetWorldPermissionToConfirmJoin();
         
         // 1. 切换队伍
@@ -2868,6 +2871,83 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "multiWorldEnabled", Label = "启用多世界连续锄地\n房主设定，完成一个世界后轮换到下一个玩家的世界", Type = "bool", DefaultValue = config.MultiWorldEnabled },
             new() { Name = "multiWorldCount", Label = "多世界锄地轮数（1-4）\n由房主设定，按加入顺序依次成为房主", Type = "number", DefaultValue = config.MultiWorldCount },
         };
+    }
+
+    /// <summary>
+    /// 联机前检查：若当前已在多人联机世界，则先退出回到自己世界。
+    /// 流程：返回主界面 → 截图判断 IsInMultiGame（带 1 次重试）→ 若是则调 LeaveWorldAsync 退出。
+    /// 任何异常都不阻断后续流程，仅记日志，由后续步骤继续兜底。
+    /// </summary>
+    private async Task EnsureInOwnWorldBeforeMultiplayerAsync()
+    {
+        try
+        {
+            // 1. 回到主界面（DetectedMultiGameStatus 依赖右侧 HUD / 左上角图标可见）
+            try
+            {
+                await new ReturnMainUiTask().Start(_ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[联机] 检测多人世界前回到主界面失败，继续尝试检测");
+            }
+            await Task.Delay(500, _ct);
+
+            // 2. 检测多人状态（最多 2 次，避免单次模板匹配漏识造成误判）
+            bool isInMultiGame = false;
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                try
+                {
+                    using var ra = CaptureToRectArea();
+                    var status = PartyAvatarSideIndexHelper.DetectedMultiGameStatus(ra);
+                    if (status.IsInMultiGame)
+                    {
+                        _logger.LogInformation("[联机] 检测到当前处于多人联机世界（第{N}次检测，房主={IsHost}，人数={Count}），先退出多人世界",
+                            attempt, status.IsHost, status.PlayerCount);
+                        isInMultiGame = true;
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[联机] 多人世界检测异常（第{N}次），重试", attempt);
+                }
+                if (attempt < 2)
+                    await Task.Delay(500, _ct);
+            }
+
+            if (!isInMultiGame)
+            {
+                _logger.LogDebug("[联机] 未检测到多人联机世界，跳过退出步骤");
+                return;
+            }
+
+            // 3. 退出多人世界（带 60s 兜底超时，避免极端情况下卡死整个任务）
+            using var leaveCts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+            leaveCts.CancelAfter(TimeSpan.FromSeconds(60));
+            try
+            {
+                var autoParty = new AutoPartyTask();
+                var left = await autoParty.LeaveWorldAsync(leaveCts.Token);
+                if (left)
+                    _logger.LogInformation("[联机] 已退出多人世界，回到自己的世界");
+                else
+                    _logger.LogWarning("[联机] 退出多人世界未确认成功，后续步骤将继续尝试");
+            }
+            catch (OperationCanceledException) when (!_ct.IsCancellationRequested)
+            {
+                _logger.LogWarning("[联机] 退出多人世界超时（60s），后续步骤将继续尝试");
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机] 联机前多人世界检查异常，忽略并继续");
+        }
     }
 
     /// <summary>
