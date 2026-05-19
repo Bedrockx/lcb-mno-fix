@@ -53,6 +53,13 @@ public class AutoFightAssets : BaseAssets<AutoFightAssets>
     public RecognitionObject OnePRa;
 
     public RecognitionObject PRa;
+
+    /// <summary>
+    /// F2 多人游戏页面右侧的红色"踢出玩家"按钮。
+    /// 房主自己那行没有，每个已加入世界的成员对应 1 个图标，因此：
+    /// 总人数 = 检测到的 KickBtn 数量 + 1（房主）。
+    /// </summary>
+    public RecognitionObject KickBtnRa;
     public Dictionary<string, List<Rect>> AvatarSideIconRectListMap; // 侧边栏角色头像 联机状态下
     public Dictionary<string, List<Rect>> AvatarIndexRectListMap; // 侧边栏角色头像对应的白色块 联机状态下
 
@@ -216,6 +223,18 @@ public class AutoFightAssets : BaseAssets<AutoFightAssets>
             RecognitionType = RecognitionTypes.TemplateMatch,
             TemplateImageMat = GameTaskManager.LoadAssetImage("AutoFight", "p.png", this.systemInfo),
             RegionOfInterest = new Rect(CaptureRect.Width - (int)(CaptureRect.Width / 12.5), CaptureRect.Height / 5, (int)(CaptureRect.Width / 12.5), CaptureRect.Height / 2 - CaptureRect.Width / 7),
+            DrawOnWindow = false
+        }.InitTemplate();
+
+        // F2 多人游戏页面右侧的红色"踢出玩家"按钮
+        // ROI 限定在右半屏的中上部，覆盖 1P~4P 行的踢出按钮区域，避开右下角"回到单人模式"按钮干扰
+        KickBtnRa = new RecognitionObject
+        {
+            Name = "KickBtn",
+            RecognitionType = RecognitionTypes.TemplateMatch,
+            TemplateImageMat = GameTaskManager.LoadAssetImage("AutoFight", "kick_btn.png", this.systemInfo),
+            RegionOfInterest = new Rect( (int)(1500 * AssetScale), (int)(160 * AssetScale), (int)(130 * AssetScale), (int)(700 * AssetScale)),
+            Threshold = 0.8,
             DrawOnWindow = false
         }.InitTemplate();
 

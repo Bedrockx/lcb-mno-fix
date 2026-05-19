@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -9,10 +10,13 @@ using BetterGenshinImpact.Core.Recognition;
 using BetterGenshinImpact.Core.Recognition.OCR;
 using BetterGenshinImpact.Core.Simulator;
 using BetterGenshinImpact.Core.Simulator.Extensions;
+using BetterGenshinImpact.GameTask.AutoFight.Assets;
+using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.Common.BgiVision;
 using BetterGenshinImpact.GameTask.Model.Area;
 using BetterGenshinImpact.Helpers;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using OpenCvSharp;
 using Vanara.PInvoke;
 using static BetterGenshinImpact.GameTask.Common.TaskControl;
@@ -40,6 +44,19 @@ public class AutoPartyTask
     private const double UidInputX = 222, UidInputY = 120;
     private const double SearchBtnX = 1676, SearchBtnY = 123;
     private const double ApplyBtnX = 1625, ApplyBtnY = 245;
+
+    // F2 玩家行 1080P 坐标（玩家名 OCR 区域）
+    // 用户实测：2P 起点 (417, 307)，3P 起点 (417, 429)，4P 起点 (417, 555)
+    // 行间距约 122-126px，本身有踢出按钮 → 用按钮 Y 中心反推 OCR 行更稳，但作为兜底保留这套常量
+    private const double PlayerNameX = 417;
+    private const double PlayerNameW = 400;
+    private const double PlayerNameH = 40;
+    // 已知 2P~4P 名字起点 Y（1080P）
+    private static readonly double[] PlayerNameY1080P = [307, 429, 555];
+
+    // 踢陌生人扫描节流参数
+    private const int StrangerKickAcceptCooldownSec = 6;   // 同意申请后的保护期
+    private const int StrangerKickScanIntervalSec = 4;     // 扫描最小间隔
 
     /// <summary>
     /// UID 脱敏：保留前 3 位和后 3 位，中间用 *** 代替（用于日志输出）
@@ -130,23 +147,30 @@ public class AutoPartyTask
             {
                 await Delay(1000, ct);
 
-                // 检测是否已进入主界面（加载完成，进入了房主世界）
+                // 检测是否已进入"房主世界"：派蒙可见 + 联机状态 + 不是房主
+                // 仅靠派蒙不够，自己世界也能看到派蒙（被拒绝/F2 切换中间帧）会导致误判
                 using var ra = CaptureToRectArea();
-                if (Bv.IsInMainUi(ra))
+                if (await IsInHostWorldAsync(ra, ct))
                 {
-                    _logger.LogInformation("[自动组队-成员] 检测到主界面，已进入房主世界");
+                    _logger.LogInformation("[自动组队-成员] 检测到已进入房主世界（派蒙可见且为成员视角）");
                     return true;
                 }
             }
 
             // 15 秒后还没进入世界，可能申请被忽略或拒绝
-            // 检查是否还在 F2 界面（派蒙不可见 = 还在 F2 或加载中）
+            // 二次判定：派蒙可见且仍在自己世界 → 视为被拒绝，重新搜索
             using var checkRa = CaptureToRectArea();
+            // 先复用一次"已进入房主世界"判定，覆盖刚好这一次截图捕到加载完成的情况
+            if (await IsInHostWorldAsync(checkRa, ct))
+            {
+                _logger.LogInformation("[自动组队-成员] 等待结束时检测到已进入房主世界");
+                return true;
+            }
             if (Bv.IsInMainUi(checkRa))
             {
-                // 已经回到主界面但不是房主世界（被拒绝后回到自己世界）
-                // 需要重新打开 F2 并搜索（搜索失败时同样会重试 10 次）
-                _logger.LogInformation("[自动组队-成员] 回到主界面，重新打开 F2 搜索");
+                // 派蒙可见但不在房主世界 → 申请被拒绝/超时，回到自己世界
+                // 重新打开 F2 并搜索（搜索失败时同样会重试 10 次）
+                _logger.LogInformation("[自动组队-成员] 回到自己世界，重新打开 F2 搜索");
                 if (!await OpenCoOpScreen(ct)) continue;
 
                 bool reSearchOk = false;
@@ -218,6 +242,12 @@ public class AutoPartyTask
         // 设置等待状态为 true
         AutoHoeingTask.IsWaitingForParty = true;
 
+        // 用 UID 集合做"自己人"判定（成员加入 BGI 房间时上报 UID 和 PlayerName）
+        // 名字也准备一份用于 OCR 容错匹配
+        // 同意申请后到 BGI 房间名单更新之间有几秒延迟，期间不踢人，避免误踢自己人刚到的成员
+        DateTime lastAcceptTime = DateTime.MinValue;
+        DateTime lastKickScanTime = DateTime.MinValue;
+
         try
         {
             var deadline = DateTime.Now.AddSeconds(timeoutSeconds);
@@ -270,7 +300,10 @@ public class AutoPartyTask
                             ClickConfirmButton();
                             await Delay(700, ct);
                             _logger.LogDebug("[自动组队-房主] 已点击确认，等待加载...");
-                            
+
+                            // 同意申请后开启保护期：BGI 名单刷新有延迟，期间不扫描踢人
+                            lastAcceptTime = DateTime.Now;
+
                             // 处理完弹窗后继续检测，可能还有更多申请
                             continue;
                         }
@@ -283,29 +316,32 @@ public class AutoPartyTask
                     }
                 }
 
-                // 检测当前是否在主界面
+                // 检测当前 UI 状态：主界面 vs F2
+                // 在两种界面上都尝试满员判定，互为保险，避免被任一信号源卡死
                 using (var checkRa = CaptureToRectArea())
                 {
-                    if (Bv.IsInMainUi(checkRa))
+                    var inMainUi = Bv.IsInMainUi(checkRa);
+                    var signalRCount = client.CurrentRoomPlayerCount;
+
+                    if (inMainUi)
                     {
-                        var currentCount = client.CurrentRoomPlayerCount;
-                        // 人数已满，直接开始
-                        if (currentCount >= expectedCount)
+                        // 信号 A：主界面 + SignalR 人数已达标 → 直接开始
+                        if (signalRCount >= expectedCount)
                         {
-                            _logger.LogInformation("[自动组队-房主] 检测到主界面且人数已满 {N}，开始锄地", currentCount);
-                            return currentCount;
+                            _logger.LogInformation("[自动组队-房主] 检测到主界面且人数已满 {N}，开始锄地", signalRCount);
+                            return signalRCount;
                         }
-                        
+
                         // 人数未满，如果之前在 F2 界面，说明有人加入触发了加载
                         if (isInF2Screen)
                         {
-                            _logger.LogInformation("[自动组队-房主] 检测到主界面（玩家加入触发加载），人数: {Count}/{Expected}", currentCount, expectedCount);
+                            _logger.LogInformation("[自动组队-房主] 检测到主界面（玩家加入触发加载），人数: {Count}/{Expected}", signalRCount, expectedCount);
                             isInF2Screen = false;
-                            
+
                             // 等待加载稳定后重新打开 F2
                             await Delay(2000, ct);
                             await WaitForMainUi(ct, 10);
-                            
+
                             if (!await OpenCoOpScreen(ct, whitelist))
                             {
                                 _logger.LogWarning("[自动组队-房主] 重新打开 F2 失败，重试");
@@ -329,8 +365,60 @@ public class AutoPartyTask
                         }
                         continue;
                     }
+
+                    // 不在主界面：派蒙不可见，多半在 F2 页面
+                    // 信号 B：F2 页面 → 数右侧红色"踢出"按钮（房主自己没有，每个成员对应 1 个）
+                    // 实际进入世界人数 = 踢出按钮数量 + 1
+                    var kickCount = checkRa.FindMulti(AutoFightAssets.Instance.KickBtnRa).Count;
+                    var f2Count = kickCount + 1;
+                    if (f2Count >= expectedCount)
+                    {
+                        // 交叉校验（方案 B）：游戏内人数 > BGI 房间人数 → 有陌生人闯入
+                        // 不开锄，等用户/自动踢人逻辑处理
+                        var bgiCount = client.CurrentRoomPlayerCount;
+                        if (f2Count > bgiCount && bgiCount > 0)
+                        {
+                            _logger.LogWarning("[自动组队-房主] 检测到陌生人闯入：游戏内 {F2} 人 > BGI 房间 {Bgi} 人，暂不开锄",
+                                f2Count, bgiCount);
+                            // 触发一次踢陌生人扫描（避开同意申请后的保护期）
+                            if ((DateTime.Now - lastAcceptTime).TotalSeconds >= StrangerKickAcceptCooldownSec)
+                            {
+                                await KickStrangersAsync(client, ct);
+                                lastKickScanTime = DateTime.Now;
+                            }
+                            await Delay(1000, ct);
+                            continue;
+                        }
+
+                        _logger.LogInformation("[自动组队-房主] F2 检测到实际进入世界人数已满 {Count}/{Expected}（踢出按钮={Kick}），主动关闭 F2 开始锄地",
+                            f2Count, expectedCount, kickCount);
+                        Simulation.SendInput.Keyboard.KeyPress(User32.VK.VK_ESCAPE);
+                        await Delay(500, ct);
+                        await WaitForMainUi(ct, 10);
+                        return f2Count;
+                    }
+                    if (kickCount > 0)
+                    {
+                        _logger.LogDebug("[自动组队-房主] F2 当前实际人数 {Count}/{Expected}（踢出按钮={Kick}），继续等待",
+                            f2Count, expectedCount, kickCount);
+                    }
                 }
-                
+
+                // 周期性踢陌生人扫描：F2 页面下，距上次同意申请已超保护期、且距上次扫描已超间隔
+                // 为什么放这里：在按 Y 之前，避免和申请弹窗叠加；保护期防止误踢刚被同意但 BGI 名单未更新的成员
+                if (isInF2Screen
+                    && (DateTime.Now - lastAcceptTime).TotalSeconds >= StrangerKickAcceptCooldownSec
+                    && (DateTime.Now - lastKickScanTime).TotalSeconds >= StrangerKickScanIntervalSec)
+                {
+                    if (await KickStrangersAsync(client, ct))
+                    {
+                        // 踢人会触发弹窗 / UI 变化，下一轮重新评估
+                        lastKickScanTime = DateTime.Now;
+                        continue;
+                    }
+                    lastKickScanTime = DateTime.Now;
+                }
+
                 // 在 F2 界面，按 Y 触发申请弹窗（如果有待处理的申请）
                 if (isInF2Screen)
                 {
@@ -501,6 +589,39 @@ public class AutoPartyTask
         return false;
     }
 
+    /// <summary>
+    /// 判断成员当前是否已进入"房主世界"。
+    /// 仅靠派蒙可见无法区分自己世界 / 房主世界（被拒绝、F2 切换中间帧都会让派蒙短暂可见）。
+    /// 真正进入房主世界的判定条件：派蒙可见 + 处于联机状态 + 不是房主（IsHost == false）。
+    ///
+    /// 进入房主世界后右侧角色 HUD 渲染需要短暂时间，因此在派蒙首次可见时额外等 1.2 秒
+    /// 让 HUD 稳定，再做一次截图判定，避免抓到中间帧。
+    /// </summary>
+    private async Task<bool> IsInHostWorldAsync(ImageRegion currentRa, CancellationToken ct)
+    {
+        if (!Bv.IsInMainUi(currentRa))
+            return false;
+
+        // 等待右侧 HUD 渲染稳定后再判定（避免加载完成瞬间右侧 P 图标尚未渲染）
+        await Delay(1200, ct);
+
+        try
+        {
+            using var stableRa = CaptureToRectArea();
+            if (!Bv.IsInMainUi(stableRa))
+                return false;
+
+            var status = PartyAvatarSideIndexHelper.DetectedMultiGameStatus(
+                stableRa, AutoFightAssets.Instance, NullLogger.Instance);
+            return status.IsInMultiGame && !status.IsHost;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[自动组队-成员] 检测房主世界状态异常，按未进入处理");
+            return false;
+        }
+    }
+
     /// <summary>模板匹配确认按钮并点击</summary>
     private void ClickConfirmButton()
     {
@@ -573,6 +694,142 @@ public class AutoPartyTask
         {
             _logger.LogWarning(ex, "[自动组队] OCR 识别异常");
             return "";
+        }
+    }
+
+    /// <summary>
+    /// 扫描 F2 页面中各玩家名字，将不在 BGI 房间名单（同 UID 上报的成员）的玩家踢出。
+    /// 流程：
+    ///   1. FindMulti 拿到所有红色"踢出"按钮位置（房主自己那行没有，每个其他成员一个）
+    ///   2. 按按钮 Y 坐标排序，逐行 OCR 同行玩家名（X 固定 417，Y 跟着按钮中心走）
+    ///   3. 玩家名与 client.CurrentPlayerList 容错匹配，匹配失败 → 视为陌生人
+    ///   4. 点对应踢出按钮 → 处理弹出的二次确认弹窗
+    /// 返回值：是否触发了踢人操作（用于调用方决定下一轮节奏）
+    /// </summary>
+    private async Task<bool> KickStrangersAsync(CoordinatorClient client, CancellationToken ct)
+    {
+        try
+        {
+            // 1. 截图并定位所有踢出按钮
+            using var ra = CaptureToRectArea();
+            // 房主自己 = 当前 UID；BGI 房间内其他成员的名字
+            var allowedNames = client.CurrentPlayerList?
+                .Where(p => !string.IsNullOrEmpty(p?.PlayerName))
+                .Select(p => p.PlayerName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray() ?? Array.Empty<string>();
+
+            // BGI 房间名单可能为空（成员还没注册），保守起见跳过踢人
+            if (allowedNames.Length == 0)
+            {
+                _logger.LogDebug("[踢陌生人] BGI 房间名单为空，跳过本次扫描");
+                return false;
+            }
+
+            var kickRegions = ra.FindMulti(AutoFightAssets.Instance.KickBtnRa);
+            if (kickRegions.Count == 0)
+            {
+                return false;
+            }
+
+            // 按 Y 坐标排序：从上到下对应 2P / 3P / 4P
+            var sorted = kickRegions.OrderBy(r => r.Y).ToList();
+            var scale = TaskContext.Instance().SystemInfo.ScaleTo1080PRatio;
+
+            bool anyKicked = false;
+            foreach (var btn in sorted)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                // OCR 同行玩家名：X 固定 417 (1080P)，宽 400，高 40
+                // Y 用按钮中心反推：1080P 下名字起点 Y = 按钮中心 Y - 25 左右
+                // 按钮在游戏截图中的 Y 已是当前分辨率，需要转回 1080P 再换算
+                var btnCenterY1080P = (btn.Y + btn.Height / 2.0) / scale;
+                var nameY1080P = btnCenterY1080P - 25;
+
+                var nameX = (int)(PlayerNameX * scale);
+                var nameY = (int)(nameY1080P * scale);
+                var nameW = (int)(PlayerNameW * scale);
+                var nameH = (int)(PlayerNameH * scale);
+
+                // 边界检查
+                if (nameX < 0 || nameY < 0 || nameW <= 0 || nameH <= 0) continue;
+                if (nameX + nameW > ra.SrcMat.Width) nameW = ra.SrcMat.Width - nameX;
+                if (nameY + nameH > ra.SrcMat.Height) nameH = ra.SrcMat.Height - nameY;
+                if (nameW <= 0 || nameH <= 0) continue;
+
+                string playerName;
+                try
+                {
+                    using var nameRoi = new OpenCvSharp.Mat(ra.SrcMat, new OpenCvSharp.Rect(nameX, nameY, nameW, nameH));
+                    playerName = (OcrFactory.Paddle.Ocr(nameRoi) ?? "").Trim();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[踢陌生人] OCR 玩家名异常，跳过此行");
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(playerName))
+                {
+                    _logger.LogDebug("[踢陌生人] OCR 玩家名为空，跳过此行（可能渲染未稳定）");
+                    continue;
+                }
+
+                // 复用现有白名单匹配（70% 容错，支持括号备注）
+                var isAllowed = IsInWhitelist(playerName, allowedNames);
+                if (isAllowed)
+                {
+                    _logger.LogDebug("[踢陌生人] 玩家 [{Name}] 在 BGI 房间名单中，保留", playerName);
+                    continue;
+                }
+
+                _logger.LogWarning("[踢陌生人] 检测到陌生人 [{Name}]，BGI 房间名单: [{Allowed}]，准备踢出",
+                    playerName, string.Join(", ", allowedNames));
+
+                // 点击踢出按钮中心
+                btn.Click();
+                await Delay(800, ct);
+
+                // 处理"确认踢出"二次确认弹窗
+                bool confirmed = false;
+                for (int i = 0; i < 5; i++)
+                {
+                    using var confirmRa = CaptureToRectArea();
+                    if (confirmRa.Find(ConfirmBtnRo).IsExist())
+                    {
+                        ClickConfirmButton();
+                        await Delay(500, ct);
+                        confirmed = true;
+                        break;
+                    }
+                    await Delay(300, ct);
+                }
+                if (!confirmed)
+                {
+                    _logger.LogWarning("[踢陌生人] 未检测到踢出二次确认弹窗，可能踢出失败");
+                }
+                else
+                {
+                    _logger.LogInformation("[踢陌生人] 已踢出陌生人 [{Name}]", playerName);
+                }
+                anyKicked = true;
+
+                // 一次只踢一个，避免按钮位置变化导致后续点错；下一轮循环会再扫
+                await Delay(800, ct);
+                break;
+            }
+
+            return anyKicked;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[踢陌生人] 扫描异常，忽略本次");
+            return false;
         }
     }
 
