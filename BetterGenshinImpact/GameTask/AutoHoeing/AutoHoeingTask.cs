@@ -117,6 +117,12 @@ public class AutoHoeingTask : ISoloTask
     private static int ClampWaitCd(int value) => Math.Clamp(value, 3, 10);
 
     /// <summary>
+    /// 把 KazuhaSecondApproachMaxSteps 钳到合法范围 [1, 30]。纯函数，PBT 友好。
+    /// multiplayer-kazuha-collect-point-broadcast: 二段精接近步数上限，每步约 80ms。
+    /// </summary>
+    private static int ClampSecondApproachMaxSteps(int value) => Math.Clamp(value, 1, 30);
+
+    /// <summary>
     /// 客户端识别本地联机队伍是否含万叶，含则向服务端声明候选身份（kazuha-player-auto-detection）。
     /// 调用时机：
     ///   1. 房主路径：联机队伍切换完成（MultiplayerPartyName/MultiplayerStartAvatarName）后、第一条路线开锄前
@@ -214,6 +220,7 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaSyncWaitSeconds = 1;
             _config.KazuhaSyncTimeoutSeconds = 20;
             _config.KazuhaWaitSkillCdSeconds = 5;
+            _config.KazuhaSecondApproachMaxSteps = 6;
             _config.MultiWorldEnabled = false;
             _config.MultiWorldCount = 2;
             _config.FightExtraWaitSeconds = 60;
@@ -529,6 +536,7 @@ public class AutoHoeingTask : ISoloTask
                     KazuhaSyncWaitSeconds = _config.KazuhaSyncWaitSeconds,
                     KazuhaSyncTimeoutSeconds = _config.KazuhaSyncTimeoutSeconds,
                     KazuhaWaitSkillCdSeconds = _config.KazuhaWaitSkillCdSeconds,
+                    KazuhaSecondApproachMaxSteps = _config.KazuhaSecondApproachMaxSteps,
                     PartyTimeoutSeconds = _config.PartyTimeoutSeconds,
                     MultiWorldEnabled = _config.MultiWorldEnabled,
                     MultiWorldCount = _config.MultiWorldCount,
@@ -892,6 +900,7 @@ public class AutoHoeingTask : ISoloTask
                         _config.KazuhaSyncWaitSeconds = hostConfig.KazuhaSyncWaitSeconds;
                         _config.KazuhaSyncTimeoutSeconds = hostConfig.KazuhaSyncTimeoutSeconds;
                         _config.KazuhaWaitSkillCdSeconds = hostConfig.KazuhaWaitSkillCdSeconds;
+                        _config.KazuhaSecondApproachMaxSteps = hostConfig.KazuhaSecondApproachMaxSteps;
                         _config.PartyTimeoutSeconds = hostConfig.PartyTimeoutSeconds;
                         _config.MultiWorldEnabled = hostConfig.MultiWorldEnabled;
                         _config.MultiWorldCount = hostConfig.MultiWorldCount;
@@ -1629,6 +1638,7 @@ public class AutoHoeingTask : ISoloTask
                     _config.KazuhaSyncWaitSeconds = hostConfig.KazuhaSyncWaitSeconds;
                     _config.KazuhaSyncTimeoutSeconds = hostConfig.KazuhaSyncTimeoutSeconds;
                     _config.KazuhaWaitSkillCdSeconds = hostConfig.KazuhaWaitSkillCdSeconds;
+                    _config.KazuhaSecondApproachMaxSteps = hostConfig.KazuhaSecondApproachMaxSteps;
                     _config.PartyTimeoutSeconds = hostConfig.PartyTimeoutSeconds;
                     _config.MultiWorldEnabled = hostConfig.MultiWorldEnabled;
                     _config.MultiWorldCount = hostConfig.MultiWorldCount;
@@ -2885,6 +2895,7 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaSyncWaitSeconds = ClampSyncWait(Get("kazuhaSyncWaitSeconds", _config.KazuhaSyncWaitSeconds));
             _config.KazuhaSyncTimeoutSeconds = ClampSyncTimeout(Get("kazuhaSyncTimeoutSeconds", _config.KazuhaSyncTimeoutSeconds));
             _config.KazuhaWaitSkillCdSeconds = ClampWaitCd(Get("kazuhaWaitSkillCdSeconds", _config.KazuhaWaitSkillCdSeconds));
+            _config.KazuhaSecondApproachMaxSteps = ClampSecondApproachMaxSteps(Get("kazuhaSecondApproachMaxSteps", _config.KazuhaSecondApproachMaxSteps));
             NormalizeKazuhaTimeoutOrder(_config);
             _config.FightTimeoutSeconds = Get("fightTimeoutSeconds", _config.FightTimeoutSeconds);
         }
@@ -2898,6 +2909,7 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaSyncWaitSeconds = 1;
             _config.KazuhaSyncTimeoutSeconds = 20;
             _config.KazuhaWaitSkillCdSeconds = 5;
+            _config.KazuhaSecondApproachMaxSteps = 6;
             _config.FightTimeoutSeconds = 120;
 
             // 单机模式：重置固定调试线路字段，避免联机全局配置残留影响
@@ -3010,6 +3022,7 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "kazuhaSyncWaitSeconds", Label = "万叶聚物完成后非万叶玩家停留（秒）\n0-30，默认1，仅在指定万叶玩家+启用走回战斗点时生效", Type = "number", DefaultValue = config.KazuhaSyncWaitSeconds },
             new() { Name = "kazuhaSyncTimeoutSeconds", Label = "万叶聚物同步总超时（秒）\n5-120，默认20，所有玩家在战斗点等待万叶完成的最长时间", Type = "number", DefaultValue = config.KazuhaSyncTimeoutSeconds },
             new() { Name = "kazuhaWaitSkillCdSeconds", Label = "万叶 E 技 CD 等待上限（秒）\n3-10，默认5，超时后直接尝试释放 E 技", Type = "number", DefaultValue = config.KazuhaWaitSkillCdSeconds },
+            new() { Name = "kazuhaSecondApproachMaxSteps", Label = "拾取前精接近步数（联机万叶聚物）\n1-30，默认6（约0.5s上限），战后回点完成第一段后再做二段精接近的最大步数", Type = "number", DefaultValue = config.KazuhaSecondApproachMaxSteps },
             new() { Name = "syncPointMinDistance", Label = "集合点与战斗点的最小距离阈值\n小于此距离的点不作为集合点", Type = "number", DefaultValue = config.SyncPointMinDistance },
 
             // ===== 联机战斗配置 =====

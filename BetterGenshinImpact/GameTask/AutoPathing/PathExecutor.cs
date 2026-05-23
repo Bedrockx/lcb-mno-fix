@@ -749,18 +749,101 @@ public class PathExecutor
                                                     if (PathExecutorDecisions.ShouldPreMoveTo(preDistance, 4.0))
                                                     {
                                                         Logger.LogInformation("[联机] 距战斗点 {Dist:F1} > 4.0，先 MoveTo 粗接近", preDistance);
+                                                        // multiplayer-kazuha-pre-cast-positioning: 战后回点全员强制 Walk
+                                                        // （避免 fightWaypoint 录制 MoveMode 是 Dash/Run 时全员同时疾跑消耗体力）。
+                                                        // 注意：直接改 waypoint.MoveMode 会"污染"原 Waypoint 实例后续被其他调用点使用，
+                                                        // 但此场景下 fightWaypoint 是战斗节点，本次 MoveTo 后立即进 MoveCloseTo（其内部不读 MoveMode）
+                                                        // 再交给 WaitAtFightPointAsync，路线不会再次复用同一 fightWaypoint 实例做远距离移动，
+                                                        // 故对原对象的污染影响可控。
+                                                        waypoint.MoveMode = MoveModeEnum.Walk.Code;
                                                         await MoveTo(waypoint, isGetOut: true, task: null, nextWaypoint: null,
                                                             nextDistance: null, retryDis: 4, isPoint: false);
                                                     }
                                                 }
                                             }
 
-                                            // BC1+BC5: 显式覆盖 closeDistance: 1.0（缩小停点误差让非万叶玩家落点覆盖
-                                            //          万叶 HoldE 风场拾取半径） / tailDelayMs: 0（去掉到点后硬编码 1s 停顿）。
-                                            //          maxSteps: 10（前面已用 MoveTo 粗接近，这里只需少量精接近步数；
-                                            //          配合 closeDistance: 1.0 仍能 0.8 秒内收敛到 1 单位以内）。
-                                            //          仅本调用点显式传新参数，其它所有 MoveCloseTo 调用保持默认参数 = 原行为，单机零回归。
-                                            await MoveCloseTo(waypoint, closeDistance: 1.0, tailDelayMs: 0, maxSteps: 10);
+                                            // BC1+BC5: 第一段 MoveCloseTo 显式覆盖：
+                                            //   closeDistance: 2.0  — 粗略停下即可（精接近交给二段聚物点 MoveCloseTo）。
+                                            //   tailDelayMs: 0      — 去掉到点后硬编码 1s 停顿。
+                                            //   maxSteps: 5         — 上限约 0.4s（前面已用 MoveTo 粗接近，5 步内收敛到 2.0 单位足够）。
+                                            //   仅本调用点显式传新参数，其它所有 MoveCloseTo 调用保持默认参数 = 原行为，单机零回归。
+                                            // 配合下方"非万叶玩家二段 MoveCloseTo 到聚物点 closeDistance:0.5"使用：
+                                            //   收到聚物点广播 → 第一段粗停 + 二段精接近，总耗时 ≤ 0.9s
+                                            //   未收到广播（退化）→ 仅第一段，停在距战斗点 ≤ 2.0 单位（与原版 closeDistance:2.0 默认行为等价）
+
+                                            // multiplayer-kazuha-collect-point-broadcast: 非万叶玩家"等聚物点广播"与第一段并行。
+                                            // 在第一段 MoveCloseTo 之前 kick off 后台 wait task（不 await，让它和第一段并行跑）；
+                                            // 第一段走完后再 await 看是否拿到广播 → 拿到则二段精接近，否则跳过。
+                                            // 守卫四重：MultiplayerCoordinator != null（外层）+ KazuhaCollectSync != null（外层）+
+                                            //          !IsCurrentPlayerKazuha（万叶就在原地放 E，不二段）+ 等待 task 返回 true。
+                                            // 等待超时固定 5 秒（用户实测决议：太长会拖慢主流程，5 秒足够覆盖 SignalR 往返 + 万叶 CD 等待 + 视觉确认）。
+                                            var ks = MultiplayerCoordinator.KazuhaCollectSync;
+                                            var collectPointSyncKey = waypoint == null
+                                                ? $"{MultiplayerCoordinator.CurrentRouteIndex}:0:0"
+                                                : $"{MultiplayerCoordinator.CurrentRouteIndex}:{waypoint.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}:{waypoint.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}";
+                                            Task<bool>? collectPointWaitTask = null;
+                                            if (ks != null && !ks.IsCurrentPlayerKazuha)
+                                            {
+                                                collectPointWaitTask = ks.TryWaitForCollectPointAsync(collectPointSyncKey, timeoutMs: 5000, ct);
+                                            }
+
+                                            await MoveCloseTo(waypoint, closeDistance: 2.0, tailDelayMs: 0, maxSteps: 5);
+
+                                            // 第一段走完，await 后台 wait task 看是否拿到广播 → 拿到则二段精接近聚物点。
+                                            // 超时未到 → 退化到第二段精接近"战斗点"（与原 spec closeDistance:1.0 单段路径等价的体验）。
+                                            // 任意失败：catch + LogWarning，不让二段失败传播到主流程，继续 WaitAtFightPointAsync 兜底。
+                                            try
+                                            {
+                                                if (ks != null && !ks.IsCurrentPlayerKazuha && collectPointWaitTask != null)
+                                                {
+                                                    var got = await collectPointWaitTask;
+                                                    double tx, ty;
+                                                    if (got && ks.TryGetCollectPointForCurrent(collectPointSyncKey, out var cx, out var cy))
+                                                    {
+                                                        tx = cx; ty = cy;
+                                                        Logger.LogInformation("[联机] 非万叶玩家：收到聚物点广播 ({CX:F1},{CY:F1})，二段精接近", tx, ty);
+                                                    }
+                                                    else
+                                                    {
+                                                        // 退化：等聚物点超时 / 未到 → 二段改为精接近"战斗点"，
+                                                        // 把停点从距战斗点 < 2.0 缩到 < 0.5，体验等价于原 spec closeDistance:1.0 单段。
+                                                        tx = waypoint.X; ty = waypoint.Y;
+                                                        Logger.LogDebug("[联机] 非万叶玩家：等聚物点广播超时，退化为精接近战斗点 ({TX:F1},{TY:F1})", tx, ty);
+                                                    }
+
+                                                    // 构造临时 WaypointForTrack：MapName / MapMatchMethod 沿用 fightWaypoint，
+                                                    // 但 X/Y/MatX/MatY 直接覆盖为 (tx, ty)（已经是小地图坐标系，
+                                                    // 与 Navigation.GetPosition 返回值同坐标系，绕过基类构造的坐标系转换）。
+                                                    // GameX/GameY 不参与 MoveCloseTo（其内部仅读 X/Y），写 0 即可。
+                                                    // 不修改原 waypoint 实例任何字段。
+                                                    var tmp = new WaypointForTrack(
+                                                        new Waypoint
+                                                        {
+                                                            X = 0, Y = 0,
+                                                            Type = waypoint.Type,
+                                                            Action = string.Empty,
+                                                            MoveMode = MoveModeEnum.Walk.Code,
+                                                        },
+                                                        waypoint.MapName,
+                                                        waypoint.MapMatchMethod)
+                                                    {
+                                                        X = tx, Y = ty,
+                                                        MatX = tx, MatY = ty,
+                                                        GameX = 0, GameY = 0,
+                                                    };
+                                                    // multiplayer-kazuha-collect-point-broadcast: 二段 maxSteps 改为可配置（KazuhaSecondApproachMaxSteps），
+                                                    //   优先读 KazuhaCollectSyncCoordinator 持有的 _config（配置组覆盖后的实例），
+                                                    //   兜底读全局 AutoHoeingConfig。范围已由 ClampSecondApproachMaxSteps 守卫。
+                                                    var cfgMaxSteps = TaskContext.Instance().Config.AutoHoeingConfig.KazuhaSecondApproachMaxSteps;
+                                                    var maxSteps = cfgMaxSteps >= 1 && cfgMaxSteps <= 30 ? cfgMaxSteps : 6;
+                                                    await MoveCloseTo(tmp, closeDistance: 0.5, tailDelayMs: 0, maxSteps: maxSteps);
+                                                }
+                                            }
+                                            catch (OperationCanceledException) { throw; }
+                                            catch (Exception ex)
+                                            {
+                                                Logger.LogWarning(ex, "[联机] 非万叶玩家：二段精接近异常，跳过并进 WaitAtFightPointAsync 兜底");
+                                            }
 
                                             // multiplayer-kazuha-collect-sync: 走"万叶分支 / 普通成员分支"的同步流程
                                             Logger.LogInformation("[联机] 到达战斗点，进入聚物同步流程");
@@ -2979,6 +3062,33 @@ public class PathExecutor
         Point2f position;
         int targetOrientation;
         Logger.LogDebug("精确接近目标点，位置({x2},{y2})", $"{waypoint.GameX:F1}", $"{waypoint.GameY:F1}");
+
+        // 战斗结束后小地图可能短暂消失，等待派蒙头像出现（小地图可见的标志）。
+        // 与 MoveTo 入口同款机制：避免循环每步 GetPosition 返回 (0,0) 触发 ResolveAnomalies +
+        //   targetOrientation 跳动 → 视角剧烈抖动 → maxSteps 耗光超时（实测联机战后回点必现）。
+        // 1500ms 超时不阻塞主流程，恢复失败仍然继续走（兜底逻辑沿用 prePosition / 全局匹配）。
+        {
+            using var checkScreen = CaptureToRectArea();
+            if (!Bv.IsInMainUi(checkScreen))
+            {
+                var waitStart = DateTime.UtcNow;
+                var recovered = false;
+                while ((DateTime.UtcNow - waitStart).TotalMilliseconds < 1500)
+                {
+                    await Delay(100, ct);
+                    using var retryScreen = CaptureToRectArea();
+                    if (Bv.IsInMainUi(retryScreen))
+                    {
+                        recovered = true;
+                        break;
+                    }
+                }
+                if (!recovered)
+                {
+                    Logger.LogWarning("MoveCloseTo 等待主界面恢复超时(1500ms)，继续执行");
+                }
+            }
+        }
 
         var stepsTaken = 0;
         while (!ct.IsCancellationRequested)

@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时149.06秒，包含以下怪物：3只嗜岩·兽境幼兽、2只遗迹守卫、1只遗迹重机、2只深海龙蜥·原种、1只深海龙蜥·原种_600。",
     "enable_monster_loot_split": false,
     "hash_res": "07204760",
-    "last_modified_time": 1779519454450,
+    "last_modified_time": 1779604861323,
     "map_match_method": "",
     "map_name": "Enkanomiya",
     "name": "ZC001稻妻渊下宫常夜灵庙东北",
@@ -62,8 +62,8 @@
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": -421.898681640625,
-      "y": 508.805908203125
+      "x": -416.91845703125,
+      "y": 508.8206787109375
     },
     {
       "action": "combat_script",
@@ -71,8 +71,8 @@
       "id": 6,
       "move_mode": "dash",
       "type": "path",
-      "x": -351.1300000000001,
-      "y": 472.73
+      "x": -349.65625,
+      "y": 472.3438410305257
     },
     {
       "action": "fight",

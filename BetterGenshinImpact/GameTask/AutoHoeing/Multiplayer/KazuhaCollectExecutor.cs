@@ -66,6 +66,7 @@ public static class KazuhaCollectExecutor
         Action<KazuhaCollectStage>? onProgress = null,
         bool assumeAlreadySwitched = false,
         Avatar? preselectedKazuha = null,
+        Func<CancellationToken, Task>? onBeforeHoldE = null,
         CancellationToken ct = default)
     {
         ValidateFastPathArgs(assumeAlreadySwitched, preselectedKazuha);
@@ -136,6 +137,20 @@ public static class KazuhaCollectExecutor
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
                     // 视觉确认后再次超时 → 走原 SkillCdTimeoutForce 兜底（不再重复发阶段日志，避免日志重复）
+                }
+            }
+
+            // multiplayer-kazuha-collect-point-broadcast: HoldE 起手前注入 hook，
+            // 联机分支用此 hook 算 (collectX, collectY) 并 fire-and-forget 上报；
+            // 单机调用方不传即跳过，行为零差异（任何异常透传 OperationCanceledException
+            // 否则吞掉，不让 hook 抛出打断 HoldE 序列）。
+            if (onBeforeHoldE != null)
+            {
+                try { await onBeforeHoldE(ct); }
+                catch (OperationCanceledException) { throw; }
+                catch (Exception ex)
+                {
+                    Logger.LogDebug(ex, "[联机][聚物] onBeforeHoldE hook 抛异常，已忽略并继续 HoldE");
                 }
             }
 

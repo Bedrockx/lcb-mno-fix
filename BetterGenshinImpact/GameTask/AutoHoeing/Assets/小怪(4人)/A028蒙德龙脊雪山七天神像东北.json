@@ -10,7 +10,7 @@
     "description": "  路线信息：该路线预计用时66秒，包含以下怪物：3只冰萤。",
     "enable_monster_loot_split": false,
     "hash_res": "75441803",
-    "last_modified_time": 1779537890542,
+    "last_modified_time": 1779565382448,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "A028蒙德龙脊雪山七天神像东北",
@@ -49,9 +49,19 @@
       "y": 1192.4462890625
     },
     {
+      "action": "combat_script",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
+      "id": 4,
+      "locked": false,
+      "move_mode": "dash",
+      "type": "path",
+      "x": -1206.447265625,
+      "y": 1201.8779296875
+    },
+    {
       "action": "fight",
       "action_params": "",
-      "id": 4,
+      "id": 5,
       "move_mode": "dash",
       "type": "path",
       "x": -1206.447265625,

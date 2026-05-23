@@ -4,13 +4,17 @@
       {
         "links": "",
         "name": "蜜柑魚"
+      },
+      {
+        "links": "",
+        "name": "汐"
       }
     ],
     "bgi_version": "0.45.0",
     "description": "  路线信息：该路线预计用时36秒，包含以下怪物：2只冰史莱姆、2只雷萤。",
     "enable_monster_loot_split": false,
     "hash_res": "41646279",
-    "last_modified_time": 1779538174931,
+    "last_modified_time": 1779565482010,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B025璃月碧水原荻花洲",
@@ -30,7 +34,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.5)",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
       "id": 2,
       "move_mode": "dash",
       "type": "path",

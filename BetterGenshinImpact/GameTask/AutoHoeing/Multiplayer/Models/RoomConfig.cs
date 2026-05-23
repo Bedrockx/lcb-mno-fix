@@ -23,6 +23,8 @@ public class RoomConfig
     public int KazuhaSyncTimeoutSeconds { get; set; } = 20;
     /// <summary>万叶玩家等待 E 技 CD 的最长上限秒数（超时直接尝试释放，由 OCR + 视觉双判决定成败），范围 [3, 10]，默认 5。需保证小于 KazuhaSyncTimeoutSeconds</summary>
     public int KazuhaWaitSkillCdSeconds { get; set; } = 5;
+    /// <summary>拾取前精接近步数（联机万叶聚物），范围 [1, 30]，默认 6（约 0.5s 上限）。multiplayer-kazuha-collect-point-broadcast</summary>
+    public int KazuhaSecondApproachMaxSteps { get; set; } = 6;
     public int PartyTimeoutSeconds { get; set; } = 300;
     public bool MultiWorldEnabled { get; set; } = false;
     public int MultiWorldCount { get; set; } = 2;

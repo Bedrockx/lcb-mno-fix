@@ -14,7 +14,7 @@
     "description": "  路线信息：该路线预计用时39秒，包含以下怪物：3只水萤。",
     "enable_monster_loot_split": false,
     "hash_res": "58977054",
-    "last_modified_time": 1779538888569,
+    "last_modified_time": 1779566444996,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B064璃月云来海孤云阁",
@@ -43,7 +43,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;菈乌玛 e(hold);",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
       "id": 3,
       "move_mode": "dash",
       "type": "path",

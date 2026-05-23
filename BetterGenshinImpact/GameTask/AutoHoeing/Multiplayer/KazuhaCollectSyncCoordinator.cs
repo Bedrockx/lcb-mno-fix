@@ -6,8 +6,13 @@ using System.Threading.Tasks;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.AutoGeniusInvokation.Exception;
 using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models;
+using BetterGenshinImpact.GameTask.AutoPathing;
 using BetterGenshinImpact.GameTask.AutoPathing.Model;
+using BetterGenshinImpact.GameTask.Common;
+using BetterGenshinImpact.GameTask.Common.Element.Assets;
+using BetterGenshinImpact.GameTask.Common.Map;
 using Microsoft.Extensions.Logging;
+using OpenCvSharp;
 
 namespace BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
 
@@ -44,6 +49,13 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
     private readonly Action<string, bool, string> _onKazuhaCollectFinishedTerminalCache;
     private readonly Action<string, string> _onKazuhaCollectSkippedTerminalCache;
 
+    // multiplayer-kazuha-collect-point-broadcast: 缓存最近一次本类收到的 KazuhaCollectStarted (syncKey, x, y)。
+    // 由构造函数订阅 _client.KazuhaCollectStarted 事件维护；事件回调内仅当 IsValid(x, y) 时更新缓存。
+    // TryGetCollectPointForCurrent(syncKey) 在 syncKey 匹配时返回 true，给 PathExecutor 战后非万叶分支
+    // 调用以触发二段 MoveCloseTo 精接近聚物点。
+    private (string SyncKey, double X, double Y)? _lastCollectPoint;
+    private readonly Action<string, string, double, double> _onKazuhaCollectStartedCache;
+
     public KazuhaCollectSyncCoordinator(
         CoordinatorClient client,
         AutoHoeingConfig config,
@@ -73,6 +85,17 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
         };
         _client.KazuhaCollectFinished += _onKazuhaCollectFinishedTerminalCache;
         _client.KazuhaCollectSkipped += _onKazuhaCollectSkippedTerminalCache;
+
+        // multiplayer-kazuha-collect-point-broadcast: 订阅 KazuhaCollectStarted 维护 _lastCollectPoint。
+        // IsValid 守卫过滤 NaN / Inf / (0, 0)（与服务端 Hub IsValid 同语义、与 PBT-4 真值表对齐）。
+        _onKazuhaCollectStartedCache = (playerUid, syncKey, collectX, collectY) =>
+        {
+            if (string.IsNullOrEmpty(syncKey)) return;
+            if (!KazuhaCollectPointDecisions.IsValid(collectX, collectY)) return;
+            _lastCollectPoint = (syncKey, collectX, collectY);
+            _logger.LogDebug("[联机][聚物] 缓存聚物点 syncKey={Key} ({X:F1},{Y:F1})", syncKey, collectX, collectY);
+        };
+        _client.KazuhaCollectStarted += _onKazuhaCollectStartedCache;
     }
 
     /// <summary>
@@ -102,6 +125,69 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
     /// 不能读 TaskContext.Instance().Config.AutoHoeingConfig（配置组覆盖未应用到全局）。
     /// </summary>
     public bool IsConfigEnabled => KazuhaCollectSyncDecisions.IsConfigEnabledForPathExecutor(_config);
+
+    /// <summary>
+    /// 查询本周期是否已收到有效的聚物点广播。
+    /// 当且仅当 _lastCollectPoint.SyncKey == 当前 syncKey 时返回 true，并通过 out 参返回 (x, y)。
+    /// 由 PathExecutor 战后非万叶玩家分支在第一段 MoveCloseTo(战斗点) 完成后调用：
+    /// 返回 true 时构造临时 WaypointForTrack 做二段 MoveCloseTo(closeDistance:0.5, tailDelayMs:0, maxSteps:5)；
+    /// 返回 false 时跳过二段，进 WaitAtFightPointAsync 走原路径。
+    /// 内部调 KazuhaCollectPointDecisions.TryMatch 复用 PBT-5 覆盖的纯函数。
+    /// </summary>
+    public bool TryGetCollectPointForCurrent(string syncKey, out double x, out double y)
+    {
+        return KazuhaCollectPointDecisions.TryMatch(_lastCollectPoint, syncKey, out x, out y);
+    }
+
+    /// <summary>
+    /// 阻塞等待本周期聚物点广播到达，最多等 <paramref name="timeoutMs"/> 毫秒。
+    /// 已缓存命中（构造函数级订阅已记录）→ 立即返回 true（快速路径）。
+    /// 等待期间若万叶上报 → TCS 触发，返回 true。
+    /// 超时未到 → 返回 false。
+    /// 取消透传 OperationCanceledException（用户取消主任务）。
+    ///
+    /// 由 PathExecutor 非万叶玩家分支调用：在第一段 MoveCloseTo 之前 kick off（不 await），
+    /// 第一段完成后 await 拿结果，让"等广播"与"第一段精接近"时间重叠。
+    /// 用 subscribe-before-action 时序（先订阅再检查缓存）避免订阅前事件已到达造成的丢失窗口。
+    /// </summary>
+    public async Task<bool> TryWaitForCollectPointAsync(string syncKey, int timeoutMs, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(syncKey)) return false;
+
+        // 入口快速路径：构造函数级订阅已记录命中 → 立即返回
+        if (TryGetCollectPointForCurrent(syncKey, out _, out _)) return true;
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action<string, string, double, double> handler = (uid, evSyncKey, cx, cy) =>
+        {
+            if (string.IsNullOrEmpty(evSyncKey) || evSyncKey != syncKey) return;
+            if (!KazuhaCollectPointDecisions.IsValid(cx, cy)) return;
+            tcs.TrySetResult(true);
+        };
+        _client.KazuhaCollectStarted += handler;
+        try
+        {
+            // subscribe-before-action：订阅后再次检查缓存（订阅与首次检查之间可能错过的事件由此兜底）
+            if (TryGetCollectPointForCurrent(syncKey, out _, out _)) return true;
+
+            using var timeoutCts = new CancellationTokenSource(Math.Max(0, timeoutMs));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+            try
+            {
+                await tcs.Task.WaitAsync(linked.Token);
+                return true;
+            }
+            catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                _logger.LogDebug("[联机][聚物] 等聚物点广播超时 {Ms}ms，syncKey={Key}", timeoutMs, syncKey);
+                return false;
+            }
+        }
+        finally
+        {
+            _client.KazuhaCollectStarted -= handler;
+        }
+    }
 
     /// <summary>当前周期状态（用于日志/PBT 模型）。</summary>
     public KazuhaCollectState CurrentState { get; private set; }
@@ -173,8 +259,11 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
     /// 未启用门控时（IsConnected==false）直接 fallback 到 <c>Delay(KazuhaSyncWaitSeconds*1000)</c> 行为。
     /// <paramref name="prepTask"/> 为 PathExecutor 在 MoveCloseTo 之前 kick off 的 BeginPreparationAsync 任务，
     /// null 时（PathExecutor 未传 / 兜底）走原"RunAsKazuhaAsync 内串行 GetCombatScenes + RunAsync 自切人"路径。
+    /// multiplayer-kazuha-collect-point-broadcast: <paramref name="fightPointWaypoint"/> 类型从 Waypoint
+    /// 收紧为 WaypointForTrack，让万叶玩家 onBeforeHoldE hook 闭包能直接拿到 MapName/MapMatchMethod
+    /// 调用 Navigation.GetPosition；类型协变兼容（PathExecutor 传入的就是 WaypointForTrack 实例）。
     /// </summary>
-    public async Task WaitAtFightPointAsync(Waypoint fightPointWaypoint, Task<PreparationResult>? prepTask, CancellationToken ct)
+    public async Task WaitAtFightPointAsync(WaypointForTrack fightPointWaypoint, Task<PreparationResult>? prepTask, CancellationToken ct)
     {
         ResetForNextCycle();
         CurrentState = KazuhaCollectState.AtFightPoint;
@@ -196,8 +285,14 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
             return;
         }
 
-        // syncKey: 用当前路线索引 + waypoint 哈希唯一标识本段战斗点（房主与成员都本地构造，相同输入产生相同 key）
-        var syncKey = $"{_client.CurrentRouteIndex}:{fightPointWaypoint?.GetHashCode() ?? 0}";
+        // syncKey: 用当前路线索引 + waypoint X/Y 唯一标识本段战斗点（房主与成员都本地构造，相同输入产生相同 key）。
+        // 注意：必须用 X/Y 等内容字段，不能用 fightPointWaypoint.GetHashCode()——object.GetHashCode 默认基于
+        // 对象引用，每个客户端从 JSON 反序列化的 Waypoint 实例引用不同，hashcode 必然不一致 → syncKey 跨客户端不一致。
+        // X/Y 是 double 类型，不同客户端反序列化结果应完全相同（IEEE754 二进制位字符串化）。
+        // 用 InvariantCulture 保证不同 locale 下浮点格式一致（如 "1.5" vs "1,5"）。
+        var syncKey = fightPointWaypoint == null
+            ? $"{_client.CurrentRouteIndex}:0:0"
+            : $"{_client.CurrentRouteIndex}:{fightPointWaypoint.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}:{fightPointWaypoint.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}";
 
         // kazuha-player-auto-detection: 删除原"房主侧 kazuha_offline 预检"块。
         // 新机制下房主无法预知谁是 Kazuha（要等客户端声明）；若全员都没声明则 _kazuhaPlayerUid == null
@@ -207,7 +302,7 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
         {
             if (IsCurrentPlayerKazuha)
             {
-                await RunAsKazuhaAsync(syncKey, prepTask, ct);
+                await RunAsKazuhaAsync(fightPointWaypoint, syncKey, prepTask, ct);
             }
             else
             {
@@ -234,16 +329,17 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
     ///   (assumeAlreadySwitched=true + preselectedKazuha)；任意失败/兜底回退原"串行 GetCombatScenes + 自切人"路径。
     /// 非万叶玩家分支仍然先订阅终态事件再到点，因此万叶在他们订阅后才广播也安全。
     /// </summary>
-    private async Task RunAsKazuhaAsync(string syncKey, Task<PreparationResult>? prepTask, CancellationToken ct)
+    private async Task RunAsKazuhaAsync(WaypointForTrack fightPointWaypoint, string syncKey, Task<PreparationResult>? prepTask, CancellationToken ct)
     {
         var maskedUid = AutoPartyTask.MaskUid(_client.PlayerUid);
         _logger.LogInformation("[联机][聚物] 万叶玩家 {Uid} 到达战斗点，立即执行聚物 (syncKey={Key})", maskedUid, syncKey);
 
-        // BC2: 上报到点 + 广播 Started 改 fire-and-forget；schedule 顺序仍是 Arrived → Started，
-        // 不引入新事件丢失窗口（非万叶玩家"先订阅 Finished/Skipped 再上报到点"时序保持不变）。
+        // BC2: 上报到点改 fire-and-forget；schedule 顺序仍是 Arrived → 后续 Started（在 onBeforeHoldE hook 闭包内）。
+        // 非万叶玩家"先订阅 Finished/Skipped 再上报到点"时序保持不变。
         FireAndForget(_client.NotifyKazuhaArrivedAtFightPointAsync(syncKey, ct), "NotifyKazuhaArrivedAtFightPoint");
         CurrentState = KazuhaCollectState.Collecting;
-        FireAndForget(_client.NotifyKazuhaCollectStartedAsync(), "NotifyKazuhaCollectStarted");
+        // multiplayer-kazuha-collect-point-broadcast: 删除原"在此处广播 Started 0-参"调用，
+        // 改在 KazuhaCollectExecutor.RunAsync 的 onBeforeHoldE hook 闭包内调 4-参版本（含聚物点坐标）。
 
         // BC3+BC4: 消费 prepTask。OperationCanceledException 透传；其它异常 LogWarning + Skipped 兜底。
         PreparationResult prep;
@@ -312,6 +408,50 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
                 onProgress: stage => _logger.LogInformation("[联机][聚物] 万叶阶段: {Stage}", stage),
                 assumeAlreadySwitched: useFastPath,
                 preselectedKazuha: preKazuha,
+                onBeforeHoldE: hookCt =>
+                {
+                    // multiplayer-kazuha-collect-point-broadcast: HoldE 起手前算 + 上报聚物点。
+                    // 任意环节失败 → 调"无效坐标"分支 (NaN, NaN)，服务端 IsValid 守卫过滤、
+                    // 非万叶玩家本地 IsValid 守卫过滤 → 走原 MoveCloseTo(战斗点) 单段路径，零回归。
+                    // 朝向用 CharacterOrientation（角色面向）而不是 CameraOrientation（相机视角）：
+                    //   万叶 HoldE 风场聚物中心由角色脚下 + 角色面前定义，与相机视角无关；
+                    //   战斗结束后 MoveCloseTo 走回战斗点过程中角色面向已稳定到前进方向，
+                    //   此处取得的 angle 才是真正的 HoldE 风场指向。
+                    double cx, cy;
+                    try
+                    {
+                        using var ra = TaskControl.CaptureToRectArea();
+                        var pos = Navigation.GetPosition(ra, fightPointWaypoint.MapName, fightPointWaypoint.MapMatchMethod);
+                        if (pos.X == 0 && pos.Y == 0)
+                        {
+                            _logger.LogDebug("[联机][聚物] 聚物点上报：位置识别失败 (0,0)，调无效坐标分支");
+                            cx = double.NaN; cy = double.NaN;
+                        }
+                        else
+                        {
+                            // CharacterOrientation 输入是小地图 Mat，从全屏裁出
+                            using var miniMap = new OpenCvSharp.Mat(ra.SrcMat, MapAssets.Instance.MimiMapRect);
+                            var theta = CharacterOrientation.Compute(miniMap); // 角度，0-360（角色面向）
+                            (cx, cy) = KazuhaCollectPointDecisions.ComputeCollectPoint(
+                                pos.X, pos.Y, theta, forwardDistance: 1.0);
+                            _logger.LogDebug(
+                                "[联机][聚物] 上报聚物点 syncKey={Key} pos=({X:F1},{Y:F1}) θ={Theta}° (角色面向) → ({CX:F1},{CY:F1})",
+                                syncKey, pos.X, pos.Y, theta, cx, cy);
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[联机][聚物] 聚物点上报：位置/朝向获取失败，调无效坐标分支");
+                        cx = double.NaN; cy = double.NaN;
+                    }
+
+                    // fire-and-forget；CoordinatorClient 内部 try/catch + LogWarning + FireAndForget helper 双层兜底
+                    FireAndForget(
+                        _client.NotifyKazuhaCollectStartedAsync(syncKey, cx, cy),
+                        "NotifyKazuhaCollectStarted(syncKey,collectX,collectY)");
+                    return Task.CompletedTask;
+                },
                 ct: ct);
         }
         catch (RetryException)
@@ -445,6 +585,7 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
         _client.KazuhaPlayerUpdated -= _onKazuhaPlayerUpdated;
         _client.KazuhaCollectFinished -= _onKazuhaCollectFinishedTerminalCache;
         _client.KazuhaCollectSkipped -= _onKazuhaCollectSkippedTerminalCache;
+        _client.KazuhaCollectStarted -= _onKazuhaCollectStartedCache;
     }
 
     /// <summary>非万叶分支等待结果的内部承载类型。</summary>

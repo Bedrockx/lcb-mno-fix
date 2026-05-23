@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时89秒，包含以下怪物：1只冲锋丘丘人、1只丘丘雷兜王、1只雷丘丘萨满。",
     "enable_monster_loot_split": false,
     "hash_res": "05451261",
-    "last_modified_time": 1779381519269,
+    "last_modified_time": 1779602586892,
     "map_match_method": "",
     "map_name": "Enkanomiya",
     "name": "ZC002稻妻渊下宫常夜灵庙南",
@@ -58,7 +58,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.1);钟离 a(0.1),e(hold);茜特菈莉 e;莱依拉 e;芙宁娜 e;玛薇卡 e;爱可菲 e;",
+      "action_params": "attack(0.1)",
       "id": 5,
       "move_mode": "fly",
       "type": "orientation",
@@ -67,7 +67,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": ";哥伦比娅 e,wait(0.1),keypress(e),wait(0.2),keypress(e); ;",
+      "action_params": "attack(0.1)",
       "id": 6,
       "move_mode": "fly",
       "type": "path",

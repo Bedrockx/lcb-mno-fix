@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时121.94秒，包含以下怪物：2只冰史莱姆、2只狂风之核、2只幼岩龙蜥、1只岩龙蜥。",
     "enable_monster_loot_split": false,
     "hash_res": "82151108",
-    "last_modified_time": 1779362048064,
+    "last_modified_time": 1779604408103,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B010璃月奥藏山北",
@@ -58,12 +58,12 @@
     },
     {
       "action": "combat_script",
-      "action_params": "keypress(x);芙宁娜 e;玛薇卡 e;伊涅芙 e;",
+      "action_params": "keypress(x);芙宁娜 e;玛薇卡 e;伊涅芙 e;菈乌玛 e;莉奈娅 e;",
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": 1613.3099999999995,
-      "y": 1152.8500000000004
+      "x": 1612.8046875,
+      "y": 1156.8115403865431
     },
     {
       "action": "",
@@ -98,8 +98,8 @@
       "id": 9,
       "move_mode": "fly",
       "type": "path",
-      "x": 1609.5771484375,
-      "y": 1265.09716796875
+      "x": 1608.013671875,
+      "y": 1272.64501953125
     },
     {
       "action": "combat_script",

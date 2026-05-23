@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时126.58秒，包含以下怪物：2只狂风之核、1只岩龙蜥。",
     "enable_monster_loot_split": false,
     "hash_res": "06786534",
-    "last_modified_time": 1779516078625,
+    "last_modified_time": 1779604586237,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B012璃月庆云顶",
@@ -57,7 +57,7 @@
       "y": 945.75
     },
     {
-      "action": "fight",
+      "action": "",
       "action_params": "",
       "id": 5,
       "move_mode": "dash",
@@ -66,7 +66,7 @@
       "y": 963.7966207315176
     },
     {
-      "action": "",
+      "action": "fight",
       "action_params": "",
       "id": 6,
       "move_mode": "dash",

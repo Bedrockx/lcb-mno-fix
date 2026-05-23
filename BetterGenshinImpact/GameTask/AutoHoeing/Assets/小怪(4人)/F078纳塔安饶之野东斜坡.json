@@ -15,7 +15,7 @@
     "description": "  路线信息：该路线预计用时154秒，包含以下怪物：10只幼突角龙、6只突角龙。",
     "enable_monster_loot_split": false,
     "hash_res": "81193698",
-    "last_modified_time": 1777663351141,
+    "last_modified_time": 1779600865048,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "F078纳塔安饶之野东斜坡",
@@ -80,7 +80,7 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;菈乌玛 e; ;",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
       "id": 7,
       "move_mode": "dash",
       "type": "path",
@@ -97,18 +97,9 @@
       "y": -2915.875796790857
     },
     {
-      "action": "combat_script",
-      "action_params": "wait(1)",
-      "id": 9,
-      "move_mode": "walk",
-      "type": "orientation",
-      "x": 9906.7080078125,
-      "y": -2915.9677734375
-    },
-    {
       "action": "force_tp",
       "action_params": "",
-      "id": 10,
+      "id": 9,
       "move_mode": "walk",
       "type": "teleport",
       "x": 9808.4,
@@ -117,7 +108,7 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 11,
+      "id": 10,
       "move_mode": "dash",
       "type": "path",
       "x": 9774.39,
@@ -126,7 +117,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 12,
+      "id": 11,
       "move_mode": "dash",
       "type": "path",
       "x": 9756.73,
@@ -135,18 +126,9 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 13,
+      "id": 12,
       "move_mode": "dash",
       "type": "path",
-      "x": 9720.91,
-      "y": -2757.369999999999
-    },
-    {
-      "action": "combat_script",
-      "action_params": "wait(1)",
-      "id": 14,
-      "move_mode": "dash",
-      "type": "orientation",
       "x": 9720.91,
       "y": -2757.369999999999
     }

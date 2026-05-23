@@ -5057,6 +5057,25 @@
                                                  Value="{Binding Config.AutoHoeingConfig.KazuhaWaitSkillCdSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </Grid>
 
+                                <!-- 拾取前精接近步数（联机万叶聚物） -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="拾取前精接近步数（联机万叶聚物）" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                                 Text="1-30，默认6（约0.5s上限），战后回点完成第一段后再做二段精接近的最大步数" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120"
+                                                 Minimum="1" Maximum="30" SpinButtonPlacementMode="Inline"
+                                                 IsEnabled="{Binding Config.AutoHoeingConfig.EnableKazuhaSync}"
+                                                 Value="{Binding Config.AutoHoeingConfig.KazuhaSecondApproachMaxSteps, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
                                 <!-- 从第几条路线开始 -->
                                 <Grid Margin="0,0,0,8">
                                     <Grid.RowDefinitions>

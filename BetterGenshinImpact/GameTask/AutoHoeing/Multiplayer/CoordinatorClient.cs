@@ -59,8 +59,14 @@ public class CoordinatorClient : IAsyncDisposable
     public event Action<int>? StartRouteReceived; // targetRouteIndex
 
     // === 万叶聚物同步事件 ===
-    /// <summary>万叶玩家发起聚物动作时触发，载荷为发起者 PlayerUid + 当前周期 syncKey。</summary>
-    public event Action<string, string>? KazuhaCollectStarted;
+    /// <summary>
+    /// 万叶玩家发起聚物动作时触发，载荷为：
+    ///   - playerUid: 发起者 PlayerUid
+    ///   - syncKey: 当前周期 syncKey
+    ///   - collectX/Y: 聚物点小地图坐标，无效时为 NaN
+    ///     （multiplayer-kazuha-collect-point-broadcast）。
+    /// </summary>
+    public event Action<string, string, double, double>? KazuhaCollectStarted;
     /// <summary>万叶聚物动作完成时触发，载荷为发起者 PlayerUid + 成功标志 + 当前周期 syncKey。</summary>
     public event Action<string, bool, string>? KazuhaCollectFinished;
     /// <summary>万叶聚物因任意降级原因被跳过时触发，载荷为原因码（team_no_kazuha / switch_failed / e_skill_not_released / kazuha_offline / kazuha_disconnected / kazuha_anomaly / timeout）+ 当前周期 syncKey。</summary>
@@ -138,8 +144,9 @@ public class CoordinatorClient : IAsyncDisposable
                 playerUid => KazuhaPlayerUpdated?.Invoke(playerUid));
 
             // === 万叶聚物同步事件订阅 ===
-            _connection.On<string, string>("KazuhaCollectStarted",
-                (playerUid, syncKey) => KazuhaCollectStarted?.Invoke(playerUid, syncKey));
+            _connection.On<string, string, double, double>("KazuhaCollectStarted",
+                (playerUid, syncKey, collectX, collectY) =>
+                    KazuhaCollectStarted?.Invoke(playerUid, syncKey, collectX, collectY));
 
             _connection.On<string, bool, string>("KazuhaCollectFinished",
                 (playerUid, success, syncKey) => KazuhaCollectFinished?.Invoke(playerUid, success, syncKey));
@@ -594,18 +601,20 @@ public class CoordinatorClient : IAsyncDisposable
 
     /// <summary>
     /// 万叶玩家广播"开始执行聚物动作"。
-    /// 服务端会向房间所有客户端转发 KazuhaCollectStarted 事件，附带 PlayerUid。
+    /// multiplayer-kazuha-collect-point-broadcast: 加 syncKey + 聚物点 (collectX, collectY) 三参。
+    /// 调用方在朝向 / 位置识别失败时传 (NaN, NaN)，由服务端 IsValid 守卫过滤。
+    /// 服务端会向房间所有客户端转发 KazuhaCollectStarted 事件（始终 4 参广播）。
     /// </summary>
-    public async Task NotifyKazuhaCollectStartedAsync()
+    public async Task NotifyKazuhaCollectStartedAsync(string syncKey, double collectX, double collectY)
     {
         if (_connection == null || !IsConnected) return;
         try
         {
-            await _connection.InvokeAsync("NotifyKazuhaCollectStarted");
+            await _connection.InvokeAsync("NotifyKazuhaCollectStarted", syncKey, collectX, collectY);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[联机][聚物] NotifyKazuhaCollectStartedAsync 失败（静默忽略）");
+            _logger.LogWarning(ex, "[联机][聚物] NotifyKazuhaCollectStartedAsync 失败（静默忽略）syncKey={Key}", syncKey);
         }
     }
 

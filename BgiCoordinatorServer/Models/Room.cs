@@ -161,4 +161,15 @@ public class KazuhaCollectRoomState
     /// 避免错过事件后空等 KazuhaSyncTimeoutSeconds 超时（multiplayer-kazuha-pre-cast-positioning Q3）。
     /// </summary>
     public string? CurrentSyncKey { get; set; }
+
+    /// <summary>
+    /// 当前周期的聚物点小地图坐标 (collectX, collectY)，由万叶玩家在 HoldE 起手前
+    /// 通过 NotifyKazuhaCollectStarted(syncKey, x, y) 上报；仅当客户端传入有效坐标
+    /// (非 NaN / 非 Inf / 非 (0,0)) 时写入，否则保持 null。
+    /// 周期复位时（NotifyKazuhaArrivedAtFightPoint 检测 TerminalBroadcasted == true 时）一并清空，
+    /// 生命期与 CurrentSyncKey 完全对齐。客户端监听 KazuhaCollectStarted 广播时携带此坐标
+    /// （无效则用 NaN 透传），非万叶玩家用于二段 MoveCloseTo 精接近聚物落点
+    /// （multiplayer-kazuha-collect-point-broadcast）。
+    /// </summary>
+    public (double X, double Y)? CurrentCollectPoint { get; set; }
 }

@@ -354,6 +354,15 @@ public partial class AutoHoeingConfig : ObservableObject
     private int _kazuhaWaitSkillCdSeconds = 5;
 
     /// <summary>
+    /// 拾取前精接近步数（联机万叶聚物）：
+    /// 非万叶玩家在战后回点完成第一段粗接近后，再做"二段精接近"到万叶上报的聚物点 / 兜底接近战斗点。
+    /// 步数越大上限耗时越长（每步 ~80ms），范围 [1, 30]，默认 6（约 0.5s 上限）。
+    /// 仅联机万叶聚物分支生效，单机零回归（multiplayer-kazuha-collect-point-broadcast）。
+    /// </summary>
+    [ObservableProperty]
+    private int _kazuhaSecondApproachMaxSteps = 6;
+
+    /// <summary>
     /// 房间白名单，逗号分隔的玩家名称
     /// </summary>
     [ObservableProperty]

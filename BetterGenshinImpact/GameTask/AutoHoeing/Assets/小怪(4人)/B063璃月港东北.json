@@ -15,7 +15,7 @@
     "description": "  路线信息：该路线预计用时271秒，包含以下怪物：14只水史莱姆、3只大型水史莱姆、3只风史莱姆、1只大型风史莱姆、3只冰史莱姆、1只大型冰史莱姆、1只水深渊法师、1只冰深渊法师、1只盗宝团·斥候、1只盗宝团·冰之药剂师、1只盗宝团·神射手、3只水萤。",
     "enable_monster_loot_split": false,
     "hash_res": "23418141",
-    "last_modified_time": 1779538940903,
+    "last_modified_time": 1779566431319,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B063璃月港东北",
@@ -31,11 +31,11 @@
       "move_mode": "walk",
       "type": "teleport",
       "x": 25.94000000000051,
-      "y": -112.28999999999996
+      "y": -112.29000000000087
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;菈乌玛 e(hold);",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
       "id": 2,
       "move_mode": "dash",
       "type": "path",
@@ -91,14 +91,14 @@
       "action": "",
       "action_params": "",
       "id": 8,
-      "move_mode": "dash",
+      "move_mode": "jump",
       "type": "path",
-      "x": -80.5390625,
-      "y": -62.4072265625
+      "x": -90.91072550150056,
+      "y": -59.031122865757425
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;",
+      "action_params": "e",
       "id": 9,
       "move_mode": "dash",
       "type": "path",
@@ -115,18 +115,9 @@
       "y": -75.7958984375
     },
     {
-      "action": "",
-      "action_params": "",
-      "id": 11,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -137.875,
-      "y": -75.7958984375
-    },
-    {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;",
-      "id": 12,
+      "action_params": "e",
+      "id": 11,
       "move_mode": "dash",
       "type": "path",
       "x": -170.125,
@@ -135,7 +126,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 13,
+      "id": 12,
       "move_mode": "dash",
       "type": "path",
       "x": -182.55859375,
@@ -144,7 +135,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 14,
+      "id": 13,
       "move_mode": "dash",
       "type": "path",
       "x": -173.68359375,
@@ -153,16 +144,7 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 15,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -195.259765625,
-      "y": -51.9453125
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 16,
+      "id": 14,
       "move_mode": "dash",
       "type": "path",
       "x": -195.259765625,
@@ -170,8 +152,8 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;",
-      "id": 17,
+      "action_params": "e",
+      "id": 15,
       "move_mode": "dash",
       "type": "path",
       "x": -226.998046875,
@@ -180,7 +162,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 18,
+      "id": 16,
       "move_mode": "dash",
       "type": "path",
       "x": -242.439453125,
@@ -189,16 +171,7 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 19,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -237.95999999999913,
-      "y": -84.68000000000029
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 20,
+      "id": 17,
       "move_mode": "dash",
       "type": "path",
       "x": -237.95999999999913,
@@ -207,16 +180,7 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 21,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -263.423828125,
-      "y": -129.6923828125
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 22,
+      "id": 18,
       "move_mode": "dash",
       "type": "path",
       "x": -263.423828125,
@@ -224,8 +188,8 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;",
-      "id": 23,
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
+      "id": 19,
       "move_mode": "dash",
       "type": "path",
       "x": -215.994140625,
@@ -234,52 +198,16 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 24,
+      "id": 20,
       "move_mode": "dash",
       "type": "path",
       "x": -230.630859375,
       "y": -160.39599609375
     },
     {
-      "action": "",
-      "action_params": "",
-      "id": 25,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -230.630859375,
-      "y": -160.39599609375
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 26,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -227.1328125,
-      "y": -151.16748046875
-    },
-    {
       "action": "fight",
       "action_params": "",
-      "id": 27,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -216.7421875,
-      "y": -138.7685546875
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 28,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -216.7421875,
-      "y": -138.7685546875
-    },
-    {
-      "action": "fight",
-      "action_params": "",
-      "id": 29,
+      "id": 21,
       "move_mode": "dash",
       "type": "path",
       "x": -183.142578125,
@@ -288,7 +216,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 30,
+      "id": 22,
       "move_mode": "dash",
       "type": "path",
       "x": -183.142578125,
@@ -297,7 +225,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 31,
+      "id": 23,
       "move_mode": "jump",
       "type": "path",
       "x": -182.85546875,
@@ -305,8 +233,8 @@
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;哥伦比娅 e;菈乌玛 e(hold);",
-      "id": 32,
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
+      "id": 24,
       "move_mode": "dash",
       "type": "path",
       "x": -173.072265625,
@@ -315,7 +243,7 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 33,
+      "id": 25,
       "move_mode": "dash",
       "type": "path",
       "x": -141.90234375,

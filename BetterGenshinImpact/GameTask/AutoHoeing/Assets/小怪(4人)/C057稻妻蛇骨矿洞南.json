@@ -1,0 +1,51 @@
+{
+  "info": {
+    "author": "mno",
+    "authors": [
+      {
+        "links": "https://github.com/Bedrockx",
+        "name": "mno"
+      }
+    ],
+    "bgi_version": "0.45.0",
+    "description": "  路线信息：该路线预计用时34秒，包含以下怪物：4只野伏·火伏番。",
+    "enable_monster_loot_split": false,
+    "hash_res": "68432125",
+    "last_modified_time": 1779600665773,
+    "map_match_method": "",
+    "map_name": "Teyvat",
+    "name": "C057稻妻蛇骨矿洞南",
+    "tags": [],
+    "type": "collect",
+    "version": "1.0"
+  },
+  "positions": [
+    {
+      "action": "",
+      "action_params": "",
+      "id": 1,
+      "move_mode": "dash",
+      "type": "teleport",
+      "x": -2399.67,
+      "y": -4123.21
+    },
+    {
+      "action": "",
+      "action_params": "",
+      "id": 2,
+      "move_mode": "dash",
+      "type": "path",
+      "x": -2381.05,
+      "y": -4130.36
+    },
+    {
+      "action": "fight",
+      "action_params": "",
+      "id": 3,
+      "move_mode": "dash",
+      "type": "path",
+      "x": -2358.23,
+      "y": -4130.31
+    }
+  ]
+}

@@ -378,6 +378,8 @@ public class CoordinatorHub : Hub
                 room.KazuhaCollect.TerminalBroadcasted = false;
                 room.KazuhaCollect.TerminalKind = null;
                 room.KazuhaCollect.CurrentSyncKey = null;
+                // multiplayer-kazuha-collect-point-broadcast: 周期复位时一并清空聚物点缓存
+                room.KazuhaCollect.CurrentCollectPoint = null;
             }
 
             // multiplayer-kazuha-pre-cast-positioning Q3: 记录首个到点者传入的 syncKey；
@@ -405,8 +407,16 @@ public class CoordinatorHub : Hub
         }
     }
 
-    /// <summary>万叶玩家广播"开始执行聚物动作"。仅记录 + 广播，不做终态守卫。</summary>
-    public async Task NotifyKazuhaCollectStarted()
+    /// <summary>
+    /// 万叶玩家广播"开始执行聚物动作"。仅记录 + 广播，不做终态守卫。
+    /// multiplayer-kazuha-collect-point-broadcast: 增加 syncKey + 聚物点 (collectX, collectY) 三参。
+    /// 仅当 IsValid(collectX, collectY) 时把 (X, Y) 写入 room.KazuhaCollect.CurrentCollectPoint，
+    /// 否则保持 null；广播始终携带 4 参，无效坐标用 NaN 透传，由客户端 IsValid 守卫过滤。
+    /// 注意：SignalR 不支持 hub 方法重载，老客户端调 0-参 InvokeAsync 会因 routing 失败
+    /// 抛 HubException → 客户端 try/catch 静默 → 走退化路径（不上报聚物点）。
+    /// 部署顺序：先服务端、后客户端，最大化平滑过渡。
+    /// </summary>
+    public async Task NotifyKazuhaCollectStarted(string syncKey, double collectX, double collectY)
     {
         var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
         if (room == null || roomCode == null) return;
@@ -422,16 +432,37 @@ public class CoordinatorHub : Hub
             }
         }
 
+        // IsValid: NaN / Inf / (0, 0) 全部判无效（与 KazuhaCollectPointDecisions.IsValid 同语义）
+        bool collectPointValid = !double.IsNaN(collectX) && !double.IsNaN(collectY)
+                              && !double.IsInfinity(collectX) && !double.IsInfinity(collectY)
+                              && !(collectX == 0.0 && collectY == 0.0);
+
         var playerUid = "";
-        string? syncKey;
+        string? broadcastSyncKey;
         lock (room)
         {
             playerUid = room.Players.FirstOrDefault(p => p.ConnectionId == Context.ConnectionId)?.PlayerUid ?? "";
-            syncKey = room.KazuhaCollect.CurrentSyncKey;
+            // 优先用客户端传入的 syncKey（与原作 CurrentSyncKey 应当一致）；
+            // 空则 fallback 到 CurrentSyncKey（兼容客户端传空 syncKey 的极端场景）
+            broadcastSyncKey = string.IsNullOrEmpty(syncKey) ? room.KazuhaCollect.CurrentSyncKey : syncKey;
+
+            if (collectPointValid)
+            {
+                room.KazuhaCollect.CurrentCollectPoint = (collectX, collectY);
+            }
+            else
+            {
+                room.KazuhaCollect.CurrentCollectPoint = null;
+            }
         }
 
-        _logger.LogInformation("[KazuhaCollect] 房间 {Code} 万叶 {Uid} 开始聚物 syncKey={Key}", roomCode, playerUid, syncKey);
-        await Clients.Group(roomCode).SendAsync("KazuhaCollectStarted", playerUid, syncKey ?? "");
+        _logger.LogInformation(
+            "[KazuhaCollect] 房间 {Code} 万叶 {Uid} 开始聚物 syncKey={Key} collectPoint=({X},{Y}) valid={Valid}",
+            roomCode, playerUid, broadcastSyncKey, collectX, collectY, collectPointValid);
+
+        // 始终广播 4-参（无效坐标用 NaN 透传给客户端，客户端 IsValid 守卫会过滤）
+        await Clients.Group(roomCode).SendAsync(
+            "KazuhaCollectStarted", playerUid, broadcastSyncKey ?? "", collectX, collectY);
     }
 
     /// <summary>万叶玩家广播"聚物动作完成"。同周期 TerminalBroadcasted 守卫保证至多触发一次（Property 8）。</summary>
@@ -980,6 +1011,8 @@ public class CoordinatorHub : Hub
             room.KazuhaCollect.TerminalBroadcasted = false;
             room.KazuhaCollect.TerminalKind = null;
             room.KazuhaCollect.CurrentSyncKey = null;
+            // multiplayer-kazuha-collect-point-broadcast: 多轮世界新轮次开始时一并清空聚物点缓存
+            room.KazuhaCollect.CurrentCollectPoint = null;
 
             _logger.LogInformation("[ResetForNewWorldRound] 房间{RoomCode}进入第{Round}轮，等待点、异常状态、万叶候选已重置", roomCode, newRound);
         }

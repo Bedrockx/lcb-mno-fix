@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时216.63秒，包含以下怪物：1只射手丘丘人、1只丘丘雷兜王、1只丘丘岩盔王、1只大型碎石隙境原体、3只碎石隙境原体、2只大型狂蔓隙境原体。",
     "enable_monster_loot_split": false,
     "hash_res": "10796441",
-    "last_modified_time": 1779387964381,
+    "last_modified_time": 1779561203866,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "E037枫丹厄里那斯北",
@@ -66,7 +66,7 @@
       "y": 2982.89404296875
     },
     {
-      "action": "nahida_collect",
+      "action": "stop_flying",
       "action_params": "",
       "id": 6,
       "move_mode": "fly",
@@ -111,18 +111,9 @@
       "y": 3061.49
     },
     {
-      "action": "combat_script",
-      "action_params": ";哥伦比娅 e,wait(0.15),keypress(e),wait(0.15),keypress(e); ;",
-      "id": 11,
-      "move_mode": "dash",
-      "type": "path",
-      "x": 5086.540000000001,
-      "y": 3146.369999999999
-    },
-    {
       "action": "fight",
       "action_params": "",
-      "id": 12,
+      "id": 11,
       "move_mode": "dash",
       "type": "path",
       "x": 5086.540000000001,
@@ -131,7 +122,7 @@
     {
       "action": "",
       "action_params": "",
-      "id": 13,
+      "id": 12,
       "move_mode": "run",
       "type": "path",
       "x": 5092.49,
@@ -140,7 +131,7 @@
     {
       "action": "fight",
       "action_params": "",
-      "id": 14,
+      "id": 13,
       "move_mode": "dash",
       "type": "path",
       "x": 5165.23,

@@ -8,10 +8,10 @@
       }
     ],
     "bgi_version": "0.45.0",
-    "description": "  路线信息：该路线预计用时133.19秒，包含以下怪物：1只岩史莱姆、1只丘丘雷兜王、2只深海龙蜥·原种、1只深海龙蜥·原种_600。",
+    "description": "  路线信息：该路线预计用时133.19秒，包含以下怪物：1只岩史莱姆、1只丘丘雷兜王、1只深海龙蜥·原种_600。",
     "enable_monster_loot_split": false,
     "hash_res": "26834014",
-    "last_modified_time": 1779520616233,
+    "last_modified_time": 1779602943707,
     "map_match_method": "",
     "map_name": "Enkanomiya",
     "name": "ZC018稻妻渊下宫蛇心之地",
@@ -48,31 +48,49 @@
       "y": -327.140869140625
     },
     {
-      "action": "combat_script",
-      "action_params": "wait(0.3),j,wait(1.5),j",
+      "action": "stop_flying",
+      "action_params": "1300",
       "id": 4,
       "move_mode": "fly",
       "type": "path",
-      "x": 372.21875,
-      "y": -322.5630006678907
+      "x": 372.96875,
+      "y": -324.6242717557957
     },
     {
-      "action": "stop_flying",
-      "action_params": "",
+      "action": "combat_script",
+      "action_params": ";钟离 a(0.1),keypress(q),e(hold);茜特菈莉 e;莱依拉 e;伊涅芙 e; ;",
       "id": 5,
-      "move_mode": "fly",
+      "move_mode": "dash",
       "type": "path",
-      "x": 351.4053955860775,
-      "y": -311.78079925132624
+      "x": 382.7813720703125,
+      "y": -323.793701171875
     },
     {
-      "action": "fight",
+      "action": "",
       "action_params": "",
       "id": 6,
       "move_mode": "dash",
       "type": "path",
-      "x": 348.87744140625,
-      "y": -322.20556640625
+      "x": 382.382080078125,
+      "y": -319.832275390625
+    },
+    {
+      "action": "",
+      "action_params": "",
+      "id": 7,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 365.6925048828125,
+      "y": -306.49853515625
+    },
+    {
+      "action": "fight",
+      "action_params": "",
+      "id": 8,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 349.94970703125,
+      "y": -320.315673828125
     }
   ]
 }

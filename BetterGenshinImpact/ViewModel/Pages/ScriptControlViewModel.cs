@@ -2144,6 +2144,7 @@ public partial class ScriptControlViewModel : ViewModel
         var kazuhaSyncWaitSecondsBox = new TextBox { Text = GetInt("kazuhaSyncWaitSeconds", globalCfg.KazuhaSyncWaitSeconds).ToString(), PlaceholderText = "秒，0-30，默认1" };
         var kazuhaSyncTimeoutSecondsBox = new TextBox { Text = GetInt("kazuhaSyncTimeoutSeconds", globalCfg.KazuhaSyncTimeoutSeconds).ToString(), PlaceholderText = "秒，5-120，默认20" };
         var kazuhaWaitSkillCdSecondsBox = new TextBox { Text = GetInt("kazuhaWaitSkillCdSeconds", globalCfg.KazuhaWaitSkillCdSeconds).ToString(), PlaceholderText = "秒，3-10，默认5" };
+        var kazuhaSecondApproachMaxStepsBox = new TextBox { Text = GetInt("kazuhaSecondApproachMaxSteps", globalCfg.KazuhaSecondApproachMaxSteps).ToString(), PlaceholderText = "步，1-30，默认6" };
 
         // 联动启用：仅当勾选"启用万叶聚物同步"时三个输入框才有效
         // kazuha-player-auto-detection: 替换原"按 KazuhaPlayerIndex ∈ [1,4] 判定"，改为 EnableKazuhaSync 布尔门控
@@ -2153,6 +2154,7 @@ public partial class ScriptControlViewModel : ViewModel
             kazuhaSyncWaitSecondsBox.IsEnabled = enabled;
             kazuhaSyncTimeoutSecondsBox.IsEnabled = enabled;
             kazuhaWaitSkillCdSecondsBox.IsEnabled = enabled;
+            kazuhaSecondApproachMaxStepsBox.IsEnabled = enabled;
         }
         enableKazuhaSyncCheck.Checked += (_, _) => UpdateKazuhaSyncEnabled();
         enableKazuhaSyncCheck.Unchecked += (_, _) => UpdateKazuhaSyncEnabled();
@@ -2301,18 +2303,21 @@ public partial class ScriptControlViewModel : ViewModel
         hostPanel.Children.Add(MakeSmallRow(
             MakeSmallField("集合点超时（秒）", syncTimeoutBox, 65),
             MakeSmallField("最低同步人数（0=等齐）", minPlayersBox, 50)));
-        // 第二行：集合点最小距离 + 万叶序号
+        // 第二行：集合点最小距离 + 起始路线（万叶聚物开关挪到下面"万叶聚物同步配置"组首行）
         hostPanel.Children.Add(MakeSmallRow(
             MakeSmallField("集合点最小距离", syncPointMinDistBox, 65),
-            MakeSmallField("启用万叶聚物同步", enableKazuhaSyncCheck, 130)));
-        hostPanel.Children.Add(MakeSmallRow(
             MakeSmallField("从第几条路线开始（0=从头）", startRouteIndexBox, 65)));
 
         // 万叶聚物同步配置（仅在启用万叶聚物同步时生效）
+        // 启用开关与其他万叶配置放一组，用户调参时不需要在两组之间来回找
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("启用万叶聚物同步", enableKazuhaSyncCheck, 130)));
         hostPanel.Children.Add(MakeSmallRow(
             MakeSmallField("万叶聚物完成后停留（秒，0-30）", kazuhaSyncWaitSecondsBox, 70),
             MakeSmallField("聚物同步总超时（秒，5-120）", kazuhaSyncTimeoutSecondsBox, 70),
             MakeSmallField("万叶 E 技 CD 等待上限（秒，3-10）", kazuhaWaitSkillCdSecondsBox, 70)));
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("拾取前精接近步数（联机万叶聚物，1-30）", kazuhaSecondApproachMaxStepsBox, 70)));
 
         // 分组4：战斗配置
         hostPanel.Children.Add(MakeGroupHeader("战斗配置"));
@@ -2539,6 +2544,7 @@ public partial class ScriptControlViewModel : ViewModel
                     if (int.TryParse(kazuhaSyncWaitSecondsBox.Text, out var ksw)) settings["kazuhaSyncWaitSeconds"] = ksw;
                     if (int.TryParse(kazuhaSyncTimeoutSecondsBox.Text, out var kst)) settings["kazuhaSyncTimeoutSeconds"] = kst;
                     if (int.TryParse(kazuhaWaitSkillCdSecondsBox.Text, out var kwc)) settings["kazuhaWaitSkillCdSeconds"] = kwc;
+                    if (int.TryParse(kazuhaSecondApproachMaxStepsBox.Text, out var ksam)) settings["kazuhaSecondApproachMaxSteps"] = ksam;
                     if (int.TryParse(fightTimeoutBox.Text, out var fts)) settings["fightTimeoutSeconds"] = fts;
                     settings["debugMode"] = debugModeCheck.IsChecked ?? false;
                     settings["useFixedDebugRoutes"] = useFixedRoutesCheck.IsChecked ?? false;
