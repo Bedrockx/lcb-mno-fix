@@ -827,7 +827,7 @@ public class AutoFightTask : ISoloTask
                                                         if (_taskParam.FinishDetectConfig.RotationMode &&
                                                             _taskParam.FinishDetectConfig.RotateFindEnemyEnabled)
                                                         {
-                                                            var aa =await CheckFightFinish(0, detectDelayTime, cts2.Token);
+                                                            var aa = CheckFightFinish(0, detectDelayTime, cts2.Token).Result;
                                                             if (aa)
                                                             {
                                                                 FightEndTotoly  = true;

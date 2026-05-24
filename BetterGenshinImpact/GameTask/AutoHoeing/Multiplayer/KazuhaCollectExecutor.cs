@@ -104,40 +104,34 @@ public static class KazuhaCollectExecutor
                 onProgress?.Invoke(KazuhaCollectStage.Switched);
             }
 
-            // 等 CD：超时不算失败（requirements 3.5），由后续 OCR + 视觉双判决定实际成败
-            try
-            {
-                using var cdCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                cdCts.CancelAfter(TimeSpan.FromSeconds(waitSkillCdSeconds));
-                await kazuha!.WaitSkillCd(cdCts.Token);
-                onProgress?.Invoke(KazuhaCollectStage.SkillCdReady);
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-            {
-                // 仅当外层 ct 未触发时才视为本地超时直放；外层 ct 触发的取消应继续向上抛
-                onProgress?.Invoke(KazuhaCollectStage.SkillCdTimeoutForce);
-            }
-
-            // EB1: 长 E 前视觉确认（参考 AutoFightTask.cs L1361 / kazuha-collect-pre-cast-visual-check-and-retry）。
-            // retryCount=1：内部不重试只判一次；isResetCd=false：不动 ManualSkillCd 状态机（Q1 决议）；
+            // 视觉先判 → 推算兜底（照搬 AutoFightTask.cs L1377~L1408 万叶长 E 拾取样板）。
+            // 视觉就绪（AvatarSkillAsync 返回 false）→ 立即触发 SkillCdReady，跳过 WaitSkillCd 推算；
+            // 视觉看到 CD（AvatarSkillAsync 返回 true）→ 走 WaitSkillCd 推算兜底，保留 waitSkillCdSeconds 本地超时。
+            // retryCount=1：内部不重试只判一次；isResetCd=false：不动 ManualSkillCd 状态机；
             // needLog=true：日志含 CD 状态。
-            // 返回 true → 视觉确认 E 已就绪，直接进入长按 E；
-            // 返回 false → 视觉看到 CD 数字 → 再调一次 WaitSkillCd 等真 CD（仍受外层 ct 约束）。
-            if (!await AutoFightSkill.AvatarSkillAsync(
+            if (await AutoFightSkill.AvatarSkillAsync(
                     Logger, kazuha!,
                     skills: false, retryCount: 1, ct: ct,
                     image: null, needLog: true, isResetCd: false))
             {
+                // 视觉看到 CD 数字 → 走 WaitSkillCd 推算兜底（带 waitSkillCdSeconds 本地超时上限）
                 try
                 {
-                    using var preCastCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    preCastCts.CancelAfter(TimeSpan.FromSeconds(waitSkillCdSeconds));
-                    await kazuha!.WaitSkillCd(preCastCts.Token);
+                    using var cdCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    cdCts.CancelAfter(TimeSpan.FromSeconds(waitSkillCdSeconds));
+                    await kazuha!.WaitSkillCd(cdCts.Token);
+                    onProgress?.Invoke(KazuhaCollectStage.SkillCdReady);
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested)
                 {
-                    // 视觉确认后再次超时 → 走原 SkillCdTimeoutForce 兜底（不再重复发阶段日志，避免日志重复）
+                    // 仅当外层 ct 未触发时才视为本地超时直放；外层 ct 触发的取消应继续向上抛
+                    onProgress?.Invoke(KazuhaCollectStage.SkillCdTimeoutForce);
                 }
+            }
+            else
+            {
+                // 视觉就绪 → 立即放行，与原"自然就绪"路径阶段语义保持一致
+                onProgress?.Invoke(KazuhaCollectStage.SkillCdReady);
             }
 
             // multiplayer-kazuha-collect-point-broadcast: HoldE 起手前注入 hook，
