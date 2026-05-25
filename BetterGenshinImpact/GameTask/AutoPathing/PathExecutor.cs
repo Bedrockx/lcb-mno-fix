@@ -187,6 +187,41 @@ public class PathExecutor
     public static MultiplayerCoordinator? CurrentMultiplayerCoordinator { get; set; }
 
     /// <summary>
+    /// 当前活动 PathExecutor 实例，由 Pathing(...) 入口注入、finally 清除。
+    /// 供外部静态调用方（如 TpTask）通过 SignalMultiplayerRevivalFromExternal 写信号位。
+    ///
+    /// 嵌套调用语义：仅由 Pathing(...) 入口管理。Pathing 方法体内进入时保存上一层 previous，
+    /// 完成后还原；其他方法（如 MoveTo / TpStatueOfTheSeven）不动此字段，避免被嵌套覆盖。
+    ///
+    /// 详见 .kiro/specs/multiplayer-tp-revive-prompt-detection/design.md §3.2 / bugfix.md §"R2"。
+    /// </summary>
+    private static PathExecutor? CurrentActiveInstance { get; set; }
+
+    /// <summary>
+    /// 外部（非 PathExecutor 内部代码）通过此方法写复苏信号位。
+    /// 等价于 AnomalyDetector → OnMultiplayerDefeatedDetected → SignalMultiplayerRevival 的语义路径。
+    ///
+    /// 用法：仅由 TpTask.WaitForTeleportCompletion 在传送中检测到复苏弹窗时调用。
+    /// 当 CurrentActiveInstance == null（无活动 PathExecutor 实例）时，LogWarning 跳过、
+    /// 不抛异常、不阻断主流程。
+    ///
+    /// 详见 .kiro/specs/multiplayer-tp-revive-prompt-detection/bugfix.md §"EB 2.8" / §"Q1"。
+    /// </summary>
+    public static void SignalMultiplayerRevivalFromExternal()
+    {
+        var instance = CurrentActiveInstance;
+        if (instance == null)
+        {
+            // 不直接引用 TaskControl.Logger 静态字段（测试环境下其静态初始化依赖 App._host 会触发 NRE），
+            // 改用 Debug.WriteLine 作为兜底诊断，生产/测试环境都安全。
+            // 实际应用中此分支不应被触发：TpTask 总是在 PathExecutor.Pathing 调用栈内调用本方法。
+            System.Diagnostics.Debug.WriteLine("[联机] SignalMultiplayerRevivalFromExternal 未找到活动 PathExecutor 实例，跳过信号位写入");
+            return;
+        }
+        instance.SignalMultiplayerRevival();
+    }
+
+    /// <summary>
     /// fight waypoint 索引 → syncPointId 的映射，由 SyncPointResolver 预计算。
     /// key = waypointListIndex * 10000 + waypointIndex
     /// </summary>
@@ -253,6 +288,10 @@ public class PathExecutor
 
     public async Task Pathing(PathingTask task)
     {
+        var previousInstance = CurrentActiveInstance;
+        CurrentActiveInstance = this;
+        try
+        {
         // SuspendableDictionary;
         const string sdKey = "PathExecutor";
         var sd = RunnerContext.Instance.SuspendableDictionary;
@@ -425,7 +464,7 @@ public class PathExecutor
                         if (TryConsumeRevivalSignal())
                         {
                             Logger.LogWarning("[联机] 主循环兜底路径检测到复苏信号，前往七天神像回血");
-                            await TpStatueOfTheSeven();
+                            await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
                             throw new RetryException("联机：主循环检测到已倒下复苏，神像回血后按异常处理");
                         }
                         
@@ -678,7 +717,7 @@ public class PathExecutor
                                     if (TryConsumeRevivalSignal())
                                     {
                                         Logger.LogWarning("[联机] 战斗中曾触发复苏（已倒下色块检测），战斗结束后前往七天神像回血");
-                                        await TpStatueOfTheSeven();
+                                        await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
                                         throw new RetryException("联机：战斗中触发复苏，神像回血后跳到下一段汇合");
                                     }
 
@@ -1013,6 +1052,11 @@ public class PathExecutor
             SkipRouteRequested = true;
             Logger.LogWarning("[联机] 成员异常发生在最后一个路线段，标记路线跳过");
         }
+        }
+        finally
+        {
+            CurrentActiveInstance = previousInstance;
+        }
     }
     
     private async Task InitializeAutoEat()
@@ -1152,7 +1196,7 @@ public class PathExecutor
             Logger.LogInformation("复苏完成");
             await Delay(4000, ct);
             // 血量肯定不满，直接去七天神像回血
-            await TpStatueOfTheSeven();
+            await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
         }
 
         if (PartyConfig.SkipPartySwitch)
@@ -1260,7 +1304,7 @@ public class PathExecutor
 
             if (forceTp) // 强制传送模式
             {
-                await new TpTask(ct).TpToStatueOfTheSeven(); // fix typos
+                await new TpTask(ct).TpToStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null); // fix typos
                 success = await new SwitchPartyTask().Start(partyName, ct);
             }
             else // 优先原地切换模式
@@ -1271,7 +1315,7 @@ public class PathExecutor
                 }
                 catch (PartySetupFailedException)
                 {
-                    await new TpTask(ct).TpToStatueOfTheSeven();
+                    await new TpTask(ct).TpToStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
                     success = await new SwitchPartyTask().Start(partyName, ct);
                 }
             }
@@ -1650,7 +1694,7 @@ public class PathExecutor
             
             // 联机模式：低血量去七天神像，由后续 RetryException 处理 Reviving 上报（带 targetProgress）
             // 这里不上报，避免覆盖 targetProgress 为 -1
-            await TpStatueOfTheSeven(switchOnly);
+            await TpStatueOfTheSeven(switchOnly, requireLoadingScreen: MultiplayerCoordinator != null);
             if (PathingConditionConfig.AutoEatCount < 2) return;
             throw new RetryException("回血完成后重试路线-1");
         }
@@ -1660,13 +1704,13 @@ public class PathExecutor
             Logger.LogInformation("复苏完成-1");
             await Delay(4000, ct);
             // 联机模式：复苏后去七天神像，由后续 RetryException 处理 Reviving 上报
-            await TpStatueOfTheSeven();
+            await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
             if (PathingConditionConfig.AutoEatCount < 2) return;
             throw new RetryException("回血完成后重试路线-2");
         }
     }
     
-    private async Task TpStatueOfTheSeven(bool switchOnly = false)
+    private async Task TpStatueOfTheSeven(bool switchOnly = false, bool requireLoadingScreen = false)
     {
         // Logger.LogInformation("AutoEatCount111 {text}",PathingConditionConfig.AutoEatCount);
         if (PartyConfig.AutoEatEnabled && PathingConditionConfig.AutoEatCount < 2)
@@ -1731,7 +1775,7 @@ public class PathExecutor
         try
         {
             var tpTask = new TpTask(ct);
-            await RunnerContext.Instance.StopAutoPickRunTask(async () => await tpTask.TpToStatueOfTheSeven(), 5);
+            await RunnerContext.Instance.StopAutoPickRunTask(async () => await tpTask.TpToStatueOfTheSeven(requireLoadingScreen), 5);
         }
         finally
         {
@@ -1814,7 +1858,7 @@ public class PathExecutor
             var forceTp = waypoint.Action == ActionEnum.ForceTp.Code;
             TpTask tpTask = new TpTask(ct);
             await TryGetExpeditionRewardsDispatch(tpTask);
-            var (tpX, tpY) = await tpTask.Tp(waypoint.GameX, waypoint.GameY, waypoint.MapName, forceTp);
+            var (tpX, tpY) = await tpTask.Tp(waypoint.GameX, waypoint.GameY, waypoint.MapName, forceTp, requireLoadingScreen: MultiplayerCoordinator != null);
             var (tprX, tprY) = MapManager.GetMap(waypoint.MapName, waypoint.MapMatchMethod)
                 .ConvertGenshinMapCoordinatesToImageCoordinates(new Point2f((float)tpX, (float)tpY));
             Navigation.SetPrevPosition(tprX, tprY); // 通过上一个位置直接进行局部特征匹配
@@ -2793,7 +2837,7 @@ public class PathExecutor
                             if (TryConsumeRevivalSignal())
                             {
                                 Logger.LogWarning("[联机] 路上检测到复苏 + 位置不变（疑似复苏后卡住），跳过随机脱困，前往七天神像回血");
-                                await TpStatueOfTheSeven();
+                                await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
                                 throw new RetryException("联机：路上复苏 + 卡住，神像回血后跳到下一段汇合");
                             }
 

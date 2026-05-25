@@ -66,6 +66,15 @@ public class TpTask
 
     private const double DisplayTpPointZoomLevel = 4.4; // 传送点显示的时候的地图比例
 
+    /// <summary>
+    /// 联机锄地传送过程中抑制 AnomalyDetector 自动点击复苏按钮。
+    /// 由 TpTask.WaitForTeleportCompletion 在 requireLoadingScreen=true 时设置 + finally 清除。
+    /// AnomalyDetector 在两条复苏路径检查此标志，true 时跳过点击但回调照常触发。
+    /// volatile bool：写者 TpTask 主线程，读者 AnomalyDetector 后台线程，单调标志。
+    /// 详见 .kiro/specs/multiplayer-tp-revive-prompt-detection/bugfix.md §"Open Question Q2"。
+    /// </summary>
+    public static volatile bool SuppressAutoRevivalClick = false;
+
     public TpTask(CancellationToken ct)
     {
         this.ct = ct;
@@ -94,7 +103,7 @@ public class TpTask
     /// <summary>
     /// 传送到七天神像
     /// </summary>
-    public async Task TpToStatueOfTheSeven()
+    public async Task TpToStatueOfTheSeven(bool requireLoadingScreen = false)
     {
         await CheckInBigMapUi();
 
@@ -129,7 +138,7 @@ public class TpTask
         }
 
         TaskControl.Logger.LogInformation("将传送至 {country} {area} 七天神像", country, area);
-        await Tp(x, y, MapTypes.Teyvat.ToString(), false);
+        await Tp(x, y, MapTypes.Teyvat.ToString(), false, requireLoadingScreen);
         if (_tpConfig.ShouldMove || _tpConfig.IsReviveInNearestStatueOfTheSeven)
         {
             (x, y) = GetClosestPoint(revivePoint.TranX, revivePoint.TranY, x, y, 5);
@@ -244,7 +253,7 @@ public class TpTask
     /// <param name="mapName">独立地图名称</param>
     /// <param name="force">强制以当前的tpX,tpY坐标进行自动传送</param>
     /// <param name="retryTimes">重试次数</param>
-    private async Task<(double, double)> TpOnce(double tpX, double tpY, string mapName = "Teyvat", bool force = false, int retryTimes = 0)
+    private async Task<(double, double)> TpOnce(double tpX, double tpY, string mapName = "Teyvat", bool force = false, int retryTimes = 0, bool requireLoadingScreen = false)
     {
         // 1. 确认在地图界面
         await OpenBigMapUi(1);
@@ -353,7 +362,7 @@ public class TpTask
         await ClickTpPoint(CaptureToRectArea());
 
         // 8. 等待传送完成
-        await WaitForTeleportCompletion(50, 1200);
+        await WaitForTeleportCompletion(50, 1200, requireLoadingScreen);
         return (x, y);
     }
 
@@ -362,25 +371,102 @@ public class TpTask
     /// </summary>
     /// <param name="maxAttempts">最大检查延时的次数</param>
     /// <param name="delayMs">如果未完成加载，检查加载页面的延时。</param>
-    private async Task WaitForTeleportCompletion(int maxAttempts, int delayMs)
+    /// <param name="requireLoadingScreen">
+    ///     当为 true 时启用阶段 1：先在 6s 内每 200ms 观察一次传送过渡页（联机锄地路径专用，
+    ///     避免“开大地图被打死→复苏到神像→派蒙可见→误判传送成功”）。详见
+    ///     .kiro/specs/multiplayer-tp-success-via-loading-screen/。
+    /// </param>
+    private async Task WaitForTeleportCompletion(int maxAttempts, int delayMs, bool requireLoadingScreen = false)
     {
-        await Delay(delayMs, ct);
-        for (var i = 0; i < maxAttempts; i++)
+        // 仅联机锄地路径设置抑制标志位，单机调用方默认 false 跳过整段守卫
+        bool suppressClickSet = false;
+        try
         {
-            using var capture = CaptureToRectArea();
-            if (Bv.IsInMainUi(capture))
+            if (requireLoadingScreen)
             {
-                TaskControl.Logger.LogInformation("传送完成，返回主界面");
-                return;
+                TpTask.SuppressAutoRevivalClick = true;
+                suppressClickSet = true;
             }
-            //增加容错，小概率情况下碰到，前面点击传送失败
-            capture.Find(_assets.TeleportButtonRo, rg => rg.Click());
-            await Delay(delayMs, ct);
-            // 打开大地图期间推送的月卡会在传送之后直接显示，导致检测不到传送完成。
-            await _blessingOfTheWelkinMoonTask.Start(ct);
-        }
 
-        TaskControl.Logger.LogWarning("传送等待超时，换台电脑吧");
+            // === 阶段 1（仅当联机调用方传入 requireLoadingScreen=true）===
+            if (requireLoadingScreen)
+            {
+                bool seen = await WaitForLoadingScreenAsync(timeoutMs: 6000, intervalMs: 200);
+                if (!seen)
+                {
+                    TaskControl.Logger.LogWarning("[联机] 未观察到传送过渡页，疑似传送被打断（点击传送后角色可能已倒地/被打断）");
+                    throw new TeleportLoadingTimeoutException("阶段 1 在 6s 内未观察到传送过渡页");
+                }
+                else
+                {
+                    TaskControl.Logger.LogInformation("[联机] 观察到传送过渡页，继续等待传送完成");
+                }
+            }
+
+            // === 阶段 2（保持原行为 + 增加复苏弹窗检测）===
+            await Delay(delayMs, ct);
+            for (var i = 0; i < maxAttempts; i++)
+            {
+                using var capture = CaptureToRectArea();
+
+                // 阶段 2 复苏弹窗检测（仅联机路径，防御阶段 1 之后才出现弹窗的罕见场景）
+                if (requireLoadingScreen && Bv.IsInRevivePrompt(capture))
+                {
+                    TaskControl.Logger.LogWarning("[联机] 传送过程中检测到复苏弹窗（阶段 2），疑似传送失败 + 角色死亡");
+                    BetterGenshinImpact.GameTask.AutoPathing.PathExecutor.SignalMultiplayerRevivalFromExternal();
+                    throw new TeleportLoadingTimeoutException("传送中检测到复苏弹窗，传送失败");
+                }
+
+                if (Bv.IsInMainUi(capture))
+                {
+                    TaskControl.Logger.LogInformation("传送完成，返回主界面");
+                    return;
+                }
+                //增加容错，小概率情况下碰到，前面点击传送失败
+                capture.Find(_assets.TeleportButtonRo, rg => rg.Click());
+                await Delay(delayMs, ct);
+                // 打开大地图期间推送的月卡会在传送之后直接显示，导致检测不到传送完成。
+                await _blessingOfTheWelkinMoonTask.Start(ct);
+            }
+
+            TaskControl.Logger.LogWarning("传送等待超时，换台电脑吧");
+        }
+        finally
+        {
+            if (suppressClickSet)
+            {
+                TpTask.SuppressAutoRevivalClick = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 阶段 1：在 timeoutMs 内每 intervalMs 截图判断一次过渡页是否出现。
+    /// 命中 → 返回 true；超时 → 返回 false。
+    /// </summary>
+    private async Task<bool> WaitForLoadingScreenAsync(int timeoutMs, int intervalMs)
+    {
+        long deadline = Environment.TickCount + timeoutMs;
+        while (Environment.TickCount < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var capture = CaptureToRectArea();
+
+            // 复苏弹窗优先于过渡页判定（在过渡页之前的瞬间，复苏弹窗已经显示）
+            if (Bv.IsInRevivePrompt(capture))
+            {
+                TaskControl.Logger.LogWarning("[联机] 传送过程中检测到复苏弹窗（阶段 1），疑似传送失败 + 角色死亡");
+                BetterGenshinImpact.GameTask.AutoPathing.PathExecutor.SignalMultiplayerRevivalFromExternal();
+                throw new TeleportLoadingTimeoutException("传送中检测到复苏弹窗，传送失败");
+            }
+
+            if (TeleportLoadingDetector.IsLoadingScreen(capture.SrcMat))
+            {
+                return true;
+            }
+            await Delay(intervalMs, ct);
+        }
+        return false;
     }
 
     /// <summary>
@@ -483,13 +569,13 @@ public class TpTask
     }
 
 
-    public async Task<(double, double)> Tp(double tpX, double tpY, string mapName = "Teyvat", bool force = false)
+    public async Task<(double, double)> Tp(double tpX, double tpY, string mapName = "Teyvat", bool force = false, bool requireLoadingScreen = false)
     {
         for (var i = 0; i < 3; i++)
         {
             try
             {
-                return await TpOnce(tpX, tpY, mapName, force,i);
+                return await TpOnce(tpX, tpY, mapName, force, i, requireLoadingScreen);
             }
             catch (TpPointNotActivate e)
             {

@@ -283,7 +283,7 @@ public class Avatar
         try
         {
             var tpTask = new TpTask(ct);
-            tpTask.TpToStatueOfTheSeven().Wait(ct);
+            tpTask.TpToStatueOfTheSeven(requireLoadingScreen: BetterGenshinImpact.GameTask.AutoPathing.PathExecutor.CurrentMultiplayerCoordinator != null).Wait(ct);
         }
         finally
         {

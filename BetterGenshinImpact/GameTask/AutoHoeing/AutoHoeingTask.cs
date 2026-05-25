@@ -1075,7 +1075,7 @@ public class AutoHoeingTask : ISoloTask
                         _logger.LogInformation("[联机] 尝试传送到七天神像后重试");
                         try
                         {
-                            await new TpTask(_ct).TpToStatueOfTheSeven();
+                            await new TpTask(_ct).TpToStatueOfTheSeven(requireLoadingScreen: true);
                             await Task.Delay(1000, _ct);
                         }
                         catch (Exception ex)

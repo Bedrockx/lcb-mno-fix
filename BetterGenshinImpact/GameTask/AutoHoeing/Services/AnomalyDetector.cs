@@ -1,6 +1,7 @@
 using BetterGenshinImpact.Core.Recognition;
 using BetterGenshinImpact.Core.Recognition.OpenCv;
 using BetterGenshinImpact.Core.Simulator;
+using BetterGenshinImpact.GameTask.AutoTrackPath;
 using BetterGenshinImpact.GameTask.Model.Area;
 using Microsoft.Extensions.Logging;
 using OpenCvSharp;
@@ -115,11 +116,18 @@ public class AnomalyDetector
                         using var result = region.Find(_revivalRo);
                         if (result.IsExist())
                         {
-                            Logger.LogInformation("识别到复苏按钮（单机模板匹配），点击");
-                            result.Click();
-                            await Task.Delay(500, ct);
+                            if (!TpTask.SuppressAutoRevivalClick)
+                            {
+                                Logger.LogInformation("识别到复苏按钮（单机模板匹配），点击");
+                                result.Click();
+                                await Task.Delay(500, ct);
+                            }
+                            else
+                            {
+                                Logger.LogInformation("[传送中] 检测到复苏（模板匹配），抑制自动点击，由 TpTask 主动检测");
+                            }
                             
-                            // 联机模式：触发复苏回调上报异常状态
+                            // 联机模式：触发复苏回调上报异常状态（回调照常触发，语义不变）
                             if (OnRevivalDetected != null)
                             {
                                 try { await OnRevivalDetected(); } catch { }
@@ -130,12 +138,20 @@ public class AnomalyDetector
                     // 联机模式复苏检测：色块连通性检测"已倒下"红色文字
                     if (IsMultiplayerDefeated(region))
                     {
-                        Logger.LogInformation("识别到联机已倒下界面（色块检测），点击复苏按钮");
-                        await Task.Delay(300, ct);
-                        region.ClickTo(960, 1020);
-                        await Task.Delay(500, ct);
+                        if (!TpTask.SuppressAutoRevivalClick)
+                        {
+                            Logger.LogInformation("识别到联机已倒下界面（色块检测），点击复苏按钮");
+                            await Task.Delay(300, ct);
+                            region.ClickTo(960, 1020);
+                            await Task.Delay(500, ct);
+                        }
+                        else
+                        {
+                            Logger.LogInformation("[传送中] 检测到复苏（色块检测），抑制自动点击，由 TpTask 主动检测");
+                        }
 
                         // 联机模式：触发"已倒下"信号，PathExecutor 在主循环将抛 RetryException 走异常流程
+                        // （信号位写入路径不变，preservation §3.3）
                         try { OnMultiplayerDefeatedDetected?.Invoke(); } catch { }
 
                         // 兼容：仍保留通用复苏回调（当前为空操作，留作未来扩展）
