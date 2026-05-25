@@ -653,6 +653,40 @@ public class AutoPartyTask
         }
     }
 
+    /// <summary>
+    /// 判定当前是否已回到自己单人世界。
+    /// 与 <see cref="IsInHostWorldAsync"/> 同源 pattern：派蒙可见 + 1.2s HUD 稳定 +
+    /// <c>DetectedMultiGameStatus.IsInMultiGame == false</c> 三重判据，避免中间帧 / 加载误判。
+    /// 自己单人世界包含两种语义：
+    ///   - 房主关房后回到单人（IsInMultiGame=false）
+    ///   - 成员退出 / 被踢回到单人（IsInMultiGame=false）
+    /// 用 false 作为强判据，比"开 F2 是否成功"这种脏代理可靠。
+    /// </summary>
+    private async Task<bool> IsBackInOwnWorldAsync(ImageRegion currentRa, CancellationToken ct)
+    {
+        if (!Bv.IsInMainUi(currentRa))
+            return false;
+
+        // 等待右侧 HUD 渲染稳定（与 IsInHostWorldAsync 同源问题）
+        await Delay(1200, ct);
+
+        try
+        {
+            using var stableRa = CaptureToRectArea();
+            if (!Bv.IsInMainUi(stableRa))
+                return false;
+
+            var status = PartyAvatarSideIndexHelper.DetectedMultiGameStatus(
+                stableRa, AutoFightAssets.Instance, NullLogger.Instance);
+            return !status.IsInMultiGame;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[自动组队] 检测自己世界状态异常，按未回到处理");
+            return false;
+        }
+    }
+
     /// <summary>模板匹配确认按钮并点击</summary>
     private void ClickConfirmButton()
     {
@@ -944,6 +978,16 @@ public class AutoPartyTask
                 continue;
             }
 
+            // 短路检查：若已经在自己单人世界（入参即为自己世界 / 上一轮副作用已生效），直接成功返回
+            using (var probeRa = CaptureToRectArea())
+            {
+                if (await IsBackInOwnWorldAsync(probeRa, ct))
+                {
+                    _logger.LogInformation("[自动组队] 当前已在自己单人世界，无需执行退出流程");
+                    return true;
+                }
+            }
+
             // 打开 F2
             if (!await OpenCoOpScreen(ct))
             {
@@ -969,33 +1013,26 @@ public class AutoPartyTask
                 }
             }
 
-            // 等待加载完成（最多 10 秒），见到派蒙即为回到自己世界
+            // 等待加载完成（最多 10 秒），见到派蒙即为回到自己世界候选
             _logger.LogInformation("[自动组队] 等待回到自己的世界...");
-            if (await WaitForMainUi(ct, 10))
-            {
-                // 额外等待确保界面稳定
-                await Delay(1000, ct);
-                
-                // 再次确认：打开 F2 检查是否是房主（回到自己世界后应该是房主）
-                Simulation.SendInput.SimulateAction(GIActions.OpenCoOpScreen);
-                await Delay(1500, ct);
-                
-                using var checkRa = CaptureToRectArea();
-                if (!Bv.IsInMainUi(checkRa))
-                {
-                    // 成功打开 F2，说明回到了自己的世界（自己是房主）
-                    _logger.LogInformation("[自动组队] 已成功回到自己的世界");
-                    Simulation.SendInput.Keyboard.KeyPress(User32.VK.VK_ESCAPE);
-                    await Delay(500, ct);
-                    return true;
-                }
-                
-                _logger.LogWarning("[自动组队] 检测到仍不是房主，继续重试");
-            }
-            else
+            if (!await WaitForMainUi(ct, 10))
             {
                 _logger.LogWarning("[自动组队] 等待加载超时，重试");
+                continue;
             }
+
+            // 用 IsBackInOwnWorldAsync 复核：1.2s HUD 稳定 + IsInMultiGame == false 双重判据
+            // 避免原实现"开 F2 是否成功"这种脏代理在按键被吞 / 加载中间帧时误判
+            using (var verifyRa = CaptureToRectArea())
+            {
+                if (await IsBackInOwnWorldAsync(verifyRa, ct))
+                {
+                    _logger.LogInformation("[自动组队] 已成功回到自己的世界");
+                    return true;
+                }
+            }
+
+            _logger.LogWarning("[自动组队] 检测到仍未回到自己单人世界，继续重试");
         }
 
         _logger.LogError("[自动组队] 5 次尝试后仍未回到自己的世界");
