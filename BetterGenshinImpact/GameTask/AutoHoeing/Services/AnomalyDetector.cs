@@ -126,7 +126,12 @@ public class AnomalyDetector
                             {
                                 Logger.LogInformation("[传送中] 检测到复苏（模板匹配），抑制自动点击，由 TpTask 主动检测");
                             }
-                            
+
+                            // 联机模式：触发"已倒下"信号，PathExecutor 在 MoveTo 主循环 / waypoint 兜底位置消费走异常流程
+                            // （与色块路径 IsMultiplayerDefeated 行为完全对齐，让 _revivalRo 模板路径也写信号位）
+                            // 详见 .kiro/specs/multiplayer-walk-revive-skip-segment/design.md §3.1
+                            try { OnMultiplayerDefeatedDetected?.Invoke(); } catch { }
+
                             // 联机模式：触发复苏回调上报异常状态（回调照常触发，语义不变）
                             if (OnRevivalDetected != null)
                             {

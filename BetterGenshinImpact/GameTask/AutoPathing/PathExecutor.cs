@@ -2010,6 +2010,18 @@ public class PathExecutor
             }
             flyDelay = false;
 
+            // === 联机模式：走路途中检测到复苏信号（来自 AnomalyDetector 模板/色块路径）===
+            // isPoint==true 仅在普通寻路段触发，战斗 / 聚物 / 回点等 isPoint==false 路径短路。
+            // TryConsumeRevivalSignal 单机模式下 MultiplayerCoordinator==null 直接返回 false，零回归。
+            // 详见 .kiro/specs/multiplayer-walk-revive-skip-segment/design.md §3.2
+            if (isPoint && TryConsumeRevivalSignal())
+            {
+                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                Logger.LogWarning("[联机] 走路中检测到复苏信号，跳过本段，前往七天神像回血");
+                await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
+                throw new RetryException("联机：走路中复苏，神像回血后跳到下一段汇合");
+            }
+
             num++;
             if ((DateTime.UtcNow - moveToStartTime).TotalSeconds > 240)
             {
