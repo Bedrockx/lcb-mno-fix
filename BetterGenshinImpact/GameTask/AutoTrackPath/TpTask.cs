@@ -443,6 +443,11 @@ public class TpTask
     /// <summary>
     /// 阶段 1：在 timeoutMs 内每 intervalMs 截图判断一次过渡页是否出现。
     /// 命中 → 返回 true；超时 → 返回 false。
+    ///
+    /// 暂停 / 网络断开兜底：循环顶部检测 IsSuspend || IsSuspendedByNetwork 任一为 true 时
+    /// 早退 return true，让阶段 2 接管。原因：墙钟 deadline 在暂停期间继续累积，
+    /// 不早退会导致解除暂停后立即超时误抛异常。详见
+    /// .kiro/specs/multiplayer-tp-loading-screen-suspend-skip/。
     /// </summary>
     private async Task<bool> WaitForLoadingScreenAsync(int timeoutMs, int intervalMs)
     {
@@ -450,6 +455,16 @@ public class TpTask
         while (Environment.TickCount < deadline)
         {
             ct.ThrowIfCancellationRequested();
+
+            // 暂停 / 网络断开早退：避免墙钟超时误判（cancel 优先级更高，已在上一行处理）
+            if (TeleportLoadingPhaseSuspendGuard.ShouldSkip(
+                    RunnerContext.Instance.IsSuspend,
+                    TaskControl.IsSuspendedByNetwork))
+            {
+                TaskControl.Logger.LogInformation("[联机] 检测到暂停/网络断开，跳过传送过渡页守卫，回退原判据");
+                return true;
+            }
+
             using var capture = CaptureToRectArea();
 
             // 复苏弹窗优先于过渡页判定（在过渡页之前的瞬间，复苏弹窗已经显示）
