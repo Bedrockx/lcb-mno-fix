@@ -95,7 +95,12 @@ public class TeamManager : IAsyncDisposable
 
         try
         {
-            bool allArrived = await _syncBarrier.WaitAsync(syncId, effectiveCount, timeoutSeconds, ct);
+            // === 集体卡死跳段消费点 4（multiplayer-mutual-wait-collective-skip §8.7 / OQ-6 A）===
+            // 把 RemoteSkipGate.Token 与 ct link，让 RequestSkipToProgress 立即解封 SyncBarrier 等待。
+            // SyncBarrier.WaitAsync 收到 cancel 后返回 false（超时放行语义），由 PathExecutor 主循环 / 段切换点二次消费 _remoteSkipRequested 抛 RetryException。
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, RemoteSkipGate.Token);
+            var effectiveCt = linkedCts.Token;
+            bool allArrived = await _syncBarrier.WaitAsync(syncId, effectiveCount, timeoutSeconds, effectiveCt);
 
             if (allArrived)
             {

@@ -396,6 +396,18 @@ public class PathExecutor
             // 防御性重置：新段开始时清空复苏信号位，避免跨段残留
             // （正常情况下消费点会清理，但显式重置确保语义清晰）
             MultiplayerRevivalGate.Reset(ref _multiplayerRevivalDetected);
+
+            // === 集体卡死跳段消费点 2（multiplayer-mutual-wait-collective-skip §8.7 / OQ-6 A）===
+            // 段切换前消费一次：避免跨段残留信号位 + 段开始前若已收到跳段请求立即处理。
+            // 段切换点不在 MoveForward 持按状态，故无需 KeyUp。
+            if (MultiplayerCoordinator != null
+                && MultiplayerCoordinator.TryConsumeRemoteSkipSignal(out var segSkipTarget))
+            {
+                Logger.LogWarning("[联机] 段循环切换点收到大部队跳段请求，target={Target}，前往七天神像回血", segSkipTarget);
+                await TpStatueOfTheSeven(requireLoadingScreen: true);
+                throw new RetryException("[联机] 大部队请求跳段");
+            }
+
             CurrentRouteIndex = waypointsList.FindIndex(wps => wps == waypoints);
 
             // === 实时中断检查（multiplayer-abort-and-realign spec）===
@@ -719,6 +731,16 @@ public class PathExecutor
                                         Logger.LogWarning("[联机] 战斗中曾触发复苏（已倒下色块检测），战斗结束后前往七天神像回血");
                                         await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
                                         throw new RetryException("联机：战斗中触发复苏，神像回血后跳到下一段汇合");
+                                    }
+
+                                    // === 集体卡死跳段消费点 3（multiplayer-mutual-wait-collective-skip §8.7 / OQ-6 A）===
+                                    // 战斗结束后消费集体跳段信号位，与上面复苏信号消费点完全独立。
+                                    if (MultiplayerCoordinator != null
+                                        && MultiplayerCoordinator.TryConsumeRemoteSkipSignal(out var fightSkipTarget))
+                                    {
+                                        Logger.LogWarning("[联机] 战斗结束收到大部队跳段请求，target={Target}，前往七天神像回血", fightSkipTarget);
+                                        await TpStatueOfTheSeven(requireLoadingScreen: true);
+                                        throw new RetryException("[联机] 大部队请求跳段");
                                     }
 
                                     if(!string.IsNullOrEmpty(PartyConfig.MainAvatarIndex)) PartyConfig.MainAvatarIndex = PathingConditionConfig.InitialMainAvatarIndex;
@@ -2020,6 +2042,18 @@ public class PathExecutor
                 Logger.LogWarning("[联机] 走路中检测到复苏信号，跳过本段，前往七天神像回血");
                 await TpStatueOfTheSeven(requireLoadingScreen: MultiplayerCoordinator != null);
                 throw new RetryException("联机：走路中复苏，神像回血后跳到下一段汇合");
+            }
+
+            // === 集体卡死跳段消费点 1（multiplayer-mutual-wait-collective-skip §8.7 / OQ-6 A）===
+            // isPoint==true 仅普通寻路段触发；MultiplayerCoordinator==null 单机模式直接 short-circuit。
+            // 与上面的复苏信号消费点完全独立（preservation §3.4），抛不同 RetryException 文案便于日志追溯。
+            if (isPoint && MultiplayerCoordinator != null
+                && MultiplayerCoordinator.TryConsumeRemoteSkipSignal(out var moveSkipTarget))
+            {
+                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                Logger.LogWarning("[联机] 走路中收到大部队跳段请求，target={Target}，前往七天神像回血", moveSkipTarget);
+                await TpStatueOfTheSeven(requireLoadingScreen: true);
+                throw new RetryException("[联机] 大部队请求跳段");
             }
 
             num++;

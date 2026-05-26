@@ -56,6 +56,19 @@ public class MultiplayerCoordinator : IAsyncDisposable
     // === 跳过同步点标志 ===
     private volatile bool _skipNextSyncPoint;
 
+    // === 集体卡死跳段信号位（multiplayer-mutual-wait-collective-skip spec / OQ-6 A）===
+    /// <summary>
+    /// 服务端 RequestSkipToProgress 事件触发后置 1，客户端 4 处消费点 CAS 1→0 命中后跳段。
+    /// 与 PathExecutor._multiplayerRevivalDetected 完全独立（preservation §3.4）。
+    /// 多线程可见性由 Interlocked.Exchange 保证。
+    /// </summary>
+    private int _remoteSkipRequested = 0;
+
+    /// <summary>
+    /// 缓存 RequestSkipToProgress 事件携带的 targetProgress；与 _remoteSkipRequested 配对读写。
+    /// </summary>
+    private long _remoteSkipTargetProgress = -1;
+
     // === 待处理等待点 ===
     private PendingWaitPoint? _pendingWaitPoint;
 
@@ -93,7 +106,50 @@ public class MultiplayerCoordinator : IAsyncDisposable
         StateManager = new AbnormalStatusManager(this, WaitPointStateManager, _config);
         KazuhaCollectSync = new KazuhaCollectSyncCoordinator(_client, _config, this);
 
+        // 集体卡死跳段事件订阅（multiplayer-mutual-wait-collective-skip §8.6）
+        _client.RequestSkipToProgressReceived += OnRequestSkipToProgressReceived;
+        _client.CollectiveSkipDegradedReceived += OnCollectiveSkipDegradedReceived;
+
         _logger.LogInformation("[联机] 子协调器初始化完成");
+    }
+
+    // === 集体卡死跳段事件处理（multiplayer-mutual-wait-collective-skip §8.6）===
+
+    private void OnRequestSkipToProgressReceived(long targetProgress)
+    {
+        _remoteSkipTargetProgress = targetProgress;
+        RemoteSkipGate.TargetProgress = targetProgress;
+        // Interlocked.Exchange 保证写入对所有线程立即可见
+        Interlocked.Exchange(ref _remoteSkipRequested, 1);
+        _logger.LogWarning("[联机] 大部队请求跳段，target={Target}，等待 4 处消费点命中", targetProgress);
+
+        // 唤醒 SyncBarrier.WaitAsync 等待（消费点 4，design §8.7 备选 B 静态 Gate）
+        RemoteSkipGate.Cancel();
+    }
+
+    private void OnCollectiveSkipDegradedReceived(string reason)
+    {
+        _logger.LogError("[联机] 集体跳段连续触发达上限，触发协调停止：{Reason}", reason);
+        // 走 OnConsecutiveSyncTimeoutExceeded 等价路径（OQ-5 A）
+        _ = TriggerCoordinatedStop(IsHost, $"CollectiveSkip:{reason}");
+    }
+
+    /// <summary>
+    /// CAS 消费 _remoteSkipRequested 信号位（与 PathExecutor.TryConsumeRevivalSignal 同模式但**独立信号位**）。
+    /// 命中：返回 true 并通过 out 返回 targetProgress；未命中：返回 false。
+    /// 单机模式下调用方已用 <c>MultiplayerCoordinator != null</c> 守卫，本方法不重复短路。
+    /// </summary>
+    public bool TryConsumeRemoteSkipSignal(out long targetProgress)
+    {
+        var prev = Interlocked.Exchange(ref _remoteSkipRequested, 0);
+        if (prev == 1)
+        {
+            targetProgress = _remoteSkipTargetProgress;
+            _remoteSkipTargetProgress = -1;
+            return true;
+        }
+        targetProgress = -1;
+        return false;
     }
 
     /// <summary>
@@ -155,7 +211,12 @@ public class MultiplayerCoordinator : IAsyncDisposable
         _skipNextSyncPoint = false;
         IsExitTriggered = false;
         IsAbortRequested = false;
-        
+
+        // 集体卡死跳段信号位重置（multiplayer-mutual-wait-collective-skip §8.6 改动 4）
+        Interlocked.Exchange(ref _remoteSkipRequested, 0);
+        _remoteSkipTargetProgress = -1;
+        RemoteSkipGate.Reset();
+
         RouteSyncCoordinator?.Reset();
         StateManager?.Reset();
         WaitPointStateManager?.ResetCurrentRound();
@@ -396,6 +457,18 @@ public class MultiplayerCoordinator : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        // 集体卡死跳段事件取消订阅 + Gate 重置（multiplayer-mutual-wait-collective-skip §8.6 改动 5）
+        try
+        {
+            _client.RequestSkipToProgressReceived -= OnRequestSkipToProgressReceived;
+            _client.CollectiveSkipDegradedReceived -= OnCollectiveSkipDegradedReceived;
+        }
+        catch (System.Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机] DisposeAsync 解绑 RequestSkipToProgress 事件失败（可忽略）");
+        }
+        RemoteSkipGate.Reset();
+
         WaitPointStateManager?.Dispose();
         KazuhaCollectSync?.Dispose();
         RouteSyncCoordinator = null;

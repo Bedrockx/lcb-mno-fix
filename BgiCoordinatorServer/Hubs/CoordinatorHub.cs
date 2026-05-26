@@ -184,7 +184,7 @@ public class CoordinatorHub : Hub
     /// <summary>上报到达集合点，全员到达时广播 AllArrived</summary>
     public async Task ReportArrival(string syncPointId)
     {
-        var (_, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
         if (roomCode == null) return;
 
         _roomManager.UpdateHeartbeat(Context.ConnectionId);
@@ -195,6 +195,12 @@ public class CoordinatorHub : Hub
             _logger.LogInformation("房间 {Code} 同步点 {SyncId} 全员到达", roomCode, syncPointId);
             await Clients.Group(roomCode).SendAsync("AllArrived", syncPointId);
         }
+
+        // === 集体卡死监测 piggyback（multiplayer-mutual-wait-collective-skip §8.4 改动 1）===
+        if (room != null)
+        {
+            await EvaluateCollectiveStuckPiggybackAsync(room, roomCode);
+        }
     }
 
     /// <summary>
@@ -204,7 +210,7 @@ public class CoordinatorHub : Hub
     /// <param name="expectedCount">预期到达人数，0表示使用房间总人数</param>
     public async Task ReportArrivalWithExpectedCount(string syncPointId, int expectedCount)
     {
-        var (_, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
         if (roomCode == null) return;
 
         _roomManager.UpdateHeartbeat(Context.ConnectionId);
@@ -215,6 +221,12 @@ public class CoordinatorHub : Hub
             _logger.LogInformation("房间 {Code} 同步点 {SyncId} 到达人数达到预期 {Expected}，触发 AllArrived", 
                 roomCode, syncPointId, expectedCount);
             await Clients.Group(roomCode).SendAsync("AllArrived", syncPointId);
+        }
+
+        // === 集体卡死监测 piggyback（multiplayer-mutual-wait-collective-skip §8.4 改动 1）===
+        if (room != null)
+        {
+            await EvaluateCollectiveStuckPiggybackAsync(room, roomCode);
         }
     }
 
@@ -756,6 +768,10 @@ public class CoordinatorHub : Hub
                 _roomManager.ClearArrivalSet(code, syncId);
             }
 
+            // === 集体卡死监测 piggyback（multiplayer-mutual-wait-collective-skip §8.4 改动 5）===
+            // 玩家断线后剩余玩家可能进入"集体卡死"状态（其余正常玩家卡在不同 syncId）
+            await EvaluateCollectiveStuckPiggybackAsync(updatedRoom, code);
+
             // 万叶聚物同步：候选切换 + 兜底（kazuha-player-auto-detection requirements 5.5 / Property 10）
             // 任意玩家断线都从候选列表移除（不论是否当前 Kazuha）
             bool shouldBroadcastSwitch = false;
@@ -1013,6 +1029,13 @@ public class CoordinatorHub : Hub
             room.KazuhaCollect.CurrentSyncKey = null;
             // multiplayer-kazuha-collect-point-broadcast: 多轮世界新轮次开始时一并清空聚物点缓存
             room.KazuhaCollect.CurrentCollectPoint = null;
+
+            // === 集体卡死监测字段重置（multiplayer-mutual-wait-collective-skip §3.10 / §8.4 改动 4）===
+            room.ConsecutiveCollectiveSkipCount = 0;
+            room.LastArrivalSetsSnapshot = null;
+            room.ObservationStartTime = default;
+            room.CollectiveSkipTimer?.Dispose();
+            room.CollectiveSkipTimer = null;
 
             _logger.LogInformation("[ResetForNewWorldRound] 房间{RoomCode}进入第{Round}轮，等待点、异常状态、万叶候选已重置", roomCode, newRound);
         }
@@ -1412,6 +1435,9 @@ public class CoordinatorHub : Hub
             await Clients.Group(roomCode).SendAsync("AllArrived", syncId);
             _roomManager.ClearArrivalSet(roomCode, syncId);
         }
+
+        // === 集体卡死监测 piggyback（multiplayer-mutual-wait-collective-skip §8.4 改动 1）===
+        await EvaluateCollectiveStuckPiggybackAsync(room, roomCode);
     }
 
     /// <summary>
@@ -1464,6 +1490,9 @@ public class CoordinatorHub : Hub
             await Clients.Group(roomCode).SendAsync("AllArrived", sid);
             _roomManager.ClearArrivalSet(roomCode, sid);
         }
+
+        // === 集体卡死监测 piggyback（multiplayer-mutual-wait-collective-skip §8.4 改动 1）===
+        await EvaluateCollectiveStuckPiggybackAsync(room, roomCode);
     }
 
     /// <summary>
@@ -1599,6 +1628,9 @@ public class CoordinatorHub : Hub
             }
         }
         // 非阻塞：不满足条件时直接返回，客户端通过 AllArrived 事件等待
+
+        // === 集体卡死监测 piggyback（multiplayer-mutual-wait-collective-skip §8.4 改动 1）===
+        await EvaluateCollectiveStuckPiggybackAsync(room, roomCode);
     }
 
     /// <summary>
@@ -1723,6 +1755,241 @@ public class CoordinatorHub : Hub
         if (requiredPlayers.Count == 0) return false;
 
         return requiredPlayers.All(p => arrivals.Contains(p.ConnectionId));
+    }
+
+    // =========================================================================
+    // 集体卡死监测（multiplayer-mutual-wait-collective-skip spec）
+    // OQ-1 B / OQ-2 C / OQ-3 A=0.5 / OQ-4 C / OQ-5 A / OQ-6 A / OQ-7 A / OQ-8 B+C
+    //
+    // 触发链路：
+    //   piggyback 评估（在 5 处 Hub 入口末尾）→ 快照变化时刷新 + 重建 Timer
+    //   → Timer 到期回调 EvaluateCollectiveStuckTimerCallbackAsync
+    //   → lock 内双重检查 IsCollectiveStuckLocked → 决策 + 主动写 IsAbnormal
+    //   → lock 外按顺序广播 AllArrived 们 + RequestSkipToProgress
+    // =========================================================================
+
+    /// <summary>
+    /// 必须在 lock(room) 内调用：判定房间是否处于"集体卡死"状态。
+    /// C1 阈值：totalWaiters ≥ ⌈online * MutualWaitMinWaitersRatio⌉
+    /// C2 互锁：所有 ArrivalSet 都不满足 ShouldBroadcastAllArrived
+    /// C3 稳定：(Now - ObservationStartTime) ≥ MutualWaitStableSeconds
+    /// 详见 design.md §4.1 / Property 1。
+    /// </summary>
+    private bool IsCollectiveStuckLocked(Room room)
+    {
+        if (room.HostConfig?.EnableMutualWaitCollectiveSkip != true) return false;
+
+        var ratio = Math.Clamp(room.HostConfig.MutualWaitMinWaitersRatio, 0.01, 1.0);
+        var stableSeconds = Math.Max(5, room.HostConfig.MutualWaitStableSeconds);
+
+        var onlinePlayers = room.Players
+            .Where(p => DateTime.UtcNow - p.LastHeartbeat < TimeSpan.FromMinutes(2))
+            .ToList();
+        if (onlinePlayers.Count == 0) return false;
+
+        int totalWaiters = room.ArrivalSets.Values.Sum(s => s.Count);
+        int threshold = (int)Math.Ceiling(onlinePlayers.Count * ratio);
+        if (totalWaiters < threshold) return false;
+
+        // C2: 所有 ArrivalSet 当前都不满足放行
+        if (room.ArrivalSets.Count == 0) return false;
+        foreach (var kv in room.ArrivalSets)
+        {
+            var sid = kv.Key;
+            long sp = -1;
+            if (sid != "route_sync_done")
+            {
+                sp = onlinePlayers
+                    .Where(p => kv.Value.Contains(p.ConnectionId))
+                    .Select(p => p.CurrentProgress)
+                    .DefaultIfEmpty(-1)
+                    .Max();
+            }
+            // 复用静态版本：无日志噪声、性能更优
+            if (ShouldBroadcastAllArrived(room, kv.Value, sp)) return false;
+        }
+
+        // C3: 状态稳定 ≥ MutualWaitStableSeconds
+        if (room.LastArrivalSetsSnapshot == null) return false;
+        if ((DateTime.UtcNow - room.ObservationStartTime).TotalSeconds < stableSeconds) return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// 比较两个 ArrivalSets 快照内容是否相等（深比较）。
+    /// </summary>
+    private static bool ArrivalSnapshotEquals(
+        Dictionary<string, HashSet<string>>? a,
+        Dictionary<string, HashSet<string>> b)
+    {
+        if (a == null) return false;
+        if (a.Count != b.Count) return false;
+        foreach (var kv in b)
+        {
+            if (!a.TryGetValue(kv.Key, out var aSet)) return false;
+            if (!aSet.SetEquals(kv.Value)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// 在 Hub 方法末尾 piggyback 调用：评估房间是否进入"集体卡死症状"，
+    /// 必要时刷新 LastArrivalSetsSnapshot / ObservationStartTime / CollectiveSkipTimer。
+    /// 实际触发协同跳段的决策由 Timer 到期后调用 EvaluateCollectiveStuckTimerCallbackAsync 完成（OQ-2 C 双层判定）。
+    /// 注意：本方法 await 任何调用必须在 lock 外（design §8.4 改动 2）。
+    /// </summary>
+    private Task EvaluateCollectiveStuckPiggybackAsync(Room room, string roomCode)
+    {
+        if (room.HostConfig?.EnableMutualWaitCollectiveSkip != true) return Task.CompletedTask;
+
+        var stableSeconds = Math.Max(5, room.HostConfig.MutualWaitStableSeconds);
+
+        lock (room)
+        {
+            // 计算当前快照（深拷贝，便于"内容相等"比较）
+            var currentSnapshot = room.ArrivalSets.ToDictionary(
+                kv => kv.Key,
+                kv => new HashSet<string>(kv.Value)
+            );
+
+            bool snapshotChanged = !ArrivalSnapshotEquals(room.LastArrivalSetsSnapshot, currentSnapshot);
+            if (snapshotChanged)
+            {
+                room.LastArrivalSetsSnapshot = currentSnapshot;
+                room.ObservationStartTime = DateTime.UtcNow;
+                room.CollectiveSkipTimer?.Dispose();
+
+                // 空快照不需要 Timer
+                if (currentSnapshot.Values.Sum(s => s.Count) == 0)
+                {
+                    room.CollectiveSkipTimer = null;
+                }
+                else
+                {
+                    room.CollectiveSkipTimer = new System.Threading.Timer(
+                        _ => _ = EvaluateCollectiveStuckTimerCallbackAsync(room, roomCode),
+                        null,
+                        TimeSpan.FromSeconds(stableSeconds),
+                        Timeout.InfiniteTimeSpan
+                    );
+                }
+            }
+            // 不变 → Timer 继续走原计时（不重置）
+        }
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// CollectiveSkipTimer 到期后的入口（OQ-2 C）。
+    /// 双重检查 IsCollectiveStuckLocked（OQ-8 C），命中后做 lock 内决策 + lock 外按顺序广播（OQ-7 A）。
+    /// 仅在 lock 内读写 room 字段；广播一律在 lock 外 await（H-2 高风险点：死锁预防）。
+    /// </summary>
+    private async Task EvaluateCollectiveStuckTimerCallbackAsync(Room room, string roomCode)
+    {
+        long targetProgress;
+        List<(string syncId, long progress)> satisfiedSyncs;
+        List<string> laggingPlayerConnIds;
+        bool degraded = false;
+
+        try
+        {
+            lock (room)
+            {
+                if (room.HostConfig?.EnableMutualWaitCollectiveSkip != true) return;
+
+                // 双重检查（OQ-8 C）：再次评估 IsCollectiveStuckLocked
+                if (!IsCollectiveStuckLocked(room)) return;
+
+                // 1) 计算 targetProgress（OQ-1 B：round 到下一条路线开头）
+                var maxCurrent = room.Players
+                    .Where(p => DateTime.UtcNow - p.LastHeartbeat < TimeSpan.FromMinutes(2))
+                    .Select(p => p.CurrentProgress)
+                    .DefaultIfEmpty(-1)
+                    .Max();
+                if (maxCurrent < 0) return; // 没有任何玩家上报过进度，跳过本次触发
+                targetProgress = (maxCurrent / 1_000_000L + 1L) * 1_000_000L;
+
+                // 2) 收集落后玩家（CurrentProgress < target 且未在任何 ArrivalSet）
+                var allArrivedConns = new HashSet<string>(
+                    room.ArrivalSets.SelectMany(kv => kv.Value)
+                );
+                laggingPlayerConnIds = room.Players
+                    .Where(p => DateTime.UtcNow - p.LastHeartbeat < TimeSpan.FromMinutes(2))
+                    .Where(p => p.CurrentProgress < targetProgress)
+                    .Where(p => !allArrivedConns.Contains(p.ConnectionId))
+                    .Select(p => p.ConnectionId)
+                    .ToList();
+
+                // 3) 主动写 IsAbnormal=true / TargetProgress=targetProgress
+                foreach (var connId in laggingPlayerConnIds)
+                {
+                    var p = room.Players.FirstOrDefault(x => x.ConnectionId == connId);
+                    if (p == null) continue;
+                    p.IsAbnormal = true;
+                    p.TargetProgress = targetProgress;
+                    _logger.LogWarning("[CollectiveSkip] 服务端主动标记落后玩家：{Uid} → IsAbnormal=true, TargetProgress={T}",
+                        p.PlayerUid, targetProgress);
+                }
+
+                // 4) 收集 satisfiedSyncs（既有 helper 复用）
+                satisfiedSyncs = CollectSatisfiedSyncsLocked(room);
+
+                // 5) 计数器递增 + 降级判断
+                room.ConsecutiveCollectiveSkipCount += 1;
+                var maxConsec = Math.Max(1, room.HostConfig.MaxConsecutiveCollectiveSkips);
+                if (room.ConsecutiveCollectiveSkipCount >= maxConsec)
+                {
+                    degraded = true;
+                }
+
+                // 重置监测快照（避免本次触发后立即再触发）
+                room.LastArrivalSetsSnapshot = null;
+                room.ObservationStartTime = default;
+                room.CollectiveSkipTimer?.Dispose();
+                room.CollectiveSkipTimer = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            // lock 内任何异常都直接吞，避免影响其他 Hub 调用；记录详细日志便于排查
+            _logger.LogError(ex, "[CollectiveSkip] Timer 回调 lock 内决策失败，房间={RoomCode}", roomCode);
+            return;
+        }
+
+        // === lock 外按顺序广播（OQ-7 A）===
+        try
+        {
+            // ① 先 satisfiedSyncs 们：让大部队第一时间被解封
+            foreach (var (sid, sp) in satisfiedSyncs)
+            {
+                _logger.LogInformation("[CollectiveSkip] 广播 AllArrived: 房间={RoomCode}, 同步点={SyncId}, 进度={Progress}",
+                    roomCode, sid, sp);
+                await Clients.Group(roomCode).SendAsync("AllArrived", sid);
+                _roomManager.ClearArrivalSet(roomCode, sid);
+            }
+
+            // ② 后 RequestSkipToProgress：让落后玩家神像跳段
+            if (laggingPlayerConnIds.Count > 0)
+            {
+                _logger.LogWarning("[CollectiveSkip] 广播 RequestSkipToProgress: 房间={RoomCode}, target={Target}, 落后玩家数={N}",
+                    roomCode, targetProgress, laggingPlayerConnIds.Count);
+                await Clients.Group(roomCode).SendAsync("RequestSkipToProgress", targetProgress);
+            }
+
+            // ③ 降级广播（OQ-5 A）
+            if (degraded)
+            {
+                _logger.LogError("[CollectiveSkip] 连续 {N} 次集体跳段，触发降级",
+                    room.ConsecutiveCollectiveSkipCount);
+                await Clients.Group(roomCode).SendAsync("CollectiveSkipDegraded", "ConsecutiveCollectiveSkipExceeded");
+            }
+        }
+        catch (Exception ex)
+        {
+            // 广播失败不应让 Timer 回调崩溃；记录日志并放弃本次广播
+            _logger.LogError(ex, "[CollectiveSkip] Timer 回调 lock 外广播失败，房间={RoomCode}", roomCode);
+        }
     }
 
     /// <summary>计算多份路线清单的差异文件名列表</summary>

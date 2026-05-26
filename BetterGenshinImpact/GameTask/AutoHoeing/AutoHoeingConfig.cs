@@ -327,6 +327,20 @@ public partial class AutoHoeingConfig : ObservableObject
     [ObservableProperty]
     private int? _maxRouteLag = 2;
 
+    // === 集体卡死监测（multiplayer-mutual-wait-collective-skip spec / OQ-1~OQ-8 全部默认值）===
+    /// <summary>启用集体卡死监测，默认 true。关闭后服务端不创建 MutualWaitMonitor，行为退化到 60s 超时</summary>
+    [ObservableProperty]
+    private bool _enableMutualWaitCollectiveSkip = true;
+    /// <summary>触发阈值比例：totalWaiters ≥ ⌈online * MutualWaitMinWaitersRatio⌉ 才进入稳定计时，OQ-3 默认 0.5</summary>
+    [ObservableProperty]
+    private double _mutualWaitMinWaitersRatio = 0.5;
+    /// <summary>ArrivalSets 快照保持稳定 N 秒后触发协同跳段，默认 30 秒（保守起步）</summary>
+    [ObservableProperty]
+    private int _mutualWaitStableSeconds = 30;
+    /// <summary>连续触发协同跳段上限，达到后走 OnConsecutiveSyncTimeoutExceeded 类型路径协调停止，默认 3</summary>
+    [ObservableProperty]
+    private int _maxConsecutiveCollectiveSkips = 3;
+
     /// <summary>
     /// 启用万叶聚物同步流程。默认 false，用户需显式打勾才启用，避免无万叶队伍走无效流程。
     /// 替代旧的 KazuhaPlayerIndex 字段（kazuha-player-auto-detection：从"按索引指定"改为"运行时声明"）。

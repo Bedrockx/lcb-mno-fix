@@ -116,6 +116,36 @@ public class Room
     /// 设计见 design.md "Data Models §2 服务端房间维度状态"。
     /// </summary>
     public KazuhaCollectRoomState KazuhaCollect { get; set; } = new();
+
+    // === 集体卡死监测字段（multiplayer-mutual-wait-collective-skip spec）===
+    // Validates: Requirements 2.1 / 2.8 / 3.10
+
+    /// <summary>
+    /// 当前 ArrivalSets 快照（深拷贝），由 MutualWaitMonitor 在 piggyback 评估时
+    /// 与 room.ArrivalSets 比对：相同则保持 ObservationStartTime 不动，不同则刷新快照与时刻。
+    /// 多世界轮换 ResetForNewWorldRound 内置 null。
+    /// </summary>
+    public Dictionary<string, HashSet<string>>? LastArrivalSetsSnapshot { get; set; }
+
+    /// <summary>
+    /// 当前 ArrivalSets 快照开始稳定的 UTC 时刻，配合 LastArrivalSetsSnapshot 使用。
+    /// EvaluateCollectiveStuckTimerCallbackAsync 中检查 (Now - ObservationStartTime) >= MutualWaitStableSeconds。
+    /// </summary>
+    public DateTime ObservationStartTime { get; set; }
+
+    /// <summary>
+    /// per-room 倒计时 Timer（OQ-2 C 混合方案的兜底定时器）。
+    /// 在 LastArrivalSetsSnapshot 刷新时 Dispose+重建，到期后调 EvaluateCollectiveStuckTimerCallbackAsync。
+    /// 多世界轮换重置时 Dispose + 置 null。
+    /// </summary>
+    public System.Threading.Timer? CollectiveSkipTimer { get; set; }
+
+    /// <summary>
+    /// 连续触发协同跳段计数器；每次成功触发 EvaluateCollectiveStuckTimerCallbackAsync + 广播后 +1。
+    /// 达到 MaxConsecutiveCollectiveSkips 触发降级（OQ-5 A）。
+    /// 多世界轮换 ResetForNewWorldRound 内归 0。
+    /// </summary>
+    public int ConsecutiveCollectiveSkipCount { get; set; } = 0;
 }
 
 /// <summary>

@@ -226,6 +226,12 @@ public class AutoHoeingTask : ISoloTask
             _config.FightExtraWaitSeconds = 60;
             _config.RejoinMaxWaitSeconds = 300;
 
+            // === 集体卡死监测重置（multiplayer-mutual-wait-collective-skip §3.10）===
+            _config.EnableMutualWaitCollectiveSkip = true;
+            _config.MutualWaitMinWaitersRatio = 0.5;
+            _config.MutualWaitStableSeconds = 30;
+            _config.MaxConsecutiveCollectiveSkips = 3;
+
             ApplySettingsOverride();
         }
 
@@ -544,6 +550,11 @@ public class AutoHoeingTask : ISoloTask
                     FightTimeoutSeconds = _config.FightTimeoutSeconds,
                     FightExtraWaitSeconds = _config.FightExtraWaitSeconds,
                     RejoinMaxWaitSeconds = _config.RejoinMaxWaitSeconds,
+                    // === 集体卡死监测（multiplayer-mutual-wait-collective-skip §8.8）===
+                    EnableMutualWaitCollectiveSkip = _config.EnableMutualWaitCollectiveSkip,
+                    MutualWaitMinWaitersRatio = _config.MutualWaitMinWaitersRatio,
+                    MutualWaitStableSeconds = _config.MutualWaitStableSeconds,
+                    MaxConsecutiveCollectiveSkips = _config.MaxConsecutiveCollectiveSkips,
                 };
                 
                 // 房主上传配置，带重试机制（最多3次）
@@ -608,6 +619,9 @@ public class AutoHoeingTask : ISoloTask
                 _config.PartyTimeoutSeconds, _config.MultiWorldEnabled, _config.MultiWorldCount, _config.SelectedBuiltinRoute);
             _logger.LogInformation("[联机] 战斗额外等待={FightExtra}s，重新加入最大等待={RejoinMax}s，传送必同步（默认）",
                 _config.FightExtraWaitSeconds, _config.RejoinMaxWaitSeconds);
+            _logger.LogInformation("[联机] 集体卡死监测：启用={E}, 阈值比例={R:F2}, 稳定秒={S}, 上限={M}",
+                _config.EnableMutualWaitCollectiveSkip, _config.MutualWaitMinWaitersRatio,
+                _config.MutualWaitStableSeconds, _config.MaxConsecutiveCollectiveSkips);
             _logger.LogInformation("[联机] =====================================");
 
             _multiplayerCoordinator.OnDegraded += reason =>
@@ -907,6 +921,11 @@ public class AutoHoeingTask : ISoloTask
                         _config.SelectedBuiltinRoute = hostConfig.SelectedBuiltinRoute;
                         _config.FightExtraWaitSeconds = hostConfig.FightExtraWaitSeconds;
                         _config.RejoinMaxWaitSeconds = hostConfig.RejoinMaxWaitSeconds;
+                        // === 集体卡死监测同步（multiplayer-mutual-wait-collective-skip §8.8）===
+                        _config.EnableMutualWaitCollectiveSkip = hostConfig.EnableMutualWaitCollectiveSkip;
+                        _config.MutualWaitMinWaitersRatio = hostConfig.MutualWaitMinWaitersRatio;
+                        _config.MutualWaitStableSeconds = hostConfig.MutualWaitStableSeconds;
+                        _config.MaxConsecutiveCollectiveSkips = hostConfig.MaxConsecutiveCollectiveSkips;
 
                         // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                         PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -1645,6 +1664,11 @@ public class AutoHoeingTask : ISoloTask
                     _config.SelectedBuiltinRoute = hostConfig.SelectedBuiltinRoute;
                     _config.FightExtraWaitSeconds = hostConfig.FightExtraWaitSeconds;
                     _config.RejoinMaxWaitSeconds = hostConfig.RejoinMaxWaitSeconds;
+                    // === 集体卡死监测同步（multiplayer-mutual-wait-collective-skip §8.8）===
+                    _config.EnableMutualWaitCollectiveSkip = hostConfig.EnableMutualWaitCollectiveSkip;
+                    _config.MutualWaitMinWaitersRatio = hostConfig.MutualWaitMinWaitersRatio;
+                    _config.MutualWaitStableSeconds = hostConfig.MutualWaitStableSeconds;
+                    _config.MaxConsecutiveCollectiveSkips = hostConfig.MaxConsecutiveCollectiveSkips;
 
                     // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                     PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -2898,6 +2922,11 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaSecondApproachMaxSteps = ClampSecondApproachMaxSteps(Get("kazuhaSecondApproachMaxSteps", _config.KazuhaSecondApproachMaxSteps));
             NormalizeKazuhaTimeoutOrder(_config);
             _config.FightTimeoutSeconds = Get("fightTimeoutSeconds", _config.FightTimeoutSeconds);
+            // === 集体卡死监测（multiplayer-mutual-wait-collective-skip §8.8 / OQ-1~OQ-5 默认值）===
+            _config.EnableMutualWaitCollectiveSkip = Get("enableMutualWaitCollectiveSkip", _config.EnableMutualWaitCollectiveSkip);
+            _config.MutualWaitMinWaitersRatio = Get("mutualWaitMinWaitersRatio", _config.MutualWaitMinWaitersRatio);
+            _config.MutualWaitStableSeconds = Get("mutualWaitStableSeconds", _config.MutualWaitStableSeconds);
+            _config.MaxConsecutiveCollectiveSkips = Get("maxConsecutiveCollectiveSkips", _config.MaxConsecutiveCollectiveSkips);
         }
         else
         {
@@ -2911,6 +2940,11 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaWaitSkillCdSeconds = 5;
             _config.KazuhaSecondApproachMaxSteps = 6;
             _config.FightTimeoutSeconds = 120;
+            // === 集体卡死监测（单机模式重置为默认值，preservation §3.11）===
+            _config.EnableMutualWaitCollectiveSkip = true;
+            _config.MutualWaitMinWaitersRatio = 0.5;
+            _config.MutualWaitStableSeconds = 30;
+            _config.MaxConsecutiveCollectiveSkips = 3;
 
             // 单机模式：重置固定调试线路字段，避免联机全局配置残留影响
             // 如果 settings 显式包含这些键，后续 ContainsKey 逻辑会覆盖回来
@@ -3027,6 +3061,12 @@ public class AutoHoeingTask : ISoloTask
 
             // ===== 联机战斗配置 =====
             new() { Name = "fightTimeoutSeconds", Label = "联机战斗超时时间（秒）\n由房主设定并同步给所有成员，覆盖各自的自动战斗超时", Type = "number", DefaultValue = config.FightTimeoutSeconds },
+
+            // ===== 集体卡死监测（multiplayer-mutual-wait-collective-skip spec）=====
+            new() { Name = "enableMutualWaitCollectiveSkip", Label = "启用集体卡死监测\n服务端检测到多人在不同同步点互锁后，主动协调全员跳段，无需等到客户端 60s 超时", Type = "bool", DefaultValue = config.EnableMutualWaitCollectiveSkip },
+            new() { Name = "mutualWaitMinWaitersRatio", Label = "触发阈值比例（0.5=半数）\ntotalWaiters ≥ ⌈online * Ratio⌉ 才进入稳定计时；0.5 表示 4 人房 2 人到达就开始计时", Type = "number", DefaultValue = config.MutualWaitMinWaitersRatio },
+            new() { Name = "mutualWaitStableSeconds", Label = "稳定时长（秒）\nArrivalSets 快照保持稳定 N 秒后触发协同跳段，默认 30 秒", Type = "number", DefaultValue = config.MutualWaitStableSeconds },
+            new() { Name = "maxConsecutiveCollectiveSkips", Label = "连续触发上限\n连续触发 N 次集体跳段后协调停止，默认 3", Type = "number", DefaultValue = config.MaxConsecutiveCollectiveSkips },
 
             // ===== 第七部分：多世界连续锄地配置 =====
             new() { Name = "multiWorldEnabled", Label = "启用多世界连续锄地\n房主设定，完成一个世界后轮换到下一个玩家的世界", Type = "bool", DefaultValue = config.MultiWorldEnabled },

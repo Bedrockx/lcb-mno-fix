@@ -58,6 +58,20 @@ public class CoordinatorClient : IAsyncDisposable
     public event Action<string>? PlayerAnomalyRecoveredReceived; // playerUid
     public event Action<int>? StartRouteReceived; // targetRouteIndex
 
+    // === 集体卡死跳段事件（multiplayer-mutual-wait-collective-skip spec）===
+    /// <summary>
+    /// 服务端集体卡死监测触发后，请求落后玩家跳到 targetProgress 对应段。
+    /// 载荷：targetProgress (long)。
+    /// 旧客户端不订阅此事件 → 服务端广播被静默丢弃，行为退化到 60s 超时（preservation §3.9）。
+    /// </summary>
+    public event Action<long>? RequestSkipToProgressReceived;
+
+    /// <summary>
+    /// 服务端连续触发协同跳段达上限后的降级广播。载荷：reason (string)。
+    /// 触发后客户端走 OnConsecutiveSyncTimeoutExceeded 等价路径协调停止（OQ-5 A）。
+    /// </summary>
+    public event Action<string>? CollectiveSkipDegradedReceived;
+
     // === 万叶聚物同步事件 ===
     /// <summary>
     /// 万叶玩家发起聚物动作时触发，载荷为：
@@ -191,6 +205,21 @@ public class CoordinatorClient : IAsyncDisposable
                 {
                     _logger.LogInformation("[联机] 收到开始路线指令: 目标路线={TargetRoute}", targetRouteIndex);
                     StartRouteReceived?.Invoke(targetRouteIndex);
+                });
+
+            // === 集体卡死跳段事件订阅（multiplayer-mutual-wait-collective-skip §8.5）===
+            _connection.On<long>("RequestSkipToProgress",
+                (target) =>
+                {
+                    _logger.LogWarning("[联机] 收到 RequestSkipToProgress: target={Target}", target);
+                    RequestSkipToProgressReceived?.Invoke(target);
+                });
+
+            _connection.On<string>("CollectiveSkipDegraded",
+                (reason) =>
+                {
+                    _logger.LogError("[联机] 收到 CollectiveSkipDegraded: reason={Reason}", reason);
+                    CollectiveSkipDegradedReceived?.Invoke(reason);
                 });
 
             _connection.Closed += OnConnectionClosed;
