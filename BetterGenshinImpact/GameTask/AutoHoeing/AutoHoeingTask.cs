@@ -271,6 +271,10 @@ public class AutoHoeingTask : ISoloTask
 
         try
         {
+            // 清空联机锄地队伍识别稳定性缓冲（每次任务启动重置一次）
+            // 详见 .kiro/specs/combat-scenes-recognition-stability-buffer/design.md §2.3
+            BetterGenshinImpact.GameTask.AutoFight.AutoFightTask.ResetRecognitionStabilityBuffer();
+
             await RunTask();
         }
         catch (OperationCanceledException)

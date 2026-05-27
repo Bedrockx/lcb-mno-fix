@@ -94,6 +94,20 @@ public class AutoFightTask : ISoloTask
         get => new DateTime(System.Threading.Volatile.Read(ref _lastEnemySeenAtTicks), DateTimeKind.Utc);
         set => System.Threading.Volatile.Write(ref _lastEnemySeenAtTicks, value.Ticks);
     }
+
+    /// <summary>
+    /// 联机锄地稳定性缓冲：上次成功识别的角色名集合 fingerprint
+    /// （OrderBy + Ordinal + "|" 拼接，顺序无关）。
+    /// 由 AutoHoeingTask.RunTask 入口设为 null 清空，仅联机锄地路径读写。
+    /// 详见 .kiro/specs/combat-scenes-recognition-stability-buffer/design.md §2.1。
+    /// </summary>
+    private static volatile string? _lastRecognizedAvatarFingerprint;
+
+    /// <summary>清空联机锄地稳定性缓冲（由 AutoHoeingTask 入口调用）。</summary>
+    public static void ResetRecognitionStabilityBuffer()
+    {
+        _lastRecognizedAvatarFingerprint = null;
+    }
     
     private static readonly object PickLock = new object(); 
     
@@ -245,12 +259,12 @@ public class AutoFightTask : ISoloTask
     private TaskFightFinishDetectConfig _finishDetectConfig;
 
     /// <summary>
-    /// 联机锄地兜底分支信号位：A1（GetCombatScenesWithRetry）侧探测到队伍识别失败时
-    /// 通过此字段把 reason 传递给 Start，Start 据此决定走兜底分支。
-    /// null 表示当前 fight waypoint 不需要兜底。
-    /// 详见 design.md §3.3 / §3.4。
+    /// 联机锄地 C1 兜底信号位：A1（GetCombatScenesWithRetry）侧探测到队伍识别失败时设为 true，
+    /// Start 入口据此调用 RunC1FallbackLoopAsync 走简化兜底循环。
+    /// 单机路径下永远为 false。
+    /// 详见 fight-strategy-fallback-use-real-flow/design.md §2.1 / §2.6。
     /// </summary>
-    private FightStrategyFallbackReason? _fallbackReason;
+    private bool _useC1Fallback;
 
     public AutoFightTask(AutoFightParam taskParam)
     {
@@ -326,25 +340,16 @@ public class AutoFightTask : ISoloTask
     }
     public CombatScenes GetCombatScenesWithRetry(CancellationToken ct = default)
     {
-        const int maxRetries = 5;
-        var retryDelayMs = 1000; // 可选：重试间隔，单位毫秒
+        var first = TryInitializeTeamWithRetry(ct);
 
-        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        if (first != null)
         {
-            ct.ThrowIfCancellationRequested();
-            
-            using var ra = CaptureToRectArea();
-            var combatScenes = new CombatScenes().InitializeTeam(ra);
-            if (combatScenes.CheckTeamInitialized())
+            // 联机锄地：叠加双采样稳定性比较
+            if (PathingConditionConfig.MultiplayerFightTimeoutOverride.HasValue)
             {
-                return combatScenes;
+                first = ApplyStabilityBuffer(first, ct);
             }
-        
-            if (attempt < maxRetries)
-            {
-                Thread.Sleep(retryDelayMs);
-                ct.ThrowIfCancellationRequested();
-            }
+            return first;
         }
 
         ct.ThrowIfCancellationRequested();
@@ -355,7 +360,7 @@ public class AutoFightTask : ISoloTask
             return new CombatScenes().InitializeTeamForced(Config.CustomAvatarConfigOut.CustomAvatarForceUseList);
         }
 
-        // 联机锄地兜底分支：不抛异常，标记 reason 让 Start 走 FightStrategyFallbackExecutor
+        // 联机锄地 C1 兜底分支：不抛异常，标记 _useC1Fallback 让 Start 走 RunC1FallbackLoopAsync
         // 单机路径维持原 throw（preservation §3.1）
         if (FightStrategyFallbackDecisions.ShouldUseFallback(
                 isMultiplayerHoeing: PathingConditionConfig.MultiplayerFightTimeoutOverride.HasValue,
@@ -364,12 +369,112 @@ public class AutoFightTask : ISoloTask
                 matchedScriptCount: 0,
                 availableAvatarCount: 0))
         {
-            _fallbackReason = FightStrategyFallbackReason.TeamRecognitionFailed;
-            // 返回未初始化的占位 CombatScenes，Start 通过 _fallbackReason 信号位绕过后续流程
+            _useC1Fallback = true;
+            // 返回未初始化的占位 CombatScenes，Start 通过 _useC1Fallback 信号位绕过后续流程
             return new CombatScenes();
         }
 
         throw new Exception("识别队伍角色失败（已重试 5 次）");
+    }
+
+    /// <summary>
+    /// 5 次重试的纯识别函数：返回首次 CheckTeamInitialized 通过的 CombatScenes，全部失败返回 null。
+    /// 详见 .kiro/specs/combat-scenes-recognition-stability-buffer/design.md §2.2。
+    /// </summary>
+    private static CombatScenes? TryInitializeTeamWithRetry(CancellationToken ct)
+    {
+        const int maxRetries = 5;
+        const int retryDelayMs = 1000;
+
+        for (var attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var ra = CaptureToRectArea();
+            var scenes = new CombatScenes().InitializeTeam(ra);
+            if (scenes.CheckTeamInitialized())
+            {
+                return scenes;
+            }
+
+            if (attempt < maxRetries)
+            {
+                Thread.Sleep(retryDelayMs);
+                ct.ThrowIfCancellationRequested();
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 联机锄地双采样稳定性缓冲：与 _lastRecognizedAvatarFingerprint 比较，不一致则再识别一次。
+    /// 详见 .kiro/specs/combat-scenes-recognition-stability-buffer/design.md §2.2 决策表。
+    /// </summary>
+    private CombatScenes ApplyStabilityBuffer(CombatScenes first, CancellationToken ct)
+    {
+        var firstFp = ComputeAvatarFingerprint(first);
+        var prev = _lastRecognizedAvatarFingerprint;
+
+        if (prev == null || prev == firstFp)
+        {
+            _lastRecognizedAvatarFingerprint = firstFp;
+            return first;
+        }
+
+        Logger.LogWarning(
+            "[联机][稳定性] 识别 fingerprint 与缓冲不一致，触发二次校验（prev={Prev} cur={Cur}）",
+            prev, firstFp);
+
+        var second = TryInitializeTeamWithRetry(ct);
+        if (second == null)
+        {
+            Logger.LogWarning(
+                "[联机][稳定性] 二次识别失败，沿用第一次结果并更新缓冲（{Cur}）",
+                firstFp);
+            _lastRecognizedAvatarFingerprint = firstFp;
+            return first;
+        }
+
+        var secondFp = ComputeAvatarFingerprint(second);
+
+        if (secondFp == prev)
+        {
+            Logger.LogInformation(
+                "[联机][稳定性] 二次识别恢复一致（{Prev}），丢弃第一次误识别",
+                prev);
+            first.Dispose();
+            return second;
+        }
+
+        if (secondFp == firstFp)
+        {
+            Logger.LogWarning(
+                "[联机][稳定性] 二次确认队伍变更（{New}），更新缓冲",
+                firstFp);
+            _lastRecognizedAvatarFingerprint = firstFp;
+            second.Dispose();
+            return first;
+        }
+
+        Logger.LogWarning(
+            "[联机][稳定性] 三次结果均不同（prev={Prev} first={First} second={Second}），使用最新二次结果",
+            prev, firstFp, secondFp);
+        _lastRecognizedAvatarFingerprint = secondFp;
+        first.Dispose();
+        return second;
+    }
+
+    /// <summary>
+    /// 计算队伍 fingerprint：角色名集合，OrderBy(StringComparer.Ordinal) 后用 "|" 拼接。
+    /// 顺序无关（{A,B,C,D} == {D,C,B,A}）。
+    /// </summary>
+    internal static string ComputeAvatarFingerprint(CombatScenes scenes)
+    {
+        if (scenes is null) return string.Empty;
+        var names = scenes.GetAvatars()
+            .Select(a => a.Name)
+            .Where(n => !string.IsNullOrEmpty(n))
+            .OrderBy(s => s, StringComparer.Ordinal);
+        return string.Join("|", names);
     }
     
     //添加一个计时器，设定一个标志位，1000Ms内为true，超过1000Ms为false，战斗结束后重置计时器和标志位
@@ -390,16 +495,16 @@ public class AutoFightTask : ISoloTask
 
         LogScreenResolution();
 
-        // 重置兜底信号位（每个 fight waypoint 独立判定，preservation §2.5）
-        _fallbackReason = null;
+        // 重置兜底信号位（每个 fight waypoint 独立判定）
+        _useC1Fallback = false;
 
         var combatScenes = GetCombatScenesWithRetry(ct);
 
-        // ─── A1 出口：GetCombatScenesWithRetry 已设置 _fallbackReason 表示队伍识别失败 ───
-        // 立即委派给兜底执行器，不进入后续脚本匹配 / 战斗循环
-        if (_fallbackReason.HasValue)
+        // ─── A1 出口：GetCombatScenesWithRetry 已设置 _useC1Fallback 表示队伍识别失败 ───
+        // 立即委派给简化 EQA 循环，不进入后续脚本匹配 / 战斗循环
+        if (_useC1Fallback)
         {
-            await RunFallbackAsync(_fallbackReason.Value, ct);
+            await RunC1FallbackLoopAsync(ct);
             return;
         }
 
@@ -444,7 +549,7 @@ public class AutoFightTask : ISoloTask
                         out combatCommands,
                         out matchedScriptCount))
                 {
-                    // matchedScriptCount==0 → C2 命中 → 走兜底
+                    // matchedScriptCount==0 → C2 命中 → 捏造 EQA 序列继续主循环
                     if (FightStrategyFallbackDecisions.ShouldUseFallback(
                             isMultiplayerHoeing: true,
                             teamRecognized: true,
@@ -452,12 +557,20 @@ public class AutoFightTask : ISoloTask
                             matchedScriptCount: 0,
                             availableAvatarCount: 0))
                     {
-                        await RunFallbackAsync(FightStrategyFallbackReason.NoScriptMatched, ct);
-                        return;
+                        Logger.LogWarning(
+                            "[联机][兜底][C2] 无匹配战斗脚本，捏造 EQA 序列继续战斗（avatars={Names}）",
+                            string.Join(",", combatScenes.GetAvatars().Select(a => a.Name)));
+                        var avatarNamesForFallback =
+                            combatScenes.GetAvatars().Select(a => a.Name).ToList();
+                        combatCommands = BuildSyntheticEqaCommands(avatarNamesForFallback);
+                        matchedScriptCount = 1; // 防 A3 误触
                     }
-                    // 决策返回 false（理论不应发生，因为 isMultiplayerHoeing=true ∧ matched=0 必触发 C2）
-                    // 兜底安全网：维持原 Exception 行为
-                    throw new Exception("未匹配到任何战斗脚本");
+                    else
+                    {
+                        // 决策返回 false（理论不应发生，因为 isMultiplayerHoeing=true ∧ matched=0 必触发 C2）
+                        // 兜底安全网：维持原 Exception 行为
+                        throw new Exception("未匹配到任何战斗脚本");
+                    }
                 }
             }
         }
@@ -493,7 +606,7 @@ public class AutoFightTask : ISoloTask
         
         if (commandAvatarNames.Count <= 0)
         {
-            // ─── A3 注入点：联机锄地下走兜底（C3） ───
+            // ─── A3 注入点：联机锄地下捏造 EQA 序列继续主循环（C3） ───
             if (FightStrategyFallbackDecisions.ShouldUseFallback(
                     isMultiplayerHoeing: isMultiplayerHoeing,
                     teamRecognized: true,
@@ -501,11 +614,27 @@ public class AutoFightTask : ISoloTask
                     matchedScriptCount: Math.Max(1, matchedScriptCount),
                     availableAvatarCount: 0))
             {
-                await RunFallbackAsync(FightStrategyFallbackReason.NoUsableAvatar, ct);
-                return;
+                // 用真实队伍 - ban 列表作为捏脚本对象
+                var avatarsForFallback = combatScenes.GetAvatars()
+                    .Select(a => a.Name)
+                    .Except(bandAvatarsName)
+                    .ToList();
+                if (avatarsForFallback.Count == 0)
+                {
+                    // ban 列表覆盖整队的极端边界：回退到全队（至少打一段）
+                    avatarsForFallback = combatScenes.GetAvatars().Select(a => a.Name).ToList();
+                }
+                Logger.LogWarning(
+                    "[联机][兜底][C3] 无可用战斗脚本，捏造 EQA 序列继续战斗（avatars={Names}）",
+                    string.Join(",", avatarsForFallback));
+                combatCommands = BuildSyntheticEqaCommands(avatarsForFallback);
+                commandAvatarNames = avatarsForFallback;
             }
-            // 单机路径维持原 Exception
-            throw new Exception("没有可用战斗脚本");
+            else
+            {
+                // 单机路径维持原 Exception
+                throw new Exception("没有可用战斗脚本");
+            }
         }
 
         // 新的取消token
@@ -2364,15 +2493,99 @@ public class AutoFightTask : ISoloTask
     }
 
     /// <summary>
-    /// 走兜底分支：构造 FightStrategyFallbackExecutor，按 _taskParam.Timeout 限时执行按键宏。
-    /// 不调用 combatScenes.BeforeTask / AfterTask（无 avatars），不调用 PickDropsAfterFight。
-    /// 保留 AnomalyDetector + RetryException 链路（外层 PathExecutor 调用方继续监控异常）。
-    /// 详见 design.md §3.4 / §4.5。
+    /// C1 兜底循环：队伍完全识别失败（5 次重试都没拿到 Avatar）时调用。
+    /// 不切人、不重击，仅 E → Q → 普攻 ×3 循环，每 ~5s 调用一次 CheckFightFinish(null) 检测战斗结束。
+    /// 沿用 _taskParam.Timeout 作为兜底超时上限。
+    /// 详见 .kiro/specs/fight-strategy-fallback-use-real-flow/design.md §2.6。
     /// </summary>
-    private async Task RunFallbackAsync(FightStrategyFallbackReason reason, CancellationToken ct)
+    private async Task RunC1FallbackLoopAsync(CancellationToken ct)
     {
-        var executor = new FightStrategyFallbackExecutor(_taskParam.Timeout, reason, Logger);
-        await executor.RunAsync(ct);
+        Logger.LogWarning(
+            "[联机][兜底][C1] 队伍识别失败，启用简化 EQA 循环 + CheckFightFinish 检测，超时 {Timeout}s",
+            _taskParam.Timeout);
+
+        // 重置 CheckFightFinish 依赖的状态字段（与主循环重置块语义一致，避免读到上一场战斗 stale 值）
+        FightStatusFlag = true;
+        FightEndTotoly = false;
+        _totolyEndCount = 0;
+        _2ndEndFlag = false;
+        _fightDurationExceeded = false;
+        _totolyFlag = false;
+
+        var sw = Stopwatch.StartNew();
+        var timeoutMs = (long)_taskParam.Timeout * 1000L;
+        var lastCheckMs = -5000L; // 让首轮也能尽快检测一次
+        const int checkIntervalMs = 5000;
+
+        try
+        {
+            while (sw.ElapsedMilliseconds < timeoutMs && !ct.IsCancellationRequested && !FightEndTotoly)
+            {
+                // E
+                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                await Delay(200, ct);
+                if (FightEndTotoly || ct.IsCancellationRequested) break;
+
+                // Q
+                Simulation.SendInput.SimulateAction(GIActions.ElementalBurst);
+                await Delay(300, ct);
+                if (FightEndTotoly || ct.IsCancellationRequested) break;
+
+                // 普攻 ×3
+                for (var i = 0; i < 3; i++)
+                {
+                    if (FightEndTotoly || ct.IsCancellationRequested) break;
+                    Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                    await Delay(250, ct);
+                }
+
+                // 周期性检测战斗结束（avatar=null，CheckFightFinish 内异常会被捕获 return true 提前结束）
+                if (sw.ElapsedMilliseconds - lastCheckMs >= checkIntervalMs)
+                {
+                    lastCheckMs = sw.ElapsedMilliseconds;
+                    try
+                    {
+                        var finished = await CheckFightFinish(0, 450, ct, null);
+                        if (finished)
+                        {
+                            Logger.LogInformation(
+                                "[联机][兜底][C1] CheckFightFinish 检测到战斗结束，提前退出兜底");
+                            break;
+                        }
+                    }
+                    catch (OperationCanceledException) { throw; }
+                    catch (Exception ex)
+                    {
+                        Logger.LogWarning(ex, "[联机][兜底][C1] CheckFightFinish 异常，忽略并继续");
+                    }
+                }
+            }
+        }
+        finally
+        {
+            Simulation.ReleaseAllKey();
+            FightStatusFlag = false;
+            FightEndTotoly = true;
+            Logger.LogInformation(
+                "[联机][兜底][C1] 简化兜底结束，耗时 {Elapsed:F1}s",
+                sw.Elapsed.TotalSeconds);
+        }
+    }
+
+    /// <summary>
+    /// 为 C2/C3 捏造的 EQA 序列：每个角色一组 skill → burst → attack(0.5)，不含 charge。
+    /// 由原 AutoFightTask 主循环按角色顺序逐条 Execute，自动获得 CheckFightFinish / AnomalyDetector 等全部副作用。
+    /// </summary>
+    private static List<CombatCommand> BuildSyntheticEqaCommands(IEnumerable<string> avatarNames)
+    {
+        var cmds = new List<CombatCommand>();
+        foreach (var name in avatarNames)
+        {
+            cmds.Add(new CombatCommand(name, "skill"));
+            cmds.Add(new CombatCommand(name, "burst"));
+            cmds.Add(new CombatCommand(name, "attack(0.5)"));
+        }
+        return cmds;
     }
 
     //定义按键，用于结束吃药的切换人

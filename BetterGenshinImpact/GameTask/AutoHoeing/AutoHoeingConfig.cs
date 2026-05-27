@@ -36,10 +36,10 @@ public partial class AutoHoeingConfig : ObservableObject
     private string _sortMode = "高收益优先";
 
     /// <summary>
-    /// 拾取模式
+    /// 拾取模式（默认改为「模板匹配仅拾取狗粮」以减少新用户首跑的拾取干扰）
     /// </summary>
     [ObservableProperty]
-    private string _pickupMode = "模板匹配拾取狗粮和怪物材料";
+    private string _pickupMode = "模板匹配仅拾取狗粮";
 
     /// <summary>
     /// 仅使用路线相关怪物材料进行识别

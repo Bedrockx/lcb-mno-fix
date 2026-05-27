@@ -116,7 +116,8 @@ public class AnomalyDetector
                         using var result = region.Find(_revivalRo);
                         if (result.IsExist())
                         {
-                            if (!TpTask.SuppressAutoRevivalClick)
+                            var suppressed = TpTask.SuppressAutoRevivalClick;
+                            if (!suppressed)
                             {
                                 Logger.LogInformation("识别到复苏按钮（单机模板匹配），点击");
                                 result.Click();
@@ -137,13 +138,21 @@ public class AnomalyDetector
                             {
                                 try { await OnRevivalDetected(); } catch { }
                             }
-                            continue;
+
+                            // 抑制分支不 continue，让循环走到末尾的 loopCount++ + Task.Delay(50, ct) 自然节流。
+                            if (AnomalyDetectorThrottleDecisions.ShouldContinueAfterRevivalHit(
+                                    revivalHit: true,
+                                    suppressAutoRevivalClick: suppressed))
+                            {
+                                continue;
+                            }
                         }
                     }
                     // 联机模式复苏检测：色块连通性检测"已倒下"红色文字
                     if (IsMultiplayerDefeated(region))
                     {
-                        if (!TpTask.SuppressAutoRevivalClick)
+                        var suppressed = TpTask.SuppressAutoRevivalClick;
+                        if (!suppressed)
                         {
                             Logger.LogInformation("识别到联机已倒下界面（色块检测），点击复苏按钮");
                             await Task.Delay(300, ct);
@@ -156,7 +165,7 @@ public class AnomalyDetector
                         }
 
                         // 联机模式：触发"已倒下"信号，PathExecutor 在主循环将抛 RetryException 走异常流程
-                        // （信号位写入路径不变，preservation §3.3）
+                        // （信号位写入路径不变，preservation §3.3 / §3.4）
                         try { OnMultiplayerDefeatedDetected?.Invoke(); } catch { }
 
                         // 兼容：仍保留通用复苏回调（当前为空操作，留作未来扩展）
@@ -164,7 +173,16 @@ public class AnomalyDetector
                         {
                             try { await OnRevivalDetected(); } catch { }
                         }
-                        continue;
+
+                        // 抑制分支不 continue，让循环走到末尾的 loopCount++ + Task.Delay(50, ct)，
+                        // 靠 loopCount % 5 == 0 自然节流到 250 ms（OQ2 = B）。
+                        // 非抑制分支保留 continue：原"立即点击 + 800ms 延迟"语义不变（preservation §3.1）。
+                        if (AnomalyDetectorThrottleDecisions.ShouldContinueAfterRevivalHit(
+                                revivalHit: true,
+                                suppressAutoRevivalClick: suppressed))
+                        {
+                            continue;
+                        }
                     }
                 }
 

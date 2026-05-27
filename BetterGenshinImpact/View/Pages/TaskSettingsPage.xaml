@@ -4703,6 +4703,25 @@
                                        Command="{Binding  OpenutorialCommand}"
                                        Content="打开教程" />
                         </Grid>
+
+                        <!-- ── 拾取模式（联机/单机共享 Config.AutoHoeingConfig.PickupMode） ── -->
+                        <Grid Margin="16,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <ui:TextBlock Text="拾取模式" FontTypography="Body" />
+                                <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}" Text="推荐使用模板匹配拾取" />
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" Width="260" Margin="0,0,36,0"
+                                      SelectedItem="{Binding Config.AutoHoeingConfig.PickupMode, Mode=TwoWay}">
+                                <sys:String>模板匹配拾取狗粮和怪物材料</sys:String>
+                                <sys:String>模板匹配仅拾取狗粮</sys:String>
+                                <sys:String>BGI原版拾取</sys:String>
+                                <sys:String>不拾取任何物品</sys:String>
+                            </ComboBox>
+                        </Grid>
                         
                         
                         <!-- ── 身份信息 ── -->
