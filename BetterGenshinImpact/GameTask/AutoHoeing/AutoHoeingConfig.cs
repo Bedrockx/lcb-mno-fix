@@ -341,6 +341,30 @@ public partial class AutoHoeingConfig : ObservableObject
     [ObservableProperty]
     private int _maxConsecutiveCollectiveSkips = 3;
 
+    // === 快速同步点抢报（multiplayer-fast-sync-host-controlled spec, host-controlled 三处对称）===
+    /// <summary>
+    /// 启用快速同步点抢报（主开关）。默认 false。
+    /// 关闭时所有抢报路径短路，行为退化为现有"严格到达后上报"。
+    /// 详见 .kiro/specs/multiplayer-fast-sync-host-controlled/。
+    /// </summary>
+    [ObservableProperty]
+    private bool _fastSyncPointEnabled = false;
+
+    /// <summary>
+    /// 路径同步点抢报距离阈值（米，原神坐标系）。范围 [5.0, 30.0]，默认 10.0。
+    /// 距 waypoint 距离 ≤ 阈值时触发 OR 门抢报；持久化加载时由
+    /// FastSyncDecisions.ClampPathingDistance 兜底 clamp。
+    /// </summary>
+    [ObservableProperty]
+    private double _fastSyncPathingDistance = 10.0;
+
+    /// <summary>
+    /// 传送 loading 命中后到抢报上报之间的延迟毫秒数。范围 [0, 3000]，默认 0。
+    /// 高网络延迟环境可上调。持久化加载时由 FastSyncDecisions.ClampTeleportDelay 兜底 clamp。
+    /// </summary>
+    [ObservableProperty]
+    private int _fastSyncTeleportLoadingDelayMs = 0;
+
     /// <summary>
     /// 启用万叶聚物同步流程。默认 false，用户需显式打勾才启用，避免无万叶队伍走无效流程。
     /// 替代旧的 KazuhaPlayerIndex 字段（kazuha-player-auto-detection：从"按索引指定"改为"运行时声明"）。

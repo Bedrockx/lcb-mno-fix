@@ -75,6 +75,19 @@ public class TpTask
     /// </summary>
     public static volatile bool SuppressAutoRevivalClick = false;
 
+    /// <summary>
+    /// 阶段 1 传送过渡页 (TeleportLoadingDetector.IsLoadingScreen) 命中后触发的静态事件。
+    /// 参数：检测到 loading 命中的 Environment.TickCount 时间戳（毫秒），便于上层算延时。
+    ///
+    /// 设计为静态事件（O4 默认 A）：与 SuppressAutoRevivalClick volatile 标志的"静态字段 +
+    /// try/finally 守护"模式对称。PathExecutor 在传送 waypoint 上报前 += handler、finally
+    /// -= handler。单机调用方不注册 → handler 列表为空 → Invoke 是 no-op，零回归（UB1 / UB2）。
+    ///
+    /// 详见 .kiro/specs/multiplayer-fast-sync-host-controlled/design.md §3.7。
+    /// Validates: requirements FR11 / FR12 / FR13
+    /// </summary>
+    internal static event Action<long>? OnLoadingScreenDetected;
+
     public TpTask(CancellationToken ct)
     {
         this.ct = ct;
@@ -477,6 +490,10 @@ public class TpTask
 
             if (TeleportLoadingDetector.IsLoadingScreen(capture.SrcMat))
             {
+                // 触发抢报（multiplayer-fast-sync-host-controlled spec FR11 / FR12）：
+                // PathExecutor 已在 HandleTeleportWaypoint 之前 += handler，未注册时
+                // OnLoadingScreenDetected 为 null（C# null-conditional Invoke 是 no-op），单机调用方零回归。
+                OnLoadingScreenDetected?.Invoke(Environment.TickCount);
                 return true;
             }
             await Delay(intervalMs, ct);

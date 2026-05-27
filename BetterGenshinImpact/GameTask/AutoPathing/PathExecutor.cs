@@ -504,8 +504,86 @@ public class PathExecutor
                             {
                                 var progress = ComputeProgress(CurWaypoints.Item1, CurWaypoint.Item1);
                                 Logger.LogInformation("[联机] 到达集合点，等待所有玩家，syncId={SyncId}, 进度={Progress}", syncId, progress);
-                                await MultiplayerCoordinator.WaitForAllPlayers(syncId, ct, progress);
-                                Logger.LogInformation("[联机] 集合完成，继续前进，syncId={SyncId}", syncId);
+
+                                // === 快速同步点抢报 watcher（multiplayer-fast-sync-host-controlled spec FR6-FR10）===
+                                // 闭包变量固化（FR19 路径段隔离 / H1 守门）：watcher 仅看 captured*，禁止引用循环变量 / _syncPointMap
+                                var capturedSyncId = syncId;
+                                var capturedWaypoint = waypoint;
+                                var capturedProgress = progress;
+                                var pathingGate = new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncOneShotGate();
+                                var fastWatcherCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                                Task? fastWatcherTask = null;
+                                var shouldArmPathing = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncDecisions
+                                    .ShouldArmPathingWatcher(
+                                        TaskContext.Instance().Config.AutoHoeingConfig,
+                                        isMultiplayer: true,
+                                        isConnected: MultiplayerCoordinator.IsConnected,
+                                        syncIdNonNull: true);
+                                if (shouldArmPathing)
+                                {
+                                    var fastStartTick = Environment.TickCount;
+                                    var threshold = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncDecisions
+                                        .ClampPathingDistance(TaskContext.Instance().Config.AutoHoeingConfig.FastSyncPathingDistance);
+                                    var capturedCoordinator = MultiplayerCoordinator;
+                                    fastWatcherTask = Task.Run(async () =>
+                                    {
+                                        try
+                                        {
+                                            while (!fastWatcherCts.IsCancellationRequested)
+                                            {
+                                                Point2f pos;
+                                                try
+                                                {
+                                                    using var screen = CaptureToRectArea();
+                                                    pos = Navigation.GetPosition(screen, capturedWaypoint.MapName, capturedWaypoint.MapMatchMethod);
+                                                }
+                                                catch (Exception)
+                                                {
+                                                    // 位置识别失败 → 跳过本轮，下一次 200ms tick 再试（FR10 silent）
+                                                    pos = new Point2f(0, 0);
+                                                }
+                                                var dist = pos == new Point2f(0, 0)
+                                                    ? double.NaN   // ShouldFastReport 内 NaN 防御性返回 false
+                                                    : Navigation.GetDistance(capturedWaypoint, pos);
+                                                if (BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncDecisions
+                                                        .ShouldFastReport(dist, threshold, gateAlreadyArmed: !pathingGate.IsArmable))
+                                                {
+                                                    if (pathingGate.TryArm())
+                                                    {
+                                                        if (!capturedCoordinator.IsConnected) return;
+                                                        Logger.LogInformation("[联机][FastSync] 路径抢报命中 syncId={SyncId} 距离={Dist:F2}米 阈值={Th:F1}米 自启动={Elapsed}ms",
+                                                            capturedSyncId, dist, threshold, Environment.TickCount - fastStartTick);
+                                                        await capturedCoordinator.FastReportArrivalAsync(capturedSyncId, fastWatcherCts.Token, capturedProgress);
+                                                    }
+                                                    return;
+                                                }
+                                                await Task.Delay(200, fastWatcherCts.Token);
+                                            }
+                                        }
+                                        catch (OperationCanceledException) { /* 正常路径取消 */ }
+                                        catch (Exception ex)
+                                        {
+                                            Logger.LogWarning(ex, "[联机][FastSync] 路径 watcher 异常退出 syncId={SyncId}", capturedSyncId);
+                                        }
+                                    }, fastWatcherCts.Token);
+                                }
+
+                                try
+                                {
+                                    await MultiplayerCoordinator.WaitForAllPlayers(syncId, ct, progress);
+                                    Logger.LogInformation("[联机] 集合完成，继续前进，syncId={SyncId}", syncId);
+                                }
+                                finally
+                                {
+                                    fastWatcherCts.Cancel();
+                                    if (fastWatcherTask != null)
+                                    {
+                                        try { await fastWatcherTask.WaitAsync(TimeSpan.FromSeconds(1), CancellationToken.None); }
+                                        catch (TimeoutException) { Logger.LogWarning("[联机][FastSync] 路径 watcher 退出超时 syncId={SyncId}", syncId); }
+                                        catch (Exception ex) { Logger.LogWarning(ex, "[联机][FastSync] 路径 watcher 等待退出异常 syncId={SyncId}", syncId); }
+                                    }
+                                    fastWatcherCts.Dispose();
+                                }
                             }
                         }
 
@@ -534,6 +612,52 @@ public class PathExecutor
                             // 单机模式：保留原有行为，让异常自然上抛。
                             if (MultiplayerCoordinator != null)
                             {
+                                // === 快速同步点抢报 handler 注册（multiplayer-fast-sync-host-controlled spec FR11-FR14）===
+                                // 注册时机：在 HandleTeleportWaypoint 之前 += handler；在 finally 内 -= handler，与
+                                // TpTask.SuppressAutoRevivalClick set/clear 守护模式对称。
+                                var tpMapKey = CurWaypoints.Item1 * 10000 + CurWaypoint.Item1;
+                                _syncPointMap.TryGetValue(tpMapKey, out var capturedTpSyncIdMaybe);
+                                var capturedTpSyncId = capturedTpSyncIdMaybe;
+                                var capturedTpProgress = ComputeProgress(CurWaypoints.Item1, CurWaypoint.Item1);
+                                var tpGate = new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncOneShotGate();
+                                var capturedDelayMs = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncDecisions
+                                    .ClampTeleportDelay(TaskContext.Instance().Config.AutoHoeingConfig.FastSyncTeleportLoadingDelayMs);
+                                var shouldArmTp = capturedTpSyncId != null
+                                    && BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.FastSyncDecisions
+                                        .ShouldArmPathingWatcher(
+                                            TaskContext.Instance().Config.AutoHoeingConfig,
+                                            isMultiplayer: true,
+                                            isConnected: MultiplayerCoordinator.IsConnected,
+                                            syncIdNonNull: true);
+                                Action<long>? tpHandler = null;
+                                if (shouldArmTp && capturedTpSyncId != null)
+                                {
+                                    var coordinator = MultiplayerCoordinator;
+                                    var tpStartTick = Environment.TickCount;
+                                    tpHandler = (loadingTickMs) =>
+                                    {
+                                        _ = Task.Run(async () =>
+                                        {
+                                            try
+                                            {
+                                                if (capturedDelayMs > 0)
+                                                    await Task.Delay(capturedDelayMs, ct);
+                                                if (!tpGate.TryArm()) return;
+                                                if (!coordinator.IsConnected) return;
+                                                Logger.LogInformation("[联机][FastSync] 传送 loading 抢报命中 syncId={SyncId} 延时={Delay}ms 自启动={Elapsed}ms",
+                                                    capturedTpSyncId, capturedDelayMs, Environment.TickCount - tpStartTick);
+                                                await coordinator.FastReportArrivalAsync(capturedTpSyncId, ct, capturedTpProgress);
+                                            }
+                                            catch (OperationCanceledException) { /* FR14 silent */ }
+                                            catch (Exception ex)
+                                            {
+                                                Logger.LogWarning(ex, "[联机][FastSync] 传送抢报异常退出 syncId={SyncId}", capturedTpSyncId);
+                                            }
+                                        }, ct);
+                                    };
+                                    BetterGenshinImpact.GameTask.AutoTrackPath.TpTask.OnLoadingScreenDetected += tpHandler;
+                                }
+
                                 try
                                 {
                                     await HandleTeleportWaypoint(waypoint);
@@ -547,6 +671,14 @@ public class PathExecutor
                                 {
                                     Logger.LogWarning("[联机] 传送失败，转为 RetryException 进入异常处理流程，原因: {Msg}", tpEx.Message);
                                     throw new RetryException($"传送失败：{tpEx.Message}");
+                                }
+                                finally
+                                {
+                                    // FR13：handler 注销（即使传送失败 / 异常路径也必须释放，避免下次传送误触发）
+                                    if (tpHandler != null)
+                                    {
+                                        BetterGenshinImpact.GameTask.AutoTrackPath.TpTask.OnLoadingScreenDetected -= tpHandler;
+                                    }
                                 }
                             }
                             else

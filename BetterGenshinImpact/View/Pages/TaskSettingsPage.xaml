@@ -5163,6 +5163,68 @@
                             </StackPanel>
                         </Expander>
 
+                        <!-- ── 快速同步点抢报（房主，multiplayer-fast-sync-host-controlled spec）── -->
+                        <Expander Margin="0,4,36,8"
+                                  Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Expander.Header>
+                                <ui:TextBlock Text="快速同步点抢报" FontTypography="BodyStrong" />
+                            </Expander.Header>
+                            <StackPanel Margin="0,8,0,0">
+                                <!-- 主开关 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0">
+                                        <ui:TextBlock Text="启用快速同步点抢报" />
+                                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                                     Text="开启后路径同步点距离 ≤ 阈值 / 传送 loading 命中即抢先上报，减少队伍互等时间。包括战斗点（开启即接受未对齐就开打）"
+                                                     TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ui:ToggleSwitch Grid.Column="1"
+                                                   IsChecked="{Binding Config.AutoHoeingConfig.FastSyncPointEnabled, Mode=TwoWay}" />
+                                </Grid>
+
+                                <!-- 路径抢报距离阈值 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="路径抢报距离阈值（米，原神坐标系）" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                                 Text="距 waypoint ≤ 阈值时抢报，范围 5-30，默认 10。低值更保守、高值更激进" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120"
+                                                 Minimum="5" Maximum="30" SmallChange="0.5" LargeChange="1"
+                                                 SpinButtonPlacementMode="Inline"
+                                                 IsEnabled="{Binding Config.AutoHoeingConfig.FastSyncPointEnabled}"
+                                                 Value="{Binding Config.AutoHoeingConfig.FastSyncPathingDistance, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+
+                                <!-- 传送 loading 抢报延迟 -->
+                                <Grid Margin="0,0,0,8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ui:TextBlock Grid.Row="0" Grid.Column="0" FontTypography="Body" Text="传送 loading 抢报延迟（毫秒）" TextWrapping="Wrap" />
+                                    <ui:TextBlock Grid.Row="1" Grid.Column="0" Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                                 Text="loading 命中后延迟多少毫秒抢报，范围 0-3000，默认 0。高网络延迟环境可上调" TextWrapping="Wrap" />
+                                    <ui:NumberBox Grid.Row="0" Grid.RowSpan="2" Grid.Column="1" Width="120"
+                                                 Minimum="0" Maximum="3000" SmallChange="50" LargeChange="100"
+                                                 SpinButtonPlacementMode="Inline"
+                                                 IsEnabled="{Binding Config.AutoHoeingConfig.FastSyncPointEnabled}"
+                                                 Value="{Binding Config.AutoHoeingConfig.FastSyncTeleportLoadingDelayMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                </Grid>
+                            </StackPanel>
+                        </Expander>
+
                         <!-- ── 线路选项（折叠）── -->
                         <Expander Margin="0,4,36,8"
                                   Visibility="{Binding IsRoomHost, Converter={StaticResource BooleanToVisibilityConverter}}">

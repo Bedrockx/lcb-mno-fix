@@ -47,4 +47,12 @@ public class RoomConfig
     public int MutualWaitStableSeconds { get; set; } = 30;
     /// <summary>连续触发协同跳段上限，达到后走 OnConsecutiveSyncTimeoutExceeded 类型路径协调停止，默认 3</summary>
     public int MaxConsecutiveCollectiveSkips { get; set; } = 3;
+
+    // === 快速同步点抢报（multiplayer-fast-sync-host-controlled spec, 与服务端 RoomConfig 严格对称）===
+    /// <summary>启用快速同步点抢报（主开关），默认 false。关闭时所有抢报路径短路，退化到现有“严格到达后上报”</summary>
+    public bool FastSyncPointEnabled { get; set; } = false;
+    /// <summary>路径同步点抢报距离阈值（米，原神坐标系），范围 [5.0, 30.0]，默认 10.0</summary>
+    public double FastSyncPathingDistance { get; set; } = 10.0;
+    /// <summary>传送 loading 命中后到抢报之间的延迟毫秒数，范围 [0, 3000]，默认 0</summary>
+    public int FastSyncTeleportLoadingDelayMs { get; set; } = 0;
 }

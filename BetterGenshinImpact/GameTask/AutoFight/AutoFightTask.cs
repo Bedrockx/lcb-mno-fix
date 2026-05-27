@@ -244,6 +244,14 @@ public class AutoFightTask : ISoloTask
 
     private TaskFightFinishDetectConfig _finishDetectConfig;
 
+    /// <summary>
+    /// 联机锄地兜底分支信号位：A1（GetCombatScenesWithRetry）侧探测到队伍识别失败时
+    /// 通过此字段把 reason 传递给 Start，Start 据此决定走兜底分支。
+    /// null 表示当前 fight waypoint 不需要兜底。
+    /// 详见 design.md §3.3 / §3.4。
+    /// </summary>
+    private FightStrategyFallbackReason? _fallbackReason;
+
     public AutoFightTask(AutoFightParam taskParam)
     {
         _taskParam = taskParam;
@@ -340,10 +348,28 @@ public class AutoFightTask : ISoloTask
         }
 
         ct.ThrowIfCancellationRequested();
-        
-        if (!Config.CustomAvatarConfigOut.CustomAvatarEnabled) throw new Exception("识别队伍角色失败（已重试 5 次）");
-        
-        return new CombatScenes().InitializeTeamForced(Config.CustomAvatarConfigOut.CustomAvatarForceUseList);
+
+        // CustomAvatar 兜底优先（preservation §3.3）
+        if (Config.CustomAvatarConfigOut.CustomAvatarEnabled)
+        {
+            return new CombatScenes().InitializeTeamForced(Config.CustomAvatarConfigOut.CustomAvatarForceUseList);
+        }
+
+        // 联机锄地兜底分支：不抛异常，标记 reason 让 Start 走 FightStrategyFallbackExecutor
+        // 单机路径维持原 throw（preservation §3.1）
+        if (FightStrategyFallbackDecisions.ShouldUseFallback(
+                isMultiplayerHoeing: PathingConditionConfig.MultiplayerFightTimeoutOverride.HasValue,
+                teamRecognized: false,
+                customAvatarEnabled: false,
+                matchedScriptCount: 0,
+                availableAvatarCount: 0))
+        {
+            _fallbackReason = FightStrategyFallbackReason.TeamRecognitionFailed;
+            // 返回未初始化的占位 CombatScenes，Start 通过 _fallbackReason 信号位绕过后续流程
+            return new CombatScenes();
+        }
+
+        throw new Exception("识别队伍角色失败（已重试 5 次）");
     }
     
     //添加一个计时器，设定一个标志位，1000Ms内为true，超过1000Ms为false，战斗结束后重置计时器和标志位
@@ -363,9 +389,20 @@ public class AutoFightTask : ISoloTask
         _ct = ct;
 
         LogScreenResolution();
-        
+
+        // 重置兜底信号位（每个 fight waypoint 独立判定，preservation §2.5）
+        _fallbackReason = null;
+
         var combatScenes = GetCombatScenesWithRetry(ct);
-        
+
+        // ─── A1 出口：GetCombatScenesWithRetry 已设置 _fallbackReason 表示队伍识别失败 ───
+        // 立即委派给兜底执行器，不进入后续脚本匹配 / 战斗循环
+        if (_fallbackReason.HasValue)
+        {
+            await RunFallbackAsync(_fallbackReason.Value, ct);
+            return;
+        }
+
         if (_taskParam.AutoCombatEq && PathingConditionConfig.CombatScenesGoBackUp is not null && 
             PathingConditionConfig.CombatScenesGoBackUp.Avatars.Select(avatar => avatar.Name).ToArray()
                 .SequenceEqual(combatScenes.Avatars.Select(a => a.Name).ToArray()))
@@ -380,10 +417,57 @@ public class AutoFightTask : ISoloTask
             throw new Exception("识别队伍角色失败");
         }*/
 
-        // var actionSchedulerByCd = ParseStringToDictionary(_taskParam.ActionSchedulerByCd);
-    var combatCommands = _combatScriptBag.FindCombatScript(combatScenes.GetAvatars(),
-        FightConfig.StrategyName.Contains("根据队伍自动选择")) ??
-                         _combatScriptBagSecond.FindCombatScript(combatScenes.GetAvatars());
+        // ─── A2 注入点：脚本匹配 ───
+        // 单机路径仍调用原 FindCombatScript，行为不变（preservation §3.4-3.6）
+        // 联机锄地下用 TryFindCombatScript 拿无异常信号，false → 走兜底
+        var isMultiplayerHoeing = PathingConditionConfig.MultiplayerFightTimeoutOverride.HasValue;
+        List<CombatCommand>? combatCommands;
+        var matchedScriptCount = 0;
+
+        if (isMultiplayerHoeing)
+        {
+            // 第一轮：仅在"根据队伍自动选择"时启用 isFirstRound（与原逻辑一致）
+            var firstRoundResult = _combatScriptBag.FindCombatScript(
+                combatScenes.GetAvatars(),
+                FightConfig.StrategyName.Contains("根据队伍自动选择"));
+
+            if (firstRoundResult != null)
+            {
+                combatCommands = firstRoundResult;
+                matchedScriptCount = 1;
+            }
+            else
+            {
+                // 第二轮：用无异常重载
+                if (!_combatScriptBagSecond.TryFindCombatScript(
+                        combatScenes.GetAvatars(),
+                        out combatCommands,
+                        out matchedScriptCount))
+                {
+                    // matchedScriptCount==0 → C2 命中 → 走兜底
+                    if (FightStrategyFallbackDecisions.ShouldUseFallback(
+                            isMultiplayerHoeing: true,
+                            teamRecognized: true,
+                            customAvatarEnabled: Config.CustomAvatarConfigOut.CustomAvatarEnabled,
+                            matchedScriptCount: 0,
+                            availableAvatarCount: 0))
+                    {
+                        await RunFallbackAsync(FightStrategyFallbackReason.NoScriptMatched, ct);
+                        return;
+                    }
+                    // 决策返回 false（理论不应发生，因为 isMultiplayerHoeing=true ∧ matched=0 必触发 C2）
+                    // 兜底安全网：维持原 Exception 行为
+                    throw new Exception("未匹配到任何战斗脚本");
+                }
+            }
+        }
+        else
+        {
+            // 单机路径：保留原表达式不变，FindCombatScript 在第二轮 MatchCount==0 时仍抛 Exception
+            combatCommands = _combatScriptBag.FindCombatScript(combatScenes.GetAvatars(),
+                FightConfig.StrategyName.Contains("根据队伍自动选择")) ??
+                             _combatScriptBagSecond.FindCombatScript(combatScenes.GetAvatars());
+        }
         
         var bandList = (_taskParam.AutoCombatEq && !string.IsNullOrWhiteSpace(_taskParam.UseEqList))
             ? _taskParam.UseEqList.Split(new[] { ',', '，' }, StringSplitOptions.RemoveEmptyEntries)
@@ -409,6 +493,18 @@ public class AutoFightTask : ISoloTask
         
         if (commandAvatarNames.Count <= 0)
         {
+            // ─── A3 注入点：联机锄地下走兜底（C3） ───
+            if (FightStrategyFallbackDecisions.ShouldUseFallback(
+                    isMultiplayerHoeing: isMultiplayerHoeing,
+                    teamRecognized: true,
+                    customAvatarEnabled: Config.CustomAvatarConfigOut.CustomAvatarEnabled,
+                    matchedScriptCount: Math.Max(1, matchedScriptCount),
+                    availableAvatarCount: 0))
+            {
+                await RunFallbackAsync(FightStrategyFallbackReason.NoUsableAvatar, ct);
+                return;
+            }
+            // 单机路径维持原 Exception
             throw new Exception("没有可用战斗脚本");
         }
 
@@ -2265,6 +2361,18 @@ public class AutoFightTask : ISoloTask
                 // 退出清理不应抛异常
             }
         }
+    }
+
+    /// <summary>
+    /// 走兜底分支：构造 FightStrategyFallbackExecutor，按 _taskParam.Timeout 限时执行按键宏。
+    /// 不调用 combatScenes.BeforeTask / AfterTask（无 avatars），不调用 PickDropsAfterFight。
+    /// 保留 AnomalyDetector + RetryException 链路（外层 PathExecutor 调用方继续监控异常）。
+    /// 详见 design.md §3.4 / §4.5。
+    /// </summary>
+    private async Task RunFallbackAsync(FightStrategyFallbackReason reason, CancellationToken ct)
+    {
+        var executor = new FightStrategyFallbackExecutor(_taskParam.Timeout, reason, Logger);
+        await executor.RunAsync(ct);
     }
 
     //定义按键，用于结束吃药的切换人

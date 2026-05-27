@@ -335,6 +335,31 @@ public class MultiplayerCoordinator : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 快速同步点抢报路径专用：直接调用 _client.WaitForAllPlayersAsync（subscribe-before-action wrapper）。
+    /// 与 WaitForAllPlayers 的区别：
+    /// - WaitForAllPlayers 内部包含异常 LogWarning 等业务逻辑
+    /// - FastReportArrivalAsync 仅做"上报到达 + 等待 AllArrived 广播"两件事，且对 OperationCanceledException 静默
+    /// 抢报与严格路径并行时，严格路径仍走 WaitForAllPlayers，抢报仅负责通过 OR 门第一时间触发服务端
+    /// RecordArrival，让队伍其余玩家提前解封。
+    ///
+    /// 详见 .kiro/specs/multiplayer-fast-sync-host-controlled/design.md §3.8a
+    /// Validates: requirements FR7 / FR15 / FR17 / UB4
+    /// </summary>
+    internal async Task FastReportArrivalAsync(string syncId, CancellationToken ct, long syncProgress)
+    {
+        if (!IsConnected) return;
+        try
+        {
+            await _client.WaitForAllPlayersAsync(syncId, ct, syncProgress);
+        }
+        catch (OperationCanceledException) { /* 正常取消，silent return */ }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机][FastSync] 抢报上报异常退出 syncId={SyncId}", syncId);
+        }
+    }
+
     // === 上报状态 ===
 
     public async Task ReportFightingStatusAsync(bool isFighting)

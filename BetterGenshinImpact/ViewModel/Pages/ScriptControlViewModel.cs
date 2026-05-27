@@ -2152,6 +2152,21 @@ public partial class ScriptControlViewModel : ViewModel
         var enableKazuhaSyncCheck = new System.Windows.Controls.CheckBox { Content = "启用万叶聚物同步", IsChecked = GetBool("enableKazuhaSync", globalCfg.EnableKazuhaSync) };
         var fightTimeoutBox = new TextBox { Text = GetInt("fightTimeoutSeconds", globalCfg.FightTimeoutSeconds).ToString(), PlaceholderText = "秒，默认120" };
 
+        // ===== 快速同步点抢报（multiplayer-fast-sync-host-controlled spec, host-controlled）=====
+        var fastSyncEnabledCheck = new System.Windows.Controls.CheckBox { Content = "启用快速同步点抢报（包括战斗点）", IsChecked = GetBool("fastSyncPointEnabled", globalCfg.FastSyncPointEnabled) };
+        var fastSyncPathingDistanceBox = new TextBox { Text = GetStr("fastSyncPathingDistance", globalCfg.FastSyncPathingDistance.ToString()), PlaceholderText = "米，5-30，默认10" };
+        var fastSyncTeleportLoadingDelayBox = new TextBox { Text = GetInt("fastSyncTeleportLoadingDelayMs", globalCfg.FastSyncTeleportLoadingDelayMs).ToString(), PlaceholderText = "毫秒，0-3000，默认0" };
+        // 联动：仅当主开关启用时两个数值框才有效
+        void UpdateFastSyncEnabled()
+        {
+            var enabled = fastSyncEnabledCheck.IsChecked ?? false;
+            fastSyncPathingDistanceBox.IsEnabled = enabled;
+            fastSyncTeleportLoadingDelayBox.IsEnabled = enabled;
+        }
+        fastSyncEnabledCheck.Checked += (_, _) => UpdateFastSyncEnabled();
+        fastSyncEnabledCheck.Unchecked += (_, _) => UpdateFastSyncEnabled();
+        UpdateFastSyncEnabled();
+
         // ===== 万叶聚物同步配置（multiplayer-kazuha-collect-sync + kazuha-player-auto-detection）=====
         var kazuhaSyncWaitSecondsBox = new TextBox { Text = GetInt("kazuhaSyncWaitSeconds", globalCfg.KazuhaSyncWaitSeconds).ToString(), PlaceholderText = "秒，0-30，默认1" };
         var kazuhaSyncTimeoutSecondsBox = new TextBox { Text = GetInt("kazuhaSyncTimeoutSeconds", globalCfg.KazuhaSyncTimeoutSeconds).ToString(), PlaceholderText = "秒，5-120，默认20" };
@@ -2335,6 +2350,14 @@ public partial class ScriptControlViewModel : ViewModel
         hostPanel.Children.Add(MakeGroupHeader("战斗配置"));
         hostPanel.Children.Add(MakeSmallRow(
             MakeSmallField("战斗超时（秒）", fightTimeoutBox, 65)));
+
+        // 分组：快速同步点抢报（multiplayer-fast-sync-host-controlled spec, host-controlled）
+        hostPanel.Children.Add(MakeGroupHeader("快速同步点抢报"));
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("启用快速同步点抢报", fastSyncEnabledCheck, 220)));
+        hostPanel.Children.Add(MakeSmallRow(
+            MakeSmallField("路径抢报距离阈值（米，5-30）", fastSyncPathingDistanceBox, 70),
+            MakeSmallField("传送 loading 抢报延迟（毫秒，0-3000）", fastSyncTeleportLoadingDelayBox, 70)));
 
         // 分组5：线路选项（Expander 折叠，默认收起）
         var debugInner = new System.Windows.Controls.StackPanel { Margin = new Thickness(0, 6, 0, 0) };
@@ -2558,6 +2581,10 @@ public partial class ScriptControlViewModel : ViewModel
                     if (int.TryParse(kazuhaWaitSkillCdSecondsBox.Text, out var kwc)) settings["kazuhaWaitSkillCdSeconds"] = kwc;
                     if (int.TryParse(kazuhaSecondApproachMaxStepsBox.Text, out var ksam)) settings["kazuhaSecondApproachMaxSteps"] = ksam;
                     if (int.TryParse(fightTimeoutBox.Text, out var fts)) settings["fightTimeoutSeconds"] = fts;
+                    // === 快速同步点抢报（multiplayer-fast-sync-host-controlled spec FR4）===
+                    settings["fastSyncPointEnabled"] = fastSyncEnabledCheck.IsChecked ?? false;
+                    if (double.TryParse(fastSyncPathingDistanceBox.Text, out var fspd)) settings["fastSyncPathingDistance"] = fspd;
+                    if (int.TryParse(fastSyncTeleportLoadingDelayBox.Text, out var fstd)) settings["fastSyncTeleportLoadingDelayMs"] = fstd;
                     settings["debugMode"] = debugModeCheck.IsChecked ?? false;
                     settings["useFixedDebugRoutes"] = useFixedRoutesCheck.IsChecked ?? false;
                     settings["fixedDebugRoutePath"] = fixedRoutePathBox.Text;
@@ -2600,6 +2627,8 @@ public partial class ScriptControlViewModel : ViewModel
                         "syncPointMinDistance", "startRouteIndex", "enableKazuhaSync",
                         "kazuhaSyncWaitSeconds", "kazuhaSyncTimeoutSeconds", "kazuhaWaitSkillCdSeconds",
                         "fightTimeoutSeconds",
+                        // === 快速同步点抢报（单机模式清除）===
+                        "fastSyncPointEnabled", "fastSyncPathingDistance", "fastSyncTeleportLoadingDelayMs",
                         "debugMode", "useFixedDebugRoutes", "fixedDebugRoutePath", "selectedBuiltinRoute",
                         "multiWorldEnabled", "multiWorldCount"
                     })

@@ -232,6 +232,11 @@ public class AutoHoeingTask : ISoloTask
             _config.MutualWaitStableSeconds = 30;
             _config.MaxConsecutiveCollectiveSkips = 3;
 
+            // === 快速同步点抢报重置（multiplayer-fast-sync-host-controlled spec FR4）===
+            _config.FastSyncPointEnabled = false;
+            _config.FastSyncPathingDistance = 10.0;
+            _config.FastSyncTeleportLoadingDelayMs = 0;
+
             ApplySettingsOverride();
         }
 
@@ -555,6 +560,10 @@ public class AutoHoeingTask : ISoloTask
                     MutualWaitMinWaitersRatio = _config.MutualWaitMinWaitersRatio,
                     MutualWaitStableSeconds = _config.MutualWaitStableSeconds,
                     MaxConsecutiveCollectiveSkips = _config.MaxConsecutiveCollectiveSkips,
+                    // === 快速同步点抢报上传（multiplayer-fast-sync-host-controlled spec FR4）===
+                    FastSyncPointEnabled = _config.FastSyncPointEnabled,
+                    FastSyncPathingDistance = _config.FastSyncPathingDistance,
+                    FastSyncTeleportLoadingDelayMs = _config.FastSyncTeleportLoadingDelayMs,
                 };
                 
                 // 房主上传配置，带重试机制（最多3次）
@@ -622,6 +631,8 @@ public class AutoHoeingTask : ISoloTask
             _logger.LogInformation("[联机] 集体卡死监测：启用={E}, 阈值比例={R:F2}, 稳定秒={S}, 上限={M}",
                 _config.EnableMutualWaitCollectiveSkip, _config.MutualWaitMinWaitersRatio,
                 _config.MutualWaitStableSeconds, _config.MaxConsecutiveCollectiveSkips);
+            _logger.LogInformation("[联机] 快速同步点抢报：启用={E}, 路径距离阈值={D:F1}米, 传送延迟={T}ms",
+                _config.FastSyncPointEnabled, _config.FastSyncPathingDistance, _config.FastSyncTeleportLoadingDelayMs);
             _logger.LogInformation("[联机] =====================================");
 
             _multiplayerCoordinator.OnDegraded += reason =>
@@ -926,6 +937,10 @@ public class AutoHoeingTask : ISoloTask
                         _config.MutualWaitMinWaitersRatio = hostConfig.MutualWaitMinWaitersRatio;
                         _config.MutualWaitStableSeconds = hostConfig.MutualWaitStableSeconds;
                         _config.MaxConsecutiveCollectiveSkips = hostConfig.MaxConsecutiveCollectiveSkips;
+                        // === 快速同步点抢报同步（multiplayer-fast-sync-host-controlled spec FR5）===
+                        _config.FastSyncPointEnabled = hostConfig.FastSyncPointEnabled;
+                        _config.FastSyncPathingDistance = FastSyncDecisions.ClampPathingDistance(hostConfig.FastSyncPathingDistance);
+                        _config.FastSyncTeleportLoadingDelayMs = FastSyncDecisions.ClampTeleportDelay(hostConfig.FastSyncTeleportLoadingDelayMs);
 
                         // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                         PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -1669,6 +1684,10 @@ public class AutoHoeingTask : ISoloTask
                     _config.MutualWaitMinWaitersRatio = hostConfig.MutualWaitMinWaitersRatio;
                     _config.MutualWaitStableSeconds = hostConfig.MutualWaitStableSeconds;
                     _config.MaxConsecutiveCollectiveSkips = hostConfig.MaxConsecutiveCollectiveSkips;
+                    // === 快速同步点抢报同步（multiplayer-fast-sync-host-controlled spec FR5）===
+                    _config.FastSyncPointEnabled = hostConfig.FastSyncPointEnabled;
+                    _config.FastSyncPathingDistance = FastSyncDecisions.ClampPathingDistance(hostConfig.FastSyncPathingDistance);
+                    _config.FastSyncTeleportLoadingDelayMs = FastSyncDecisions.ClampTeleportDelay(hostConfig.FastSyncTeleportLoadingDelayMs);
 
                     // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                     PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -2927,6 +2946,12 @@ public class AutoHoeingTask : ISoloTask
             _config.MutualWaitMinWaitersRatio = Get("mutualWaitMinWaitersRatio", _config.MutualWaitMinWaitersRatio);
             _config.MutualWaitStableSeconds = Get("mutualWaitStableSeconds", _config.MutualWaitStableSeconds);
             _config.MaxConsecutiveCollectiveSkips = Get("maxConsecutiveCollectiveSkips", _config.MaxConsecutiveCollectiveSkips);
+            // === 快速同步点抢报（multiplayer-fast-sync-host-controlled spec FR4 / FR25 / FR26）===
+            _config.FastSyncPointEnabled = Get("fastSyncPointEnabled", _config.FastSyncPointEnabled);
+            _config.FastSyncPathingDistance = FastSyncDecisions.ClampPathingDistance(
+                Get("fastSyncPathingDistance", _config.FastSyncPathingDistance));
+            _config.FastSyncTeleportLoadingDelayMs = FastSyncDecisions.ClampTeleportDelay(
+                Get("fastSyncTeleportLoadingDelayMs", _config.FastSyncTeleportLoadingDelayMs));
         }
         else
         {
@@ -2945,6 +2970,10 @@ public class AutoHoeingTask : ISoloTask
             _config.MutualWaitMinWaitersRatio = 0.5;
             _config.MutualWaitStableSeconds = 30;
             _config.MaxConsecutiveCollectiveSkips = 3;
+            // === 快速同步点抢报（单机重置为默认值，preservation UB1）===
+            _config.FastSyncPointEnabled = false;
+            _config.FastSyncPathingDistance = 10.0;
+            _config.FastSyncTeleportLoadingDelayMs = 0;
 
             // 单机模式：重置固定调试线路字段，避免联机全局配置残留影响
             // 如果 settings 显式包含这些键，后续 ContainsKey 逻辑会覆盖回来
@@ -3067,6 +3096,11 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "mutualWaitMinWaitersRatio", Label = "触发阈值比例（0.5=半数）\ntotalWaiters ≥ ⌈online * Ratio⌉ 才进入稳定计时；0.5 表示 4 人房 2 人到达就开始计时", Type = "number", DefaultValue = config.MutualWaitMinWaitersRatio },
             new() { Name = "mutualWaitStableSeconds", Label = "稳定时长（秒）\nArrivalSets 快照保持稳定 N 秒后触发协同跳段，默认 30 秒", Type = "number", DefaultValue = config.MutualWaitStableSeconds },
             new() { Name = "maxConsecutiveCollectiveSkips", Label = "连续触发上限\n连续触发 N 次集体跳段后协调停止，默认 3", Type = "number", DefaultValue = config.MaxConsecutiveCollectiveSkips },
+
+            // ===== 快速同步点抢报（multiplayer-fast-sync-host-controlled spec, host-controlled）=====
+            new() { Name = "fastSyncPointEnabled", Label = "启用快速同步点抢报\n开启后路径同步点距离 ≤ 阈值 / 传送 loading 命中即抢先上报，减少队伍互等时间。包括战斗点（O1=A）", Type = "bool", DefaultValue = config.FastSyncPointEnabled },
+            new() { Name = "fastSyncPathingDistance", Label = "路径抢报距离阈值（米，原神坐标系）\n距 waypoint ≤ 阈值时抢报，范围 5-30，默认 10。低值更保守、高值更激进", Type = "number", DefaultValue = config.FastSyncPathingDistance },
+            new() { Name = "fastSyncTeleportLoadingDelayMs", Label = "传送 loading 抢报延迟（毫秒）\nloading 命中后延迟多少毫秒抢报，范围 0-3000，默认 0。高网络延迟环境可上调", Type = "number", DefaultValue = config.FastSyncTeleportLoadingDelayMs },
 
             // ===== 第七部分：多世界连续锄地配置 =====
             new() { Name = "multiWorldEnabled", Label = "启用多世界连续锄地\n房主设定，完成一个世界后轮换到下一个玩家的世界", Type = "bool", DefaultValue = config.MultiWorldEnabled },
