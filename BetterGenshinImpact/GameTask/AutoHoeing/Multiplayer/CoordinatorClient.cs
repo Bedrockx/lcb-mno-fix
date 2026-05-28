@@ -22,7 +22,18 @@ public class CoordinatorClient : IAsyncDisposable
     private readonly ILogger<CoordinatorClient> _logger = App.GetLogger<CoordinatorClient>();
     private HubConnection? _connection;
     private Timer? _heartbeatTimer;
-    
+
+    // === 测试种子（[InternalsVisibleTo("BetterGenshinImpact.UnitTest")]）===
+    // 抽出 NotifyKazuhaCollectStartedAsync 内的 InvokeAsync 动作，让 PBT 可注入 fake 代理断言
+    // "客户端 IsValid 守卫不让 NaN/Inf/(0,0) 进入 SignalR 序列化路径"。
+    // 仅作用于 NotifyKazuhaCollectStartedAsync；其他 Notify*Async 仍直接调 _connection.InvokeAsync 不变。
+    // 详见 spec kazuha-collect-point-nan-signalr-serialization-fix。
+    internal Func<string, object?[], Task> _invokeHubAsync;
+
+    // 测试种子：单元测试可强制 IsConnected==true，绕开真正的 HubConnection。
+    // 仅在测试中赋值；生产路径下保持 null → IsConnected fallback 到 _connection.State。
+    internal bool? _testIsConnectedOverride;
+
     // 保存房间信息用于重连
     private string? _currentRoomCode;
     private string? _playerName;
@@ -92,7 +103,7 @@ public class CoordinatorClient : IAsyncDisposable
     public int CurrentRoomPlayerCount { get; set; }
     public string HostPlayerUid { get; set; } = string.Empty;
     public bool IsHost => _playerUid == HostPlayerUid;
-    public bool IsConnected => _connection?.State == HubConnectionState.Connected;
+    public bool IsConnected => _testIsConnectedOverride ?? (_connection?.State == HubConnectionState.Connected);
     public bool IsInRoom => _isInRoom;
     public bool IsReconnecting => _isReconnecting;
 
@@ -114,6 +125,14 @@ public class CoordinatorClient : IAsyncDisposable
     {
         get => _worldStateMonitor;
         set => _worldStateMonitor = value;
+    }
+
+    public CoordinatorClient()
+    {
+        // 默认实现：透传到 _connection.InvokeAsync(method, args, ct)
+        // 注：_connection 在 ConnectAsync 之前为 null；本默认实现仅在 IsConnected==true 时被
+        // NotifyKazuhaCollectStartedAsync 调用（其内部已守 if (_connection == null || !IsConnected) return）。
+        _invokeHubAsync = (method, args) => _connection!.InvokeAsync(method, args, CancellationToken.None);
     }
 
     public async Task<bool> ConnectAsync(string serverUrl, CancellationToken ct)
@@ -631,15 +650,32 @@ public class CoordinatorClient : IAsyncDisposable
     /// <summary>
     /// 万叶玩家广播"开始执行聚物动作"。
     /// multiplayer-kazuha-collect-point-broadcast: 加 syncKey + 聚物点 (collectX, collectY) 三参。
-    /// 调用方在朝向 / 位置识别失败时传 (NaN, NaN)，由服务端 IsValid 守卫过滤。
+    /// 调用方在朝向 / 位置识别失败时传 (NaN, NaN)，由 **客户端 + 服务端 + 其他客户端订阅** 三层 IsValid 守卫过滤。
     /// 服务端会向房间所有客户端转发 KazuhaCollectStarted 事件（始终 4 参广播）。
     /// </summary>
     public async Task NotifyKazuhaCollectStartedAsync(string syncKey, double collectX, double collectY)
     {
-        if (_connection == null || !IsConnected) return;
+        // 注：单 IsConnected 守卫即可——_connection==null 时 _connection?.State 是 null，
+        // 与 HubConnectionState.Connected 不等 → IsConnected 为 false → 守卫触发。
+        // 与其他 Notify*Async 方法的 (_connection == null || !IsConnected) 写法功能等价；
+        // 这里写成单条便于测试可控（_testIsConnectedOverride=true 时绕过 _connection 真实状态）。
+        if (!IsConnected) return;
+
+        // 客户端 IsValid 守卫：拦截 NaN / ±Infinity / (0,0)，避免 System.Text.Json 在序列化
+        // InvocationMessage 时抛 ArgumentException 损坏 SignalR 管线
+        // （详见 spec kazuha-collect-point-nan-signalr-serialization-fix）。
+        // 与服务端 CoordinatorHub.NotifyKazuhaCollectStarted 内的 IsValid + KazuhaCollectSyncCoordinator
+        // 构造函数订阅的 IsValid 一起构成 defense-in-depth 三层过滤。
+        if (!KazuhaCollectPointDecisions.IsValid(collectX, collectY))
+        {
+            _logger.LogDebug("[联机][聚物] NotifyKazuhaCollectStartedAsync 短路：坐标无效 syncKey={Key} ({X},{Y})",
+                syncKey, collectX, collectY);
+            return;
+        }
+
         try
         {
-            await _connection.InvokeAsync("NotifyKazuhaCollectStarted", syncKey, collectX, collectY);
+            await _invokeHubAsync("NotifyKazuhaCollectStarted", new object?[] { syncKey, collectX, collectY });
         }
         catch (Exception ex)
         {

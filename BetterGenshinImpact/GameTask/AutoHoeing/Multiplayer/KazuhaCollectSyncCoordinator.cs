@@ -411,8 +411,10 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
                 onBeforeHoldE: hookCt =>
                 {
                     // multiplayer-kazuha-collect-point-broadcast: HoldE 起手前算 + 上报聚物点。
-                    // 任意环节失败 → 调"无效坐标"分支 (NaN, NaN)，服务端 IsValid 守卫过滤、
-                    // 非万叶玩家本地 IsValid 守卫过滤 → 走原 MoveCloseTo(战斗点) 单段路径，零回归。
+                    // 任意环节失败 → 调"无效坐标"分支 (NaN, NaN)，由 **客户端** IsValid 守卫过滤
+                    // （CoordinatorClient.NotifyKazuhaCollectStartedAsync 内，spec
+                    // kazuha-collect-point-nan-signalr-serialization-fix 引入），再走服务端 IsValid 兜底，
+                    // 加非万叶玩家本地订阅 IsValid 兜底，三层防护。最终所有 peer 走原 MoveCloseTo(战斗点) 单段路径，零回归。
                     // 朝向用 CharacterOrientation（角色面向）而不是 CameraOrientation（相机视角）：
                     //   万叶 HoldE 风场聚物中心由角色脚下 + 角色面前定义，与相机视角无关；
                     //   战斗结束后 MoveCloseTo 走回战斗点过程中角色面向已稳定到前进方向，
