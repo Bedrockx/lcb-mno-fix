@@ -218,10 +218,18 @@ public partial class AutoFriendshipTask : ISoloTask, IDisposable
         if (_config.EnemyType == EnemyType.HilichurlBrigade && _config.QiuQiuRenTimeoutSeconds > 0)
         {
             _logger.LogInformation("清理原住民...");
-            await AutoPathAsync("盗宝团-准备");
+            var prepareNavigated = await AutoPathAsync("盗宝团-准备");
 
-            _logger.LogInformation("开始清理战斗，超时时间: {0}秒...", _config.QiuQiuRenTimeoutSeconds);
-            await ExecuteClearBattleAsync(_config.QiuQiuRenTimeoutSeconds);
+            if (AutoFriendshipTaskDecisions.ShouldSkipClearBattle(
+                    _config.EnemyType, _config.QiuQiuRenTimeoutSeconds, prepareNavigated))
+            {
+                _logger.LogWarning("盗宝团-准备 路径未实际执行（资源缺失或加载失败），跳过清理战斗以避免原地空挥");
+            }
+            else
+            {
+                _logger.LogInformation("开始清理战斗，超时时间: {0}秒...", _config.QiuQiuRenTimeoutSeconds);
+                await ExecuteClearBattleAsync(_config.QiuQiuRenTimeoutSeconds);
+            }
         }
 
         // 执行 preparePath（愚人众、鳄鱼、蕈兽、雷萤术士有 preparePath）
@@ -699,7 +707,8 @@ public partial class AutoFriendshipTask : ISoloTask, IDisposable
     /// <summary>
     /// 执行路径文件（对应 JS AutoPath）
     /// </summary>
-    private async Task AutoPathAsync(string locationName)
+    /// <returns>true = PathExecutor.Pathing 成功返回；false = 路径文件缺失 / 加载失败 / 异常</returns>
+    private async Task<bool> AutoPathAsync(string locationName)
     {
         try
         {
@@ -707,14 +716,14 @@ public partial class AutoFriendshipTask : ISoloTask, IDisposable
             if (!File.Exists(filePath))
             {
                 _logger.LogWarning("路径文件不存在: {Path}", filePath);
-                return;
+                return false;
             }
 
             var task = PathingTask.BuildFromFilePath(filePath);
             if (task == null)
             {
                 _logger.LogWarning("路径加载失败: {Location}", locationName);
-                return;
+                return false;
             }
 
             var pathExecutor = new PathExecutor(_ct);
@@ -724,10 +733,12 @@ public partial class AutoFriendshipTask : ISoloTask, IDisposable
             }
 
             await pathExecutor.Pathing(task);
+            return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "执行 {Location} 路径时发生错误: {Message}", locationName, ex.Message);
+            return false;
         }
     }
 

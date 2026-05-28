@@ -28,28 +28,43 @@ public class AutoFriendshipResourceLoader
     public const string AutoPathFolderName = "AutoPath";
 
     /// <summary>
-    /// BGI 内置资源根目录（编译后输出位置）
+    /// BGI 内置 Assets 根目录（编译输出位置）—— 当前权威路径
+    /// 对应仓库 BetterGenshinImpact/GameTask/AutoFriendship/Assets/，由 csproj 拷贝到输出
+    /// </summary>
+    private static string GetBgiInternalAssetsRoot()
+    {
+        return Path.Combine(AppContext.BaseDirectory, "GameTask", "AutoFriendship", "Assets");
+    }
+
+    /// <summary>
+    /// JS 旧脚本资源根目录（兼容回退路径）
+    /// 对应 User/JsScript/AutoFriendshipFight/assets/
     /// </summary>
     private static string GetBgiResourceRoot()
     {
-        // 指向编译输出目录下的 User/JsScript/AutoFriendshipFight/assets
         return Path.Combine(AppContext.BaseDirectory, "User", "JsScript", "AutoFriendshipFight", AssetsFolderName);
     }
 
     /// <summary>
     /// 获取 AutoPath 目录路径
+    /// 优先 BGI 内置 Assets/AutoPath，未部署时回退 JS 旧目录 assets/AutoPath
     /// </summary>
     public static string GetAutoPathFolder()
     {
+        var bgiAutoPath = Path.Combine(GetBgiInternalAssetsRoot(), AutoPathFolderName);
+        if (Directory.Exists(bgiAutoPath))
+        {
+            return bgiAutoPath;
+        }
         return Path.Combine(GetBgiResourceRoot(), AutoPathFolderName);
     }
 
     /// <summary>
-    /// 检查 JS 脚本资源是否存在
+    /// 检查资源是否可用（BGI 内置目录或 JS 旧目录任一存在即视为可用）
     /// </summary>
     public static bool IsResourceAvailable()
     {
-        return Directory.Exists(GetBgiResourceRoot());
+        return Directory.Exists(GetBgiInternalAssetsRoot()) || Directory.Exists(GetBgiResourceRoot());
     }
 
     /// <summary>
@@ -138,16 +153,42 @@ public class AutoFriendshipResourceLoader
     }
 
     /// <summary>
+    /// 决策路径文件实际位置：BGI 内置 AutoPath 优先，未命中回退 JS 旧目录 AutoPath；都缺返回 null。
+    /// 抽出为 internal 便于 property-based test 直接覆盖（不依赖 AppContext.BaseDirectory）。
+    /// </summary>
+    internal static string? ResolvePathFile(string fileName, string bgiInternalRoot, string jsLegacyRoot)
+    {
+        var bgiCandidate = Path.Combine(bgiInternalRoot, AutoPathFolderName, fileName);
+        if (File.Exists(bgiCandidate)) return bgiCandidate;
+        var jsCandidate = Path.Combine(jsLegacyRoot, AutoPathFolderName, fileName);
+        if (File.Exists(jsCandidate)) return jsCandidate;
+        return null;
+    }
+
+    /// <summary>
     /// 从 JSON 文件加载路径点
+    /// 优先级：BGI 内置 Assets/AutoPath > JS 旧目录 assets/AutoPath
     /// </summary>
     private static List<Waypoint> LoadPathFromFile(string filePath)
     {
         var waypoints = new List<Waypoint>();
-        if (!File.Exists(filePath)) return waypoints;
+        var fileName = Path.GetFileName(filePath);
+
+        var bgiInternalRoot = GetBgiInternalAssetsRoot();
+        var jsLegacyRoot = GetBgiResourceRoot();
+        var resolved = ResolvePathFile(fileName, bgiInternalRoot, jsLegacyRoot);
+
+        if (resolved == null)
+        {
+            var bgiCandidate = Path.Combine(bgiInternalRoot, AutoPathFolderName, fileName);
+            var jsCandidate = Path.Combine(jsLegacyRoot, AutoPathFolderName, fileName);
+            _logger.LogWarning("路径文件不存在: {BgiPath} 或 {JsPath}", bgiCandidate, jsCandidate);
+            return waypoints;
+        }
 
         try
         {
-            var json = File.ReadAllText(filePath);
+            var json = File.ReadAllText(resolved);
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
             var data = JsonSerializer.Deserialize<PathJsonData>(json, options);
 
@@ -167,7 +208,7 @@ public class AutoFriendshipResourceLoader
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "加载路径文件失败: {Path}", filePath);
+            _logger.LogError(ex, "加载路径文件失败: {Path}", resolved);
         }
 
         return waypoints;

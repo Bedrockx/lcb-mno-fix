@@ -130,6 +130,12 @@
 		<None Update="GameTask\AutoFishing\Assets\1920x1080\**">
 		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 		</None>
+		<None Update="GameTask\AutoFriendship\Assets\*.png">
+		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
+		<None Update="GameTask\AutoFriendship\Assets\AutoPath\*.json">
+		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
 		<None Update="GameTask\AutoLeyLineOutcrop\Assets\**">
 		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 		</None>
