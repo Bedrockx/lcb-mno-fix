@@ -1404,7 +1404,13 @@ public class AutoHoeingTask : ISoloTask
 
             // 执行本轮锄地
             var groupTags = BuildGroupTags();
-            await RunSingleWorldCoreAsync(accountName, groupTags);
+            var roundContext = new MultiWorldRoundContext
+            {
+                Round1Based = round + 1,
+                TotalRounds = totalRounds,
+                HostPlayerName = roundHostPlayer.PlayerName,
+            };
+            await RunSingleWorldCoreAsync(accountName, groupTags, roundContext);
 
             // 本轮结束：全员同步后离开世界（最后一轮不需要离开）
             if (round < totalRounds - 1)
@@ -1843,20 +1849,20 @@ public class AutoHoeingTask : ISoloTask
     }
 
     /// <summary>单世界锄地核心（从 RunTask 提取，供多世界循环复用）</summary>
-    private async Task RunSingleWorldCoreAsync(string accountName, List<List<string>>? groupTags = null)
+    private async Task RunSingleWorldCoreAsync(string accountName, List<List<string>>? groupTags = null, MultiWorldRoundContext? roundContext = null)
     {
         groupTags ??= BuildGroupTags();
-        await RunSingleWorldAsync(accountName, groupTags);
+        await RunSingleWorldAsync(accountName, groupTags, roundContext);
     }
 
-    private async Task RunSingleWorldAsync(string accountName, List<List<string>> groupTags)
+    private async Task RunSingleWorldAsync(string accountName, List<List<string>> groupTags, MultiWorldRoundContext? roundContext = null)
     {
         // 根据操作模式执行
         var operationMode = _config.OperationMode;
 
         if (operationMode == "启用仅指定怪物模式")
         {
-            await RunTargetMonsterMode(accountName, groupTags);
+            await RunTargetMonsterMode(accountName, groupTags, roundContext);
         }
         else if (_config.UseFixedDebugRoutes)
         {
@@ -1873,7 +1879,7 @@ public class AutoHoeingTask : ISoloTask
             // 队伍校验
             ValidateTeam();
 
-            await ProcessRoutesByGroup(fixedRoutes, accountName);
+            await ProcessRoutesByGroup(fixedRoutes, accountName, roundContext);
         }
         else
         {
@@ -1918,7 +1924,7 @@ public class AutoHoeingTask : ISoloTask
 
                 _logger.LogInformation("开始运行锄地路线");
                 _cdManager.UpdateAllRecords(routes);
-                await ProcessRoutesByGroup(routes, accountName);
+                await ProcessRoutesByGroup(routes, accountName, roundContext);
             }
             else // 强制刷新所有运行记录
             {
@@ -1935,7 +1941,7 @@ public class AutoHoeingTask : ISoloTask
         }
     }
 
-    private async Task RunTargetMonsterMode(string accountName, List<List<string>> groupTags)
+    private async Task RunTargetMonsterMode(string accountName, List<List<string>> groupTags, MultiWorldRoundContext? roundContext = null)
     {
         var targetMonsters = ParseChineseTags(_config.TargetMonsters);
         if (targetMonsters.Count == 0)
@@ -1966,10 +1972,10 @@ public class AutoHoeingTask : ISoloTask
         _logger.LogInformation("目标怪物模式：共找到 {Count} 条相关路线", selectedCount);
 
         _cdManager.UpdateAllRecords(routes);
-        await ProcessRoutesByGroup(routes, accountName);
+        await ProcessRoutesByGroup(routes, accountName, roundContext);
     }
 
-    private async Task ProcessRoutesByGroup(List<RouteInfo> routes, string accountName)
+    private async Task ProcessRoutesByGroup(List<RouteInfo> routes, string accountName, MultiWorldRoundContext? roundContext = null)
     {
         var targetGroup = _config.GroupIndex;
         var groupRoutes = routes.Where(r => r.Group == targetGroup && r.Selected).ToList();
@@ -2269,6 +2275,7 @@ public class AutoHoeingTask : ISoloTask
                 startIndex + 1, startIndex);
         }
 
+        var roundPrefix = MultiWorldRoundLogPrefix.Format(roundContext);
         _logger.LogInformation("[DEBUG] 开始遍历路线，共 {Count} 条，startIndex={Start}", groupRoutes.Count, startIndex);
 
         foreach (var route in groupRoutes.Skip(startIndex))
@@ -2402,8 +2409,8 @@ public class AutoHoeingTask : ISoloTask
                 continue;
             }
 
-            _logger.LogInformation("开始第 {N}/{T} 条线路: {Name}",
-                startIndex + count, groupRoutes.Count, route.FileName);
+            _logger.LogInformation("{Prefix}开始第 {N}/{T} 条线路: {Name}",
+                roundPrefix, startIndex + count, groupRoutes.Count, route.FileName);
 
             // 白芙切换
             if (_shouldSwitchFurina)
@@ -2621,8 +2628,8 @@ public class AutoHoeingTask : ISoloTask
                     var tsRemain = TimeSpan.FromSeconds(Math.Max(0, predictRemaining));
 
                     _logger.LogInformation(
-                        "完成第 {N}/{T} 条线路: {Name}，该组预计剩余: {H}时{Min}分{S}秒",
-                        startIndex + count, groupRoutes.Count, route.FileName,
+                        "{Prefix}完成第 {N}/{T} 条线路: {Name}，该组预计剩余: {H}时{Min}分{S}秒",
+                        roundPrefix, startIndex + count, groupRoutes.Count, route.FileName,
                         (int)tsRemain.TotalHours, tsRemain.Minutes, tsRemain.Seconds);
                 }
             }

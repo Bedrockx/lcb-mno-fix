@@ -2289,7 +2289,21 @@ public partial class ScriptControlViewModel : ViewModel
         nameUidRow.Children.Add(MakeSmallField("玩家 UID", playerUidBox, 120));
         mpPanel.Children.Add(nameUidRow);
         mpPanel.Children.Add(MakeField("联机角色", roleCombo));
-        
+
+        // ===== 拾取配置 =====
+        // 与 AutoHoeingTask.GetSettingDefinitions() 第 3027 行 pickupMode.Options 字面量逐字符一致
+        // 4 个选项 + ApplySettingsOverride 第 2881 行消费的 "pickupMode" 键
+        var pickupModeCombo = new System.Windows.Controls.ComboBox
+        {
+            ItemsSource = new[] { "模板匹配拾取狗粮和怪物材料", "模板匹配仅拾取狗粮", "BGI原版拾取", "不拾取" },
+            SelectedItem = GetStr("pickupMode", globalCfg.PickupMode),
+            Margin = new Thickness(0, 0, 0, 0)
+        };
+        Stretch(pickupModeCombo);
+
+        mpPanel.Children.Add(MakeGroupHeader("拾取配置"));
+        mpPanel.Children.Add(MakeField("拾取模式", pickupModeCombo, "推荐使用模板匹配拾取，BGI原版拾取性能开销大、准确度低"));
+
         // ===== 联机队伍和角色准备 =====
         var multiplayerPartyNameBox = new TextBox { Text = GetStr("multiplayerPartyName", globalCfg.MultiplayerPartyName), PlaceholderText = "留空则使用当前队伍" };
         var multiplayerStartAvatarNameBox = new TextBox { Text = GetStr("multiplayerStartAvatarName", globalCfg.MultiplayerStartAvatarName), PlaceholderText = "留空则使用当前角色，如：钟离、纳西妲" };
@@ -2599,6 +2613,8 @@ public partial class ScriptControlViewModel : ViewModel
                     }
                     settings["multiWorldEnabled"] = multiWorldCheck.IsChecked ?? false;
                     if (int.TryParse(multiWorldCountBox.Text, out var mwc)) settings["multiWorldCount"] = mwc;
+                    // 拾取模式：与 AutoHoeingTask.ApplySettingsOverride 第 2881 行 Get("pickupMode", _config.PickupMode) 对齐
+                    settings["pickupMode"] = pickupModeCombo.SelectedItem?.ToString();
                 }
                 else
                 {
