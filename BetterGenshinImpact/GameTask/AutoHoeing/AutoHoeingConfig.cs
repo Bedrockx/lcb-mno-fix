@@ -457,4 +457,27 @@ public partial class AutoHoeingConfig : ObservableObject
     /// </summary>
     [ObservableProperty]
     private int _multiWorldCount = 2;
+
+    // === 反复复苏双层兜底（multi-revival-rapid-recurrence-fallback spec, OQ-1 / OQ-2 默认值）===
+
+    /// <summary>
+    /// 反复复苏滑动窗口（秒）：在此窗口内累计复苏次数达 RapidRevivalThreshold 即触发"跳本段 + 神像回血"。
+    /// 默认 60 秒，覆盖实测日志最坏间隔（29s）。范围 [10, 300]。
+    /// </summary>
+    [ObservableProperty]
+    private int _rapidRevivalWindowSeconds = 60;
+
+    /// <summary>
+    /// 反复复苏触发阈值（次）：滑动窗口内累计达此次数即触发"跳本段 + 神像回血"。
+    /// 默认 2 次（即"窗口内出现第 2 次复苏立即升级"）。范围 [2, 10]。
+    /// </summary>
+    [ObservableProperty]
+    private int _rapidRevivalThreshold = 2;
+
+    /// <summary>
+    /// 单条路线复苏次数上限：路线累计达此次数即触发"跳整路线 + 神像回血"（防死循环）。
+    /// 默认 3 次，与 MaxConsecutiveSkips 保持一致。范围 [2, 10]。
+    /// </summary>
+    [ObservableProperty]
+    private int _routeRevivalCap = 3;
 }

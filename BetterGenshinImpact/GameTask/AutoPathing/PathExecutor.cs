@@ -118,15 +118,33 @@ public class PathExecutor
     private volatile int _multiplayerRevivalDetected = 0;
 
     /// <summary>
+    /// 联机模式：反复复苏升级动作（multi-revival-rapid-recurrence-fallback spec）。
+    /// AnomalyDetector → RouteExecutionEngine → SignalMultiplayerRevival(action) 写入；
+    /// RetryException catch 块在原"同步点前/后"分流之前先消费此字段。
+    /// 0=Continue, 1=SkipSegment, 2=SkipRoute（与 RevivalEscalationAction 枚举对齐）。
+    /// </summary>
+    private volatile int _pendingRevivalEscalation = 0;
+
+    /// <summary>
     /// 联机模式专用：外部（AnomalyDetector）检测到联机已倒下界面时调用。
     /// 仅在联机模式下有效，单机模式忽略以保留原有行为。
     /// </summary>
     public void SignalMultiplayerRevival()
+        => SignalMultiplayerRevival(BetterGenshinImpact.GameTask.AutoHoeing.Services.RevivalEscalationAction.Continue);
+
+    /// <summary>
+    /// 联机模式专用：外部（RouteExecutionEngine）检测到反复复苏触发升级动作时调用。
+    /// 仅在联机模式下有效，单机模式忽略以保留原有行为。
+    /// 升级动作通过 _pendingRevivalEscalation 字段透传到 RetryException catch 块。
+    /// </summary>
+    public void SignalMultiplayerRevival(BetterGenshinImpact.GameTask.AutoHoeing.Services.RevivalEscalationAction action)
     {
         if (MultiplayerCoordinator == null) return;
-        // 用 Interlocked.Exchange 保证写入对所有线程立即可见，且与 TryConsumeRevivalSignal 的 CAS 配对
+        // 写 escalation：用 Interlocked.Exchange 保证写入对所有线程立即可见
+        System.Threading.Interlocked.Exchange(ref _pendingRevivalEscalation, (int)action);
+        // 写信号位：与 TryConsumeRevivalSignal 的 CAS 配对
         MultiplayerRevivalGate.Signal(ref _multiplayerRevivalDetected);
-        Logger.LogWarning("[联机] AnomalyDetector 信号：已倒下检测，将在战斗结束钩子 / 脱困入口 / 主循环检查 任一处先消费并去七天神像回血");
+        Logger.LogWarning("[联机] AnomalyDetector 信号：已倒下检测（escalation={Action}），将在战斗结束钩子 / 脱困入口 / 主循环检查 任一处先消费并去七天神像回血", action);
     }
 
     /// <summary>
@@ -1099,6 +1117,49 @@ public class PathExecutor
                         // 已是最后一段，跳到下一个 JSON 的第一段
                         targetProgress = (long)(CurrentJsonRouteIndex + 1) * 1_000_000;
                     }
+
+                    // === multi-revival-rapid-recurrence-fallback：先消费反复复苏 escalation ===
+                    // RouteExecutionEngine 在 OnMultiplayerDefeatedDetected 回调中通过
+                    // SignalMultiplayerRevival(action) 写入 _pendingRevivalEscalation。
+                    // SkipRoute / SkipSegment 都需要先上报 Reviving + targetProgress 保留信号链路语义。
+                    var escalation = (BetterGenshinImpact.GameTask.AutoHoeing.Services.RevivalEscalationAction)
+                        System.Threading.Interlocked.Exchange(ref _pendingRevivalEscalation, 0);
+
+                    if (escalation == BetterGenshinImpact.GameTask.AutoHoeing.Services.RevivalEscalationAction.SkipRoute
+                        && MultiplayerCoordinator != null)
+                    {
+                        Logger.LogWarning("[联机] 反复复苏 escalation=SkipRoute → 标记路线跳过，目标进度={Target}，原因: {Msg}",
+                            targetProgress, retryException.Message);
+                        try
+                        {
+                            await MultiplayerCoordinator.ReportFightingStatusAsync(false);
+                            await MultiplayerCoordinator.ReportMemberStatusAsync(MemberStatus.Reviving, targetProgress);
+                        }
+                        catch { }
+                        SkipRouteReason = "[联机] 路线累计复苏次数达上限（RouteRevivalCap），跳整路线";
+                        SkipRouteRequested = true;
+                        SkipToNextSegment = false; // 显式清掉，确保走"跳整路线"语义
+                        _needReportNormalBeforeSync = true;
+                        break;
+                    }
+
+                    if (escalation == BetterGenshinImpact.GameTask.AutoHoeing.Services.RevivalEscalationAction.SkipSegment
+                        && MultiplayerCoordinator != null)
+                    {
+                        Logger.LogWarning("[联机] 反复复苏 escalation=SkipSegment → 跳到下一段，目标进度={Target}，原因: {Msg}",
+                            targetProgress, retryException.Message);
+                        try
+                        {
+                            await MultiplayerCoordinator.ReportFightingStatusAsync(false);
+                            await MultiplayerCoordinator.ReportMemberStatusAsync(MemberStatus.Reviving, targetProgress);
+                        }
+                        catch { }
+                        SkipToNextSegment = true;
+                        _needReportNormalBeforeSync = true;
+                        break;
+                    }
+
+                    // === escalation == Continue：走原"同步点前/后"分流逻辑（preservation §3.4 完全不动）===
 
                     // 联机模式：同步点后异常 → 上报 Reviving + 目标进度 → 不重试 → 跳到下一段线路
                     if (_syncPointReached && MultiplayerCoordinator != null)

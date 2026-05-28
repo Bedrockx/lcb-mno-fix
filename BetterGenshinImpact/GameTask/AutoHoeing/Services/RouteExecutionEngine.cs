@@ -37,6 +37,11 @@ public class RouteExecutionEngine
     // 当前正在执行的 PathExecutor 引用（联机模式下供 AnomalyDetector 信号传递使用）
     private PathExecutor? _activeExecutor;
 
+    // 反复复苏双层兜底（multi-revival-rapid-recurrence-fallback spec）：
+    // 路线生命周期内累计复苏时间戳，OnMultiplayerDefeatedDetected 时调用 Track 决定 escalation 动作；
+    // ExecuteRoute 入口 Reset 同时覆盖多世界轮换（design §2.6）。
+    private readonly RevivalRecurrenceTracker _revivalTracker = new();
+
     public void SetCoordinator(MultiplayerCoordinator? coordinator)
     {
         _coordinator = coordinator;
@@ -56,9 +61,30 @@ public class RouteExecutionEngine
             // 让其在主循环抛 RetryException，进入"同步点前/后"统一异常处理流程。
             // 注意：这个回调只对联机的色块检测生效（IsMultiplayerDefeated），
             // 单机的模板匹配复苏走的是另一条 OnRevivalDetected 回调，不受影响。
+            //
+            // multi-revival-rapid-recurrence-fallback：在写信号位前先经 tracker 决策升级动作
+            // （rapid recurrence / route cap），通过 SignalMultiplayerRevival(action) 透传到
+            // PathExecutor 的 RetryException catch 块。
             _anomalyDetector.OnMultiplayerDefeatedDetected = () =>
             {
-                _activeExecutor?.SignalMultiplayerRevival();
+                var executor = _activeExecutor;
+                if (executor == null) return;
+
+                var action = _revivalTracker.Track(
+                    DateTime.UtcNow,
+                    _config.RapidRevivalWindowSeconds,
+                    _config.RapidRevivalThreshold,
+                    _config.RouteRevivalCap);
+
+                if (action != RevivalEscalationAction.Continue)
+                {
+                    Logger.LogWarning(
+                        "[联机] 反复复苏触发升级：count={Count}, action={Action}, window={Win}s, rapid={Rapid}, cap={Cap}",
+                        _revivalTracker.Count, action,
+                        _config.RapidRevivalWindowSeconds, _config.RapidRevivalThreshold, _config.RouteRevivalCap);
+                }
+
+                executor.SignalMultiplayerRevival(action);
             };
         }
         else
@@ -94,6 +120,9 @@ public class RouteExecutionEngine
         var result = new RouteExecutionResult();
         _running = true;
         _anomalyDetector.ShouldSwitchFurina = false;
+
+        // multi-revival-rapid-recurrence-fallback：每条路线开始时清空时间戳列表（OQ-4 = B 多世界轮换自动覆盖）
+        _revivalTracker.Reset();
 
         // 设置路线相关材料过滤
         if (_config.UseRouteRelatedMaterialsOnly)
