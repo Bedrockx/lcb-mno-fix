@@ -980,6 +980,14 @@ public partial class TaskSettingsPageViewModel : ViewModel
     }
 
     [RelayCommand]
+    private void OpenMultiplayerFightStrategyFile()
+    {
+        // multiplayer-hoeing-fixed-fight-strategy §4
+        // 副作用全部委派给共享 helper，弹窗 (ShowHoeingSettingsDialog) 复用同一份逻辑。
+        BetterGenshinImpact.GameTask.AutoFight.MultiplayerFightStrategyFileHelper.OpenForEdit();
+    }
+
+    [RelayCommand]
     private async Task OnBrowseRooms()
     {
         var config = Config.AutoHoeingConfig;

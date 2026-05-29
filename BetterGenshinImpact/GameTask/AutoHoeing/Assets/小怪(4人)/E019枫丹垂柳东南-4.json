@@ -15,7 +15,7 @@
     "description": "  路线信息：该路线预计用时87秒，包含以下怪物：4只火史莱姆、6只水史莱姆、2只大型水史莱姆、1只盗宝团·神射手。",
     "enable_monster_loot_split": false,
     "hash_res": "06968243",
-    "last_modified_time": 1779600719999,
+    "last_modified_time": 1779737227700,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "E019枫丹垂柳东南-4",
@@ -39,8 +39,8 @@
       "id": 2,
       "move_mode": "swim",
       "type": "path",
-      "x": 3025.310546875,
-      "y": 3752.55029296875
+      "x": 3025.3105,
+      "y": 3752.5503
     },
     {
       "action": "",
@@ -48,8 +48,8 @@
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": 3018.8916015625,
-      "y": 3834.15234375
+      "x": 3018.8916,
+      "y": 3834.1523
     },
     {
       "action": "fight",
@@ -57,8 +57,8 @@
       "id": 4,
       "move_mode": "dash",
       "type": "path",
-      "x": 3029.431640625,
-      "y": 3849.783203125
+      "x": 3029.4316,
+      "y": 3849.7832
     },
     {
       "action": "",
@@ -66,8 +66,8 @@
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": 3029.431640625,
-      "y": 3849.783203125
+      "x": 3029.4316,
+      "y": 3849.7832
     },
     {
       "action": "",
@@ -75,8 +75,8 @@
       "id": 6,
       "move_mode": "jump",
       "type": "path",
-      "x": 3033.6220703125,
-      "y": 3855.69677734375
+      "x": 3033.6221,
+      "y": 3855.6968
     },
     {
       "action": "",
@@ -84,17 +84,27 @@
       "id": 7,
       "move_mode": "dash",
       "type": "path",
-      "x": 3081.220703125,
-      "y": 3872.939453125
+      "x": 3081.2207,
+      "y": 3872.9395
     },
     {
       "action": "fight",
       "action_params": "",
       "id": 8,
+      "locked": false,
       "move_mode": "dash",
       "type": "path",
-      "x": 3116.8564453125,
-      "y": 3872.51806640625
+      "x": 3116.8564,
+      "y": 3872.5181
+    },
+    {
+      "action": "combat_script",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
+      "id": 9,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 3116.8564,
+      "y": 3872.5181
     }
   ]
 }

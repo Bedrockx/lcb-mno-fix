@@ -2280,6 +2280,43 @@ public partial class ScriptControlViewModel : ViewModel
             Visibility = mpEnabled ? Visibility.Visible : Visibility.Collapsed
         };
 
+        // ========== multiplayer-hoeing-fixed-fight-strategy §6 ==========
+        // 联机战斗策略（固定文件）说明 + 打开按钮：与 TaskSettingsPage 设置页文案逐字符一致。
+        // Click 委派给共享 helper（MultiplayerFightStrategyFileHelper.OpenForEdit），
+        // 不在弹窗内复制"判定 → 创建 → Process.Start → 异常兜底"逻辑。
+        {
+            var fixedStrategyPanel = new System.Windows.Controls.StackPanel
+            {
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            fixedStrategyPanel.Children.Add(new TextBlock
+            {
+                Text = "联机战斗策略（固定文件）",
+                FontSize = 13,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 4)
+            });
+            fixedStrategyPanel.Children.Add(new TextBlock
+            {
+                Text = "联机锄地战斗策略已固定为 User\\AutoFight\\联机战斗策略.txt（文件不存在时回退至原策略选择逻辑）。点击下方按钮可编辑该文件。",
+                FontSize = 12,
+                Foreground = SystemColors.GrayTextBrush,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            var openFixedStrategyBtn = new System.Windows.Controls.Button
+            {
+                Content = "打开联机战斗策略文件",
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(12, 4, 12, 4)
+            };
+            openFixedStrategyBtn.Click += (_, _) =>
+                BetterGenshinImpact.GameTask.AutoFight.MultiplayerFightStrategyFileHelper.OpenForEdit();
+            fixedStrategyPanel.Children.Add(openFixedStrategyBtn);
+            mpPanel.Children.Add(fixedStrategyPanel);
+        }
+        // ========== /multiplayer-hoeing-fixed-fight-strategy §6 ==========
+
         // 分组1：身份信息
         mpPanel.Children.Add(MakeGroupHeader("身份信息"));
         mpPanel.Children.Add(MakeField("服务器地址", serverUrlBox));

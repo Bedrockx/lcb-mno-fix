@@ -15,10 +15,10 @@
     "description": "  路线信息：该路线预计用时43秒，包含以下怪物：3只水萤。",
     "enable_monster_loot_split": false,
     "hash_res": "53430333",
-    "last_modified_time": 1776360887358,
+    "last_modified_time": 1779736686487,
     "map_match_method": "",
     "map_name": "TheChasm",
-    "name": "ZB010层岩地下水泽西南三飞萤",
+    "name": "AZB010层岩地下水泽西南三飞萤",
     "tags": [],
     "type": "collect",
     "version": "1.0"
@@ -30,8 +30,8 @@
       "id": 1,
       "move_mode": "walk",
       "type": "teleport",
-      "x": 659.6536865234375,
-      "y": 704.72998046875
+      "x": 659.6537,
+      "y": 704.73
     },
     {
       "action": "",
@@ -39,8 +39,8 @@
       "id": 2,
       "move_mode": "dash",
       "type": "path",
-      "x": 647.8885498046875,
-      "y": 717.2578125
+      "x": 647.8885,
+      "y": 717.2578
     },
     {
       "action": "",
@@ -48,8 +48,8 @@
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": 639.5067138671875,
-      "y": 712.434326171875
+      "x": 637.9368,
+      "y": 711.187
     },
     {
       "action": "stop_flying",
@@ -57,8 +57,8 @@
       "id": 4,
       "move_mode": "fly",
       "type": "path",
-      "x": 640.4093017578125,
-      "y": 698.5970458984375
+      "x": 640.4093,
+      "y": 698.597
     },
     {
       "action": "",
@@ -66,26 +66,27 @@
       "id": 5,
       "move_mode": "walk",
       "type": "path",
-      "x": 647.0810546875,
-      "y": 701.0887451171875
+      "x": 647.0811,
+      "y": 701.0887
+    },
+    {
+      "action": "combat_script",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
+      "id": 6,
+      "locked": false,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 652.8031,
+      "y": 718.1027
     },
     {
       "action": "fight",
       "action_params": "",
-      "id": 6,
-      "move_mode": "dash",
-      "type": "path",
-      "x": 652.8031005859375,
-      "y": 718.1026611328125
-    },
-    {
-      "action": "combat_script",
-      "action_params": "wait(1)",
       "id": 7,
       "move_mode": "dash",
-      "type": "orientation",
-      "x": 652.8031005859375,
-      "y": 718.1026611328125
+      "type": "path",
+      "x": 652.8031,
+      "y": 718.1027
     }
   ]
 }

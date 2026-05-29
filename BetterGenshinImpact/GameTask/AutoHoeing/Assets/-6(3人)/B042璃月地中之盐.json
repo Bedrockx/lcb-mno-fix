@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时65.61秒，包含以下怪物：1只木盾丘丘人、1只火箭丘丘人、1只丘丘岩盔王、0.5只丘丘人。",
     "enable_monster_loot_split": false,
     "hash_res": "88671083",
-    "last_modified_time": 1777395187070,
+    "last_modified_time": 1779990137867,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B042璃月地中之盐",
@@ -26,26 +26,26 @@
       "id": 1,
       "move_mode": "walk",
       "type": "teleport",
-      "x": -164.54000000000087,
-      "y": 1182.5499999999993
-    },
-    {
-      "action": "combat_script",
-      "action_params": ";伊涅芙 e;芙宁娜 e;玛薇卡 e;爱可菲 e; ;",
-      "id": 2,
-      "move_mode": "dash",
-      "type": "path",
-      "x": -167,
-      "y": 1247.7503186068388
+      "x": -164.54,
+      "y": 1182.55
     },
     {
       "action": "",
       "action_params": "",
+      "id": 2,
+      "move_mode": "dash",
+      "type": "path",
+      "x": -168.7227,
+      "y": 1213.7871
+    },
+    {
+      "action": "combat_script",
+      "action_params": ";伊涅芙 e;莉奈娅 e;芙宁娜 e,attack(0.1);玛薇卡 e;爱可菲 e;哥伦比娅 e;菈乌玛 e(hold);万叶 attack(0.08),keydown(E),wait(0.8),keyup(E);attack(0.5)",
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": -145.25,
-      "y": 1284.4997269084233
+      "x": -155.293,
+      "y": 1270.0596
     },
     {
       "action": "",
@@ -53,17 +53,26 @@
       "id": 4,
       "move_mode": "dash",
       "type": "path",
-      "x": -145.12109375,
-      "y": 1320.5830078125
+      "x": -146.2871,
+      "y": 1278.4736
     },
     {
-      "action": "fight",
+      "action": "",
       "action_params": "",
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": -140.02734375,
-      "y": 1335.275390625
+      "x": -145.1211,
+      "y": 1320.583
+    },
+    {
+      "action": "fight",
+      "action_params": "",
+      "id": 6,
+      "move_mode": "dash",
+      "type": "path",
+      "x": -140.0273,
+      "y": 1335.2754
     }
   ]
 }

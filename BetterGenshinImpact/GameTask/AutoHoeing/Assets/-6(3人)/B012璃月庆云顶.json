@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时126.58秒，包含以下怪物：2只狂风之核、1只岩龙蜥。",
     "enable_monster_loot_split": false,
     "hash_res": "06786534",
-    "last_modified_time": 1779604586237,
+    "last_modified_time": 1779996519320,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "B012璃月庆云顶",
@@ -26,17 +26,17 @@
       "id": 1,
       "move_mode": "walk",
       "type": "teleport",
-      "x": 1433.4099999999999,
-      "y": 837.0799999999999
+      "x": 1433.41,
+      "y": 837.08
     },
     {
       "action": "stop_flying",
-      "action_params": "2000",
+      "action_params": "2500",
       "id": 2,
       "move_mode": "fly",
       "type": "path",
       "x": 1438.42,
-      "y": 895.9700000000003
+      "y": 895.97
     },
     {
       "action": "combat_script",
@@ -44,17 +44,17 @@
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": 1448.119999999999,
-      "y": 939.1700000000001
+      "x": 1448.12,
+      "y": 939.17
     },
     {
-      "action": "",
+      "action": "stop_flying",
       "action_params": "",
       "id": 4,
-      "move_mode": "climb",
+      "move_mode": "fly",
       "type": "path",
-      "x": 1444.6253729584587,
-      "y": 945.75
+      "x": 1446.6875,
+      "y": 949.531
     },
     {
       "action": "",
@@ -62,40 +62,49 @@
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": 1435.3425565329344,
-      "y": 963.7966207315176
-    },
-    {
-      "action": "fight",
-      "action_params": "",
-      "id": 6,
-      "move_mode": "dash",
-      "type": "path",
-      "x": 1424.9404296875,
-      "y": 943.86962890625
-    },
-    {
-      "action": "combat_script",
-      "action_params": "attack(0.3);伊涅芙 e;芙宁娜 e;玛薇卡 e;爱可菲 e; ;",
-      "id": 7,
-      "move_mode": "dash",
-      "type": "path",
-      "x": 1407.7000000000007,
-      "y": 931.3400000000001
-    },
-    {
-      "action": "fight",
-      "action_params": "",
-      "id": 8,
-      "move_mode": "dash",
-      "type": "path",
-      "x": 1403.1171875,
-      "y": 927.5326685590235
+      "x": 1444.3027,
+      "y": 973.8965
     },
     {
       "action": "",
       "action_params": "",
+      "id": 6,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 1425.751,
+      "y": 967.8936
+    },
+    {
+      "action": "fight",
+      "action_params": "",
+      "id": 7,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 1432.9258,
+      "y": 944.6055
+    },
+    {
+      "action": "combat_script",
+      "action_params": "attack(0.3);伊涅芙 e;芙宁娜 e;玛薇卡 e;爱可菲 e; ;",
+      "id": 8,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 1407.7,
+      "y": 931.34
+    },
+    {
+      "action": "fight",
+      "action_params": "",
       "id": 9,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 1403.1172,
+      "y": 927.5327
+    },
+    {
+      "action": "",
+      "action_params": "",
+      "id": 10,
       "move_mode": "dash",
       "type": "path",
       "x": 1410.25,
@@ -104,47 +113,47 @@
     {
       "action": "stop_flying",
       "action_params": "",
-      "id": 10,
+      "id": 11,
       "move_mode": "fly",
       "type": "path",
-      "x": 1404.1900000000005,
-      "y": 1029.9700000000012
-    },
-    {
-      "action": "",
-      "action_params": "",
-      "id": 11,
-      "move_mode": "dash",
-      "type": "path",
-      "x": 1414.1900000000005,
-      "y": 1067.9099999999999
+      "x": 1404.19,
+      "y": 1029.97
     },
     {
       "action": "",
       "action_params": "",
       "id": 12,
-      "move_mode": "fly",
+      "move_mode": "dash",
       "type": "path",
-      "x": 1421.0599999999995,
-      "y": 1090.1900000000005
+      "x": 1414.19,
+      "y": 1067.91
     },
     {
       "action": "",
       "action_params": "",
       "id": 13,
-      "move_mode": "dash",
+      "move_mode": "fly",
       "type": "path",
-      "x": 1436.8046875,
-      "y": 1145.68896484375
+      "x": 1421.06,
+      "y": 1090.19
     },
     {
-      "action": "fight",
+      "action": "",
       "action_params": "",
       "id": 14,
       "move_mode": "dash",
       "type": "path",
-      "x": 1442.740234375,
-      "y": 1151.3603515625
+      "x": 1436.8047,
+      "y": 1145.689
+    },
+    {
+      "action": "fight",
+      "action_params": "",
+      "id": 15,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 1442.7402,
+      "y": 1151.3604
     }
   ]
 }

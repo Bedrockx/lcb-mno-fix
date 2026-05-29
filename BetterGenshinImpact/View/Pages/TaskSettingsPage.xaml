@@ -4704,6 +4704,36 @@
                                        Content="打开教程" />
                         </Grid>
 
+                        <!-- ========== multiplayer-hoeing-fixed-fight-strategy §5 ========== -->
+                        <!-- 联机战斗策略（固定文件） -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ui:TextBlock Grid.Row="0"
+                                          Grid.Column="0"
+                                          FontTypography="Body"
+                                          Text="联机战斗策略（固定文件）"
+                                          TextWrapping="Wrap" />
+                            <ui:TextBlock Grid.Row="1"
+                                          Grid.Column="0"
+                                          Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                          Text="联机锄地战斗策略已固定为 User\AutoFight\联机战斗策略.txt（文件不存在时回退至原策略选择逻辑）。点击下方按钮可编辑该文件。"
+                                          TextWrapping="Wrap" />
+                            <ui:Button Grid.Row="0"
+                                       Grid.RowSpan="2"
+                                       Grid.Column="1"
+                                       Margin="0,0,36,0"
+                                       Command="{Binding OpenMultiplayerFightStrategyFileCommand}"
+                                       Content="打开联机战斗策略文件" />
+                        </Grid>
+                        <!-- ========== /multiplayer-hoeing-fixed-fight-strategy §5 ========== -->
+
                         <!-- ── 拾取模式（联机/单机共享 Config.AutoHoeingConfig.PickupMode） ── -->
                         <Grid Margin="16,8">
                             <Grid.ColumnDefinitions>

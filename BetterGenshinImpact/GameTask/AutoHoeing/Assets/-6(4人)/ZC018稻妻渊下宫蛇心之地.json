@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时133.19秒，包含以下怪物：1只岩史莱姆、1只丘丘雷兜王、1只深海龙蜥·原种_600。",
     "enable_monster_loot_split": false,
     "hash_res": "26834014",
-    "last_modified_time": 1779602943707,
+    "last_modified_time": 1779970068277,
     "map_match_method": "",
     "map_name": "Enkanomiya",
     "name": "ZC018稻妻渊下宫蛇心之地",
@@ -26,8 +26,8 @@
       "id": 1,
       "move_mode": "walk",
       "type": "teleport",
-      "x": 386.8699999999999,
-      "y": -336.8299999999999
+      "x": 386.87,
+      "y": -336.83
     },
     {
       "action": "stop_flying",
@@ -35,8 +35,8 @@
       "id": 2,
       "move_mode": "climb",
       "type": "path",
-      "x": 382.1416015625,
-      "y": -327.140869140625
+      "x": 382.1416,
+      "y": -327.1409
     },
     {
       "action": "fight",
@@ -44,26 +44,26 @@
       "id": 3,
       "move_mode": "climb",
       "type": "path",
-      "x": 382.1416015625,
-      "y": -327.140869140625
-    },
-    {
-      "action": "stop_flying",
-      "action_params": "1300",
-      "id": 4,
-      "move_mode": "fly",
-      "type": "path",
-      "x": 372.96875,
-      "y": -324.6242717557957
+      "x": 382.1416,
+      "y": -327.1409
     },
     {
       "action": "combat_script",
-      "action_params": ";钟离 a(0.1),keypress(q),e(hold);茜特菈莉 e;莱依拉 e;伊涅芙 e; ;",
+      "action_params": "attack(0.3)",
+      "id": 4,
+      "move_mode": "fly",
+      "type": "path",
+      "x": 372.9688,
+      "y": -324.6243
+    },
+    {
+      "action": "combat_script",
+      "action_params": ";钟离 a(0.1),keypress(e);茜特菈莉 e;莱依拉 e;伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;菈乌玛 e; ;",
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": 382.7813720703125,
-      "y": -323.793701171875
+      "x": 384.38,
+      "y": -324.75
     },
     {
       "action": "",
@@ -71,8 +71,8 @@
       "id": 6,
       "move_mode": "dash",
       "type": "path",
-      "x": 382.382080078125,
-      "y": -319.832275390625
+      "x": 382.7188,
+      "y": -314.3126
     },
     {
       "action": "",
@@ -80,17 +80,35 @@
       "id": 7,
       "move_mode": "dash",
       "type": "path",
-      "x": 365.6925048828125,
-      "y": -306.49853515625
+      "x": 365.6925,
+      "y": -306.4985
+    },
+    {
+      "action": "combat_script",
+      "action_params": ";钟离 e(hold);茜特菈莉 e;莱依拉 e;伊涅芙 e;莉奈娅 e;芙宁娜 e;玛薇卡 e;爱可菲 e;菈乌玛 e; ;",
+      "id": 8,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 352.4375,
+      "y": -318.5314
+    },
+    {
+      "action": "combat_script",
+      "action_params": "wait(1)",
+      "id": 9,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 335.5625,
+      "y": -285.2505
     },
     {
       "action": "fight",
       "action_params": "",
-      "id": 8,
+      "id": 10,
       "move_mode": "dash",
       "type": "path",
-      "x": 349.94970703125,
-      "y": -320.315673828125
+      "x": 356.3755,
+      "y": -310.0941
     }
   ]
 }

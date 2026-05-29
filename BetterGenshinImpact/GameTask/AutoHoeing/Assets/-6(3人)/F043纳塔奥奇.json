@@ -11,7 +11,7 @@
     "description": "  路线信息：该路线预计用时57.08秒，包含以下怪物：1只遗迹重机。",
     "enable_monster_loot_split": false,
     "hash_res": "92891237",
-    "last_modified_time": 1777395901301,
+    "last_modified_time": 1779901777501,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "F043纳塔奥奇",
@@ -27,25 +27,34 @@
       "move_mode": "walk",
       "type": "teleport",
       "x": 10070.24,
-      "y": 25.659999999999854
+      "y": 25.66
     },
     {
-      "action": "fight",
+      "action": "",
       "action_params": "",
       "id": 2,
       "move_mode": "dash",
       "type": "path",
-      "x": 10056.30859375,
-      "y": 94.28857421875
+      "x": 10060.7246,
+      "y": 78.2637
     },
     {
-      "action": "fight",
+      "action": "",
       "action_params": "",
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": 10048.5029296875,
-      "y": 100.529296875
+      "x": 10038.1211,
+      "y": 115.542
+    },
+    {
+      "action": "fight",
+      "action_params": "",
+      "id": 4,
+      "move_mode": "dash",
+      "type": "path",
+      "x": 10053.4453,
+      "y": 102.1045
     }
   ]
 }

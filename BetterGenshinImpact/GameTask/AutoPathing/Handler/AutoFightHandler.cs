@@ -84,6 +84,29 @@ internal class AutoFightHandler : IActionHandler
         // （AutoHoeingTask 进入联机时设置、Start finally 块清空），单机路径不受影响。
         if (PathingConditionConfig.MultiplayerFightTimeoutOverride.HasValue)
         {
+            // multiplayer-hoeing-fixed-fight-strategy §2: 联机锄地战斗策略路径强制覆盖为固定文件。
+            // 决策函数为纯函数，依赖外部 File.Exists 通过 lambda 注入便于 PBT。
+            // 文件不存在时静默回退到 taskParams.CombatStrategyPath 原值（即原 StrategyName 解析结果），
+            // 不在运行时创建文件——UI"打开联机战斗策略文件"按钮才负责"不存在时创建空文件"。
+            var fixedFightStrategyPath = Global.Absolute(@"User\AutoFight\联机战斗策略.txt");
+            var originalStrategyName =
+                (config as PathingPartyConfig)?.AutoFightConfig?.StrategyName
+                ?? TaskContext.Instance().Config.AutoFightConfig.StrategyName;
+            var (resolvedPath, shouldLogOverride) =
+                MultiplayerFightStrategyDecisions.ResolveCombatStrategyPath(
+                    isMultiplayer: true,
+                    fixedFilePath: fixedFightStrategyPath,
+                    originalResolvedPath: taskParams.CombatStrategyPath,
+                    originalStrategyName: originalStrategyName,
+                    fileExists: File.Exists);
+            taskParams.CombatStrategyPath = resolvedPath;
+            if (shouldLogOverride)
+            {
+                _logger.LogInformation(
+                    "[联机][策略] 已使用联机战斗策略文件 {Path}，忽略 StrategyName={Name}",
+                    resolvedPath, originalStrategyName);
+            }
+
             taskParams.KazuhaPickupEnabled = false;
 
             // multiplayer-kazuha-pre-cast-positioning EB2: 联机锄地 + 当前为万叶玩家时，
@@ -94,6 +117,20 @@ internal class AutoFightHandler : IActionHandler
             {
                 taskParams.KazuhaContinuousReturn = true;
                 _logger.LogInformation("[联机][万叶] 启用战斗中持续回点 (returnInterval=1000ms, distanceThreshold=1.0)");
+
+                // multiplayer-kazuha-fixed-fight-overrides §2: 联机万叶玩家专属 10 项战斗参数覆盖
+                // 7 项固定值（旋转寻敌=true, RotaryFactor=1, Q前检测=false, 尝试面敌=false,
+                //          GoDistance=0, 不等待旋转结束=true, 快速连续检查=true, 派蒙模式=true）
+                // 2 项下限钳制（FightWaitNotEndTime ≥ 1000ms, FastCheckDelay ≥ 0.8s）
+                var kazuhaOverride = MultiplayerKazuhaFightOverrides.Apply(taskParams);
+                _logger.LogInformation(
+                    "[联机][万叶] 已应用万叶战斗参数覆盖: " +
+                    "RotateFindEnemy=true, Rotary=1, CheckBeforeBurst=false, IsFirstCheck=false, " +
+                    "GoDistance=0, RotationMode=true, EndModel=true, PaimonEndModel=true, " +
+                    "FightWaitNotEndTime={FinalFightWait}ms (player={PlayerFightWait}ms), " +
+                    "FastCheckDelay={FinalFastCheck}s (player={PlayerFastCheck}s)",
+                    kazuhaOverride.FinalFightWaitNotEndTime, kazuhaOverride.OriginalFightWaitNotEndTime,
+                    kazuhaOverride.FinalFastCheckDelay, kazuhaOverride.OriginalFastCheckDelay);
             }
         }
 

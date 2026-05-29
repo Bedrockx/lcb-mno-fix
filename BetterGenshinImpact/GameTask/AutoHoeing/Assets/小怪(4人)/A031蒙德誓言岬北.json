@@ -9,7 +9,7 @@
     "bgi_version": "0.45.0",
     "description": "  路线信息：该路线预计用时57秒，包含以下怪物：1只大型风史莱姆、3只雷史莱姆、1只变异雷史莱姆、1只大型草史莱姆、1只岩史莱姆。",
     "enable_monster_loot_split": false,
-    "last_modified_time": 1779601435315,
+    "last_modified_time": 1779859138000,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "A031蒙德誓言岬北",
@@ -24,8 +24,8 @@
       "id": 1,
       "move_mode": "walk",
       "type": "teleport",
-      "x": -2001.025390625,
-      "y": 1438.5283203125
+      "x": -2001.0254,
+      "y": 1438.5283
     },
     {
       "action": "",
@@ -33,8 +33,8 @@
       "id": 2,
       "move_mode": "dash",
       "type": "path",
-      "x": -2061.353515625,
-      "y": 1430.8544921875
+      "x": -2061.3535,
+      "y": 1430.8545
     },
     {
       "action": "",
@@ -42,17 +42,17 @@
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": -2092.748046875,
-      "y": 1465.3740234375
+      "x": -2092.748,
+      "y": 1465.374
     },
     {
       "action": "combat_script",
-      "action_params": "attack(0.3);菈乌玛 e(hold);e",
+      "action_params": "attack(0.3);菈乌玛 e(hold);法尔伽 attack(0.02),e,attack(1);e",
       "id": 4,
       "move_mode": "dash",
       "type": "path",
-      "x": -2090.45703125,
-      "y": 1472.572265625
+      "x": -2087.6777,
+      "y": 1472.6147
     },
     {
       "action": "",
@@ -60,17 +60,18 @@
       "id": 5,
       "move_mode": "dash",
       "type": "path",
-      "x": -2090.45703125,
-      "y": 1472.572265625
+      "x": -2086.1172,
+      "y": 1497.3398
     },
     {
-      "action": "",
-      "action_params": "",
+      "action": "combat_script",
+      "action_params": "attack(0.3);菈乌玛 e(hold);e",
       "id": 6,
+      "locked": false,
       "move_mode": "dash",
       "type": "path",
-      "x": -2086.1171875,
-      "y": 1497.33984375
+      "x": -2076.4057,
+      "y": 1542.846
     },
     {
       "action": "fight",
@@ -78,8 +79,8 @@
       "id": 7,
       "move_mode": "dash",
       "type": "path",
-      "x": -2077.9453125,
-      "y": 1536.6572265625
+      "x": -2079.6733,
+      "y": 1536.3116
     }
   ]
 }

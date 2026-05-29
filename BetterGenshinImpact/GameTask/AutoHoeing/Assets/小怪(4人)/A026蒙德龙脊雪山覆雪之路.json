@@ -14,7 +14,7 @@
     "description": "  路线信息：该路线预计用时55秒，包含以下怪物：2只冰萤。",
     "enable_monster_loot_split": false,
     "hash_res": "69915241",
-    "last_modified_time": 1779565355006,
+    "last_modified_time": 1779859074882,
     "map_match_method": "",
     "map_name": "Teyvat",
     "name": "A026蒙德龙脊雪山覆雪之路",
@@ -31,7 +31,7 @@
       "id": 1,
       "move_mode": "walk",
       "type": "teleport",
-      "x": -1130.7599999999984,
+      "x": -1130.76,
       "y": 1597.92
     },
     {
@@ -40,8 +40,8 @@
       "id": 2,
       "move_mode": "dash",
       "type": "path",
-      "x": -1098.400390625,
-      "y": 1602.5888671875
+      "x": -1098.4004,
+      "y": 1602.5889
     },
     {
       "action": "",
@@ -49,8 +49,8 @@
       "id": 3,
       "move_mode": "dash",
       "type": "path",
-      "x": -1080.0078125,
-      "y": 1579.11865234375
+      "x": -1080.0078,
+      "y": 1579.1187
     },
     {
       "action": "",
@@ -58,27 +58,26 @@
       "id": 4,
       "move_mode": "dash",
       "type": "path",
-      "x": -1033.931640625,
-      "y": 1541.068359375
+      "x": -1033.9316,
+      "y": 1541.0684
     },
     {
-      "action": "stop_flying",
-      "action_params": "",
+      "action": "combat_script",
+      "action_params": "attack(0.3)",
       "id": 5,
       "move_mode": "fly",
       "type": "path",
-      "x": -1013.77734375,
-      "y": 1487.353515625
+      "x": -1013.7891,
+      "y": 1485.007
     },
     {
       "action": "combat_script",
       "action_params": "attack(0.3);菈乌玛 e(hold);e",
       "id": 6,
-      "locked": false,
       "move_mode": "dash",
       "type": "path",
-      "x": -1026.5078125,
-      "y": 1481.2263121660544
+      "x": -1028.0554,
+      "y": 1480.1949
     },
     {
       "action": "fight",
@@ -86,8 +85,8 @@
       "id": 7,
       "move_mode": "dash",
       "type": "path",
-      "x": -1026.5078125,
-      "y": 1481.2263121660544
+      "x": -1024.2725,
+      "y": 1481.4837
     }
   ]
 }
