@@ -381,20 +381,23 @@ public class SystemControl
             _ = User32.SendMessage(hWnd, User32.WindowMessage.WM_SYSCOMMAND, User32.SysCommand.SC_RESTORE, 0);
             _ = User32.SetForegroundWindow(hWnd);
 
-            while (User32.IsIconic(hWnd))
-            {
-                continue;
-            }
-
+            // 移除 while (User32.IsIconic(hWnd)) { continue; } busy-spin。
+            // 若 SC_RESTORE 后仍为 Iconic，由上层 CheckAndActivateGameWindow 下一轮 iter 通过
+            // TryRestoreIconic 路径处理（每秒一次，无上限直到成功）。
             _ = User32.BringWindowToTop(hWnd);
             _ = User32.SetActiveWindow(hWnd);
         }
     }
     public static void MinimizeAndActivateWindow(nint hWnd)
     {
-        HWND hShell = User32.FindWindow("Shell_TrayWnd", null);
-        User32.SendMessage(hShell, 0x0111, (IntPtr)419, IntPtr.Zero);
-        Thread.Sleep(500);
+        // 历史上发 Shell_TrayWnd 0x0111 / wParam=419 触发"显示桌面"，会副作用最小化所有窗口
+        // （含目标窗口本身），已移除（D3 / BC-3）。改为按需 ShowWindow(SW_RESTORE) + FocusWindow——
+        // 方法名保留以维持 ScriptService 等调用方签名（P-3 / P-6）。
+        if (!User32.IsWindow(hWnd)) return;
+        if (User32.IsIconic(hWnd))
+        {
+            _ = User32.ShowWindow(hWnd, ShowWindowCommand.SW_RESTORE);
+        }
         FocusWindow(hWnd);
     }
     public static void RestoreWindow(nint hWnd)

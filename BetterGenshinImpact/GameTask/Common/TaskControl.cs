@@ -42,7 +42,14 @@ public class TaskControl
     private static readonly Ping PingSender = new Ping();
     private static readonly bool NetworkDetectionConfig = TaskContext.Instance().Config.OtherConfig.NetworkDetectionConfig;
     private static int _networkFailureCount = 0;
-    
+
+    // 焦点恢复跨调用状态（spec focus-recovery-no-budget-limit / bugfix.md §4 EB-5）
+    // 仅追踪"焦点持续丢失期间是否已打首次 Warning"和"上次进度日志时刻"，
+    // 焦点回原神时清零。无预算追踪、无节流戳（决议已删除 N/T/Cooldown）。
+    private static bool _focusRecoveryWarningEmitted;
+    private static DateTime? _focusRecoveryProgressLastLoggedAt;
+    private static DateTime? _focusRecoveryFirstLossAt;
+
     private static RecognitionObject GetConfirmRa(bool isOcrMatch = false,params string[] targetText)
     {
         var screenArea = CaptureToRectArea();
@@ -58,6 +65,16 @@ public class TaskControl
     public static bool IsSuspendedByNetwork { get; set; } = false;
     
     public static bool IsSuspendedByWindow { get; set; } = false;
+
+    /// <summary>
+    /// 截图暂停信号（spec capture-failure-suspend-signal / bugfix.md §2.2 EB-2）。
+    /// 当 <see cref="CaptureGameImage"/> 进入 30 秒恢复等待循环时为 true，
+    /// 恢复或放弃后立即清零（finally 保证）。
+    ///
+    /// **重要**：仅用于其他模块"观测"——**不**加入 <see cref="TrySuspend"/> 的 while 循环条件，
+    /// 避免与 <see cref="CheckNetworkStatusAsync"/> 形成递归嵌套（后者内部也调 <c>CaptureToRectArea</c>）。
+    /// </summary>
+    public static bool IsSuspendedByCapture { get; set; } = false;
     
     private static bool _isBless = false;
 
@@ -272,7 +289,8 @@ public class TaskControl
             Logger.LogInformation("网络恢复中，暂停尝试恢复窗口");
             return;
         }
-        
+
+        // P-1：Cfg=Off 旧分支保留——用户显式希望"前台不是原神就抛异常暂停"的严格模式
         if (!TaskContext.Instance().Config.OtherConfig.RestoreFocusOnLostEnabled)
         {
             if (!SystemControl.IsGenshinImpactActiveByProcess())
@@ -281,27 +299,78 @@ public class TaskControl
                 Logger.LogWarning($"当前获取焦点的窗口为: {name}，不是原神，暂停");
                 throw new RetryException("当前获取焦点的窗口不是原神");
             }
+            return;
         }
 
-        var count = 0;
-        //未激活则尝试恢复窗口
-        while (!SystemControl.IsGenshinImpactActiveByProcess())
+        var gameHandle = TaskContext.Instance().GameHandle;
+
+        // 焦点回原神 → 清零跨调用状态并 return
+        if (SystemControl.IsGenshinImpactActiveByProcess())
         {
-            if (count >= 10 && count % 10 == 0)
+            if (_focusRecoveryWarningEmitted && _focusRecoveryFirstLossAt is { } firstLossAt)
             {
-                Logger.LogInformation("多次尝试未恢复，尝试最小化后激活窗口！");
-                SystemControl.MinimizeAndActivateWindow(TaskContext.Instance().GameHandle);
+                var elapsedMs = (int)(DateTime.UtcNow - firstLossAt).TotalMilliseconds;
+                Logger.LogWarning("[FocusRecovery] 焦点已回原神，等待耗时 {Elapsed}ms", elapsedMs);
             }
-            else
-            {
-                var name = SystemControl.GetActiveByProcess();
-                Logger.LogInformation("当前获取焦点的窗口为: {Name}，不是原神，尝试恢复窗口", name);
-                SystemControl.FocusWindow(TaskContext.Instance().GameHandle);
-            }
-
-            count++;
-            Thread.Sleep(1000);
+            _focusRecoveryWarningEmitted = false;
+            _focusRecoveryProgressLastLoggedAt = null;
+            _focusRecoveryFirstLossAt = null;
+            return;
         }
+
+        var state = new FocusRecoveryState(
+            RestoreFocusOnLost: true,
+            ForegroundIsGenshin: false,
+            GameWindowMinimized: User32.IsWindow(gameHandle) && User32.IsIconic(gameHandle));
+
+        var decision = FocusRecoveryDecisions.Decide(state);
+
+        // Skip 不应在此处出现（已在前面 if 处理 ForegroundIsGenshin；Cfg=Off 已 return），保留兜底
+        if (decision == FocusRecoveryDecision.Skip) return;
+
+        if (!_focusRecoveryWarningEmitted)
+        {
+            _focusRecoveryFirstLossAt = DateTime.UtcNow;
+            var fgName = SystemControl.GetActiveByProcess();
+            Logger.LogWarning(
+                "[FocusRecovery] 尝试恢复原神窗口焦点（前台={Fg}），将持续抢回直到成功",
+                fgName);
+            _focusRecoveryWarningEmitted = true;
+            _focusRecoveryProgressLastLoggedAt = DateTime.UtcNow;
+        }
+        else
+        {
+            // 后续 iter：每 5 秒一条 Debug 进度
+            var now = DateTime.UtcNow;
+            if (_focusRecoveryProgressLastLoggedAt is { } last
+                && (now - last) >= TimeSpan.FromSeconds(5))
+            {
+                var elapsedSec = _focusRecoveryFirstLossAt is { } firstLossAt
+                    ? (int)(now - firstLossAt).TotalSeconds
+                    : 0;
+                Logger.LogDebug(
+                    "[FocusRecovery] 仍在抢焦点... 已等待 {Elapsed}s, decision={Decision}",
+                    elapsedSec, decision);
+                _focusRecoveryProgressLastLoggedAt = now;
+            }
+        }
+
+        if (decision == FocusRecoveryDecision.TryRestoreIconic)
+        {
+            if (User32.IsWindow(gameHandle))
+            {
+                _ = User32.ShowWindow(gameHandle, ShowWindowCommand.SW_RESTORE);
+            }
+        }
+        else // TryFocus
+        {
+            SystemControl.FocusWindow(gameHandle);
+        }
+
+        // 单步：不 sleep 不循环，调用方控制节奏。
+        // - Sleep/Delay/CheckAndSleep 路径：每次调用触发一次（NewRetry.Do 1s 节奏由外层重试驱动）
+        // - CaptureGameImage 30s 等待循环：每 iter（200ms）顶部触发一次
+        // 见 spec focus-recovery-driven-by-capture-loop / bugfix.md §4 EB-1
     }
 
     public static void Sleep(int millisecondsTimeout, CancellationToken ct)
@@ -446,27 +515,86 @@ public class TaskControl
 
     public static Mat CaptureGameImage(IGameCapture? gameCapture)
     {
+        // 第 1 次尝试（正常路径，零延迟、零日志、零副作用）
         var image = gameCapture?.Capture();
-        if (image == null)
+        if (image != null) return image;
+
+        // 进入恢复等待循环：≤ MaxRecoveryWait（30s）
+        // 决议见 spec capture-failure-suspend-signal / bugfix.md §5 D1-D6
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var lastProgressLogAt = TimeSpan.Zero;
+        bool sessionRestartAttempted = false;       // spec graphics-capture-session-auto-restart / D2
+
+        Logger.LogWarning(
+            "[CaptureGameImage] 截图失败，进入恢复等待（最长 {Max}s，每 {Interval}ms 重试）",
+            (int)CaptureRetryDecisions.MaxRecoveryWait.TotalSeconds,
+            (int)CaptureRetryDecisions.RetryDelay.TotalMilliseconds);
+
+        // EB-2：设暂停信号供其他模块观测；finally 保证清零
+        IsSuspendedByCapture = true;
+        try
         {
-            Logger.LogWarning("截图失败!");
-            // 重试3次
-            for (var i = 0; i < 3; i++)
+            while (true)
             {
+                var decision = CaptureRetryDecisions.Decide(
+                    lastAttemptSucceeded: false, elapsed: sw.Elapsed);
+
+                if (decision == CaptureRetryDecision.Abandon)
+                {
+                    Logger.LogWarning(
+                        "[CaptureGameImage] 等待 {Elapsed}s 后仍截图失败，放弃",
+                        (int)sw.Elapsed.TotalSeconds);
+                    // 文案保留以兼容 LogParse / 既有日志告警规则
+                    throw new RetryException("尝试多次后,截图失败!");
+                }
+
+                // 关键：每次 iter 顶部驱动一次焦点恢复（单步），让主线程在等画面时也持续抢焦点。
+                // 没有这一步，CheckAndActivateGameWindow 仅在 Sleep/Delay 调用栈触发，主线程
+                // 进入本循环后焦点恢复永远不会被驱动 → 焦点抢不回 → 帧不来 → 30s 后 RetryException 终止任务。
+                // Cfg=Off 时该调用会抛 RetryException，由外层 try/finally 清零 IsSuspendedByCapture 后冒泡。
+                // 决议见 spec focus-recovery-driven-by-capture-loop / bugfix.md §4 EB-2。
+                CheckAndActivateGameWindow();
+
+                // elapsed ≥ 2s 且本轮未重启过 → 重建 capture session。
+                // 应对 GraphicsCapture._captureItem.Closed 触发后 session 永久失效（Win11 反复最小化 race）。
+                // 决议见 spec graphics-capture-session-auto-restart / bugfix.md §4 EB-2 / §6 D2。
+                if (!sessionRestartAttempted
+                    && sw.Elapsed >= CaptureRetryDecisions.CaptureRestartThreshold)
+                {
+                    Logger.LogWarning(
+                        "[Capture] 截图持续失败 {Elapsed}s，重建 capture session",
+                        (int)sw.Elapsed.TotalSeconds);
+                    TaskTriggerDispatcher.Instance().RestartCapture();
+                    sessionRestartAttempted = true;
+                }
+
+                // RetryAfterDelay：等 200ms 再试。
+                Thread.Sleep((int)CaptureRetryDecisions.RetryDelay.TotalMilliseconds);
+
                 image = gameCapture?.Capture();
+
                 if (image != null)
                 {
+                    Logger.LogWarning(
+                        "[CaptureGameImage] 截图恢复，等待耗时 {Elapsed}ms",
+                        (int)sw.Elapsed.TotalMilliseconds);
                     return image;
                 }
 
-                Sleep(30);
+                // D3：每 5s 打一条 Debug 进度，避免刷屏
+                if (CaptureRetryDecisions.ShouldLogProgress(sw.Elapsed, lastProgressLogAt))
+                {
+                    Logger.LogDebug(
+                        "[CaptureGameImage] 仍在等待画面恢复... 已等待 {Elapsed}s / {Max}s",
+                        (int)sw.Elapsed.TotalSeconds,
+                        (int)CaptureRetryDecisions.MaxRecoveryWait.TotalSeconds);
+                    lastProgressLogAt = sw.Elapsed;
+                }
             }
-
-            throw new Exception("尝试多次后,截图失败!");
         }
-        else
+        finally
         {
-            return image;
+            IsSuspendedByCapture = false;
         }
     }
 

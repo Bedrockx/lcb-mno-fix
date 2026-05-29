@@ -33,6 +33,12 @@ namespace BetterGenshinImpact.GameTask
 
         public IGameCapture? GameCapture { get; private set; }
 
+        // capture session 重启上下文（spec graphics-capture-session-auto-restart / D1）
+        // 由 Start() 保存；RestartCapture() 复用以重建 session。
+        private IntPtr _capturedHWnd;
+        private CaptureModes _capturedMode;
+        private Dictionary<string, object>? _capturedSettings;
+
         private static readonly object _locker = new();
         private int _frameIndex = 0;
 
@@ -144,12 +150,17 @@ namespace BetterGenshinImpact.GameTask
             // }
 
             // 启动截图
-            GameCapture.Start(hWnd,
-                new Dictionary<string, object>()
-                {
-                    { "autoFixWin11BitBlt", OsVersionHelper.IsWindows11_OrGreater && TaskContext.Instance().Config.AutoFixWin11BitBlt }
-                }
-            );
+            var settings = new Dictionary<string, object>()
+            {
+                { "autoFixWin11BitBlt", OsVersionHelper.IsWindows11_OrGreater && TaskContext.Instance().Config.AutoFixWin11BitBlt }
+            };
+
+            // 保存重启所需上下文（spec graphics-capture-session-auto-restart / D1）
+            _capturedHWnd = hWnd;
+            _capturedMode = mode;
+            _capturedSettings = settings;
+
+            GameCapture.Start(hWnd, settings);
 
             // 使用 SetWinEventHook 监听窗口移动和大小变化事件
             _winEventProc = WinEventCallback;
@@ -185,6 +196,50 @@ namespace BetterGenshinImpact.GameTask
             {
                 User32.UnhookWinEvent(_winEventHookLocation);
                 _winEventHookLocation = default;
+            }
+        }
+
+        /// <summary>
+        /// 重建 capture session（spec graphics-capture-session-auto-restart / EB-3）。
+        /// 用于在 GraphicsCapture._captureItem.Closed 事件触发后 session 永久失效时自动恢复
+        /// （Win11 反复最小化/恢复 + GPU 驱动 race 触发的常见现象）。
+        ///
+        /// 幂等：重复调用安全（Stop + 重新 Start 同一 IGameCapture 实例）。
+        /// 失败兜底：hWnd 不可用 / 进程退出时仅 LogWarning 不抛异常，由调用方继续等待 30s 兜底。
+        /// </summary>
+        /// <returns>true=重建成功；false=重建失败（句柄无效 / 异常）</returns>
+        public bool RestartCapture()
+        {
+            if (GameCapture == null)
+            {
+                TaskControl.Logger.LogWarning("[Capture] 重建失败，截图器未初始化");
+                return false;
+            }
+
+            var hWnd = _capturedHWnd;
+            if (hWnd == IntPtr.Zero)
+            {
+                // Start 时未设置（异常状态）→ 尝试从 TaskContext 兜底
+                hWnd = TaskContext.Instance().GameHandle;
+            }
+
+            if (hWnd == IntPtr.Zero || !User32.IsWindow(hWnd))
+            {
+                TaskControl.Logger.LogWarning("[Capture] 重建失败，游戏窗口句柄无效");
+                return false;
+            }
+
+            try
+            {
+                GameCapture.Stop();
+                GameCapture.Start(hWnd, _capturedSettings);
+                TaskControl.Logger.LogWarning("[Capture] session 已重建");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                TaskControl.Logger.LogWarning(ex, "[Capture] 重建过程异常");
+                return false;
             }
         }
 

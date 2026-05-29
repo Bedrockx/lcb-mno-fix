@@ -8,6 +8,8 @@ using System.Windows.Threading;
 using BetterGenshinImpact.Core.Recognition.OCR;
 using BetterGenshinImpact.Core.Recognition.ONNX;
 using BetterGenshinImpact.GameTask;
+using BetterGenshinImpact.GameTask.AutoGeniusInvokation.Exception;
+using BetterGenshinImpact.GameTask.Common.Exceptions;
 using BetterGenshinImpact.Helpers;
 using BetterGenshinImpact.Helpers.Extensions;
 using BetterGenshinImpact.Helpers.Win32;
@@ -288,6 +290,15 @@ public partial class App : Application
                 return;
             }
 
+            // 忽略任务流程内的"可恢复信号"异常：RetryException / RetryNoCountException /
+            // NormalEndException / HandledException 是各 task 用于中止本任务的预期信号，
+            // 即使泄露到 TaskScheduler 也不应弹窗（仅 Debug 记录）。
+            if (IsTaskFlowControlException(e.Exception))
+            {
+                GetLogger<App>().LogDebug(e.Exception, "任务流程控制异常泄露（已忽略弹窗）");
+                return;
+            }
+
             HandleException(e.Exception);
         }
         catch (Exception ex)
@@ -315,6 +326,30 @@ public partial class App : Application
         return false;
     }
 
+    /// <summary>
+    /// 判断异常是否属于任务流程内的"可恢复信号"——
+    /// RetryException / RetryNoCountException / NormalEndException / HandledException
+    /// 是项目约定的任务中止信号，由各 task 自己 catch 处理。当它们泄露到全局 unhandled
+    /// handler（例如 fire-and-forget Task.Run 的后台循环），不应弹"程序异常"提示框。
+    /// </summary>
+    private static bool IsTaskFlowControlException(Exception? ex)
+    {
+        while (ex != null)
+        {
+            if (ex is RetryException
+                || ex is RetryNoCountException
+                || ex is NormalEndException
+                || ex is HandledException)
+            {
+                return true;
+            }
+
+            ex = ex.InnerException;
+        }
+
+        return false;
+    }
+
     //非UI线程未捕获异常处理事件(例如自己创建的一个子线程)
     private static void CurrentDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
@@ -322,6 +357,12 @@ public partial class App : Application
         {
             if (e.ExceptionObject is Exception exception)
             {
+                if (IsTaskFlowControlException(exception))
+                {
+                    GetLogger<App>().LogDebug(exception, "任务流程控制异常泄露（已忽略弹窗）");
+                    return;
+                }
+
                 HandleException(exception);
             }
         }
@@ -340,6 +381,12 @@ public partial class App : Application
     {
         try
         {
+            if (IsTaskFlowControlException(e.Exception))
+            {
+                GetLogger<App>().LogDebug(e.Exception, "任务流程控制异常泄露（已忽略弹窗）");
+                return;
+            }
+
             HandleException(e.Exception);
         }
         catch (Exception ex)
