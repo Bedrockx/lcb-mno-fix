@@ -2022,6 +2022,12 @@ public class PathExecutor
             var (tprX, tprY) = MapManager.GetMap(waypoint.MapName, waypoint.MapMatchMethod)
                 .ConvertGenshinMapCoordinatesToImageCoordinates(new Point2f((float)tpX, (float)tpY));
             Navigation.SetPrevPosition(tprX, tprY); // 通过上一个位置直接进行局部特征匹配
+            // 同步刷新 PathExecutor 的 prePosition / _prePositionUpdateTime / _prePositionMapKey 三件套，
+            // 避免 TP 后第一帧识别失败时 GetPositionAndTime 的 previousDetectedPoint 兜底取到 TP 之前的 stale 坐标。
+            // 详见 .kiro/specs/pathexecutor-teleport-fresh-position-fallback-fix/design.md §Fix Implementation 改动 3。
+            prePosition = new Point2f(tprX, tprY);
+            _prePositionUpdateTime = DateTime.UtcNow;
+            _prePositionMapKey = $"{waypoint.MapName}|{waypoint.MapMatchMethod}";
             await Delay(500, ct); // 多等一会
             //如果前后地图不同
         }
@@ -2288,6 +2294,7 @@ public class PathExecutor
                     {
                         prePosition = position;
                         _prePositionUpdateTime = DateTime.UtcNow;
+                        _prePositionMapKey = $"{waypoint.MapName}|{waypoint.MapMatchMethod}";
                         distance = Navigation.GetDistance(waypoint, position);
                         Logger.LogWarning("重新识别位置成功，距离2：{distance} - {x} - {y}", distance,position.X, position.Y);
                     }
@@ -2305,6 +2312,7 @@ public class PathExecutor
                         {
                             prePosition = position;
                             _prePositionUpdateTime = DateTime.UtcNow;
+                            _prePositionMapKey = $"{waypoint.MapName}|{waypoint.MapMatchMethod}";
                             distance = Navigation.GetDistance(waypoint, position);
                             Logger.LogWarning("重新识别位置成功，距离4：{distance} - {x} - {y}", distance,position.X, position.Y);
                         }
@@ -2324,6 +2332,7 @@ public class PathExecutor
                                     Logger.LogWarning("prePosition 已过时，触发全局匹配");
                                     Navigation.Reset();
                                     prePosition = default;
+                                    _prePositionMapKey = string.Empty;
                                 }
                             }
                             
@@ -3645,6 +3654,10 @@ public class PathExecutor
     private  Point2f prePosition;
     private  DateTime preTime;
     private DateTime _prePositionUpdateTime = DateTime.UtcNow;
+    // 与 prePosition / _prePositionUpdateTime 配对：标识 prePosition 所属地图 + 匹配方式，避免跨地图兜底复用。
+    // 详见 .kiro/specs/pathexecutor-teleport-fresh-position-fallback-fix/design.md §Glossary / Fix Implementation 改动 2。
+    // 任何刷新 prePosition 的位置必须同步刷新此字段；任何失效 prePosition 的位置必须同步置 string.Empty。
+    private string _prePositionMapKey = string.Empty;
     //自动构造点位的最大时间
     private int maxAutoPositionTime=10000; 
     private async Task WaitForCloseMap(int maxAttempts, int delayMs)
@@ -3712,7 +3725,14 @@ public class PathExecutor
         {
             if (waypoint.Misidentification.HandlingMode == "previousDetectedPoint")
             {
-                if (prePosition != default && (DateTime.UtcNow - _prePositionUpdateTime).TotalSeconds <= 5)
+                // 三元判定：prePosition 非空 + 5 秒新鲜 + mapKey 一致。
+                // 详见 .kiro/specs/pathexecutor-teleport-fresh-position-fallback-fix/design.md §Fix Implementation 改动 4。
+                var __mapKey = $"{waypoint.MapName}|{waypoint.MapMatchMethod}";
+                var __ageMs = (DateTime.UtcNow - _prePositionUpdateTime).TotalMilliseconds;
+                var __sameMapKey = _prePositionMapKey == __mapKey;
+                var __fallbackUsable = PrePositionFallbackDecisions.IsFallbackUsable(prePosition == default, __ageMs, __sameMapKey);
+
+                if (__fallbackUsable)
                 {
                     position = prePosition;
                     if (isPoint)
@@ -3725,6 +3745,7 @@ public class PathExecutor
                             position = retryPos;
                             prePosition = retryPos;
                             _prePositionUpdateTime = DateTime.UtcNow;
+                            _prePositionMapKey = __mapKey;
                             Logger.LogInformation(@$"未识别到具体路径，重试成功");
                         }
                         else
@@ -3736,10 +3757,12 @@ public class PathExecutor
                 }
                 else if (prePosition != default)
                 {
-                    // prePosition 已过时，重置导航触发全局匹配
-                    Logger.LogWarning("prePosition 已超过5秒未更新，触发全局匹配重新定位");
+                    // prePosition 失效（5 秒过期 / mapKey 不一致），重置导航触发全局匹配
+                    Logger.LogWarning("prePosition 失效（age={AgeMs:F0}ms / sameMapKey={SameMapKey}），触发全局匹配重新定位",
+                        __ageMs, __sameMapKey);
                     Navigation.Reset();
                     prePosition = default;
+                    _prePositionMapKey = string.Empty;
                 }
             }else if (waypoint.Misidentification.HandlingMode == "mapRecognition"){
                 //大地图识别坐标
@@ -3780,6 +3803,7 @@ public class PathExecutor
             {
                 prePosition = position;
                 _prePositionUpdateTime = DateTime.UtcNow;
+                _prePositionMapKey = $"{waypoint.MapName}|{waypoint.MapMatchMethod}";
             }
             
             preTime = DateTime.UtcNow;
