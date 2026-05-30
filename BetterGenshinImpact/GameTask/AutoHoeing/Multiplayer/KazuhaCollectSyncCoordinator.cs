@@ -3,6 +3,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using BetterGenshinImpact.Core.Config;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.AutoGeniusInvokation.Exception;
 using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models;
@@ -376,21 +377,65 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
         }
         else
         {
-            // 兜底：缓存未命中 / 预切人失败 / 异常 → 走原"串行 GetCombatScenes + RunAsync 自切人"路径
+            // 兜底：缓存未命中 / 预切人失败 / 异常。
+            // spec kazuha-collect-team-no-kazuha-false-skip-fix：本机已是万叶（RunAsKazuhaAsync 仅在
+            // IsCurrentPlayerKazuha 分支调用），怕假阴性（有万叶却降级卡整房），按三层顺序取万叶。
             combatScenes = null;
-            try
+
+            // ---- 第 1 层：复用战斗阶段稳定快照（最治本，零识别零抖动）----
+            // 只读 CombatScenesGoBackUp（PathExecutor.cs:754 写入含万叶的稳定快照；复苏/神像传送/流程结束清空）。
+            // 只看万叶在不在，不校验队伍其他角色（Open Question Q9）。本 spec 对该字段只读不写（Preservation 3.3）。
+            var snapshot = PathingConditionConfig.CombatScenesGoBackUp;
+            bool snapshotHasKazuha = snapshot != null && snapshot.SelectAvatar("枫原万叶") != null;
+            if (KazuhaCollectRecognitionDecisions.ShouldUseCombatSnapshot(snapshotHasKazuha))
             {
-                combatScenes = await RunnerContext.Instance.GetCombatScenes(ct);
+                combatScenes = snapshot;
+                _logger.LogInformation("[联机][聚物] 万叶玩家：第 1 层命中——复用战斗快照聚物（零识别）");
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogWarning(ex, "[联机][聚物] 万叶玩家：兜底获取 CombatScenes 失败");
+                // ---- 第 2 层：forceRefresh 重试最多 N 次，任一次取到含万叶即停 ----
+                int attempt = 0;
+                bool gotKazuha = false;
+                while (KazuhaCollectRecognitionDecisions.ShouldContinueRetry(
+                           attempt, KazuhaCollectRecognitionDecisions.MaxRecognitionRetries, gotKazuha))
+                {
+                    attempt++;
+                    try
+                    {
+                        var refreshed = await RunnerContext.Instance.GetCombatScenes(ct, forceRefresh: true);
+                        if (refreshed != null && refreshed.SelectAvatar("枫原万叶") != null)
+                        {
+                            combatScenes = refreshed;
+                            gotKazuha = true;
+                            _logger.LogInformation("[联机][聚物] 万叶玩家：第 2 层第 {Attempt}/{Max} 次重试取到含万叶队伍",
+                                attempt, KazuhaCollectRecognitionDecisions.MaxRecognitionRetries);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[联机][聚物] 万叶玩家：第 2 层第 {Attempt}/{Max} 次重试未取到万叶（继续）",
+                                attempt, KazuhaCollectRecognitionDecisions.MaxRecognitionRetries);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // 取消透传（Preservation 3.9）：不当作一次"未取到万叶"，不广播终态。
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        // 单次非取消异常：记该次失败，继续下一次重试（不整体降级，除非耗尽）。
+                        _logger.LogWarning(ex, "[联机][聚物] 万叶玩家：第 2 层第 {Attempt}/{Max} 次重试 GetCombatScenes 异常（继续）",
+                            attempt, KazuhaCollectRecognitionDecisions.MaxRecognitionRetries);
+                    }
+                }
             }
         }
 
+        // ---- 第 3 层：三层耗尽仍取不到万叶 → 保留原降级语义（终态）----
         if (combatScenes == null)
         {
-            _logger.LogWarning("[联机][聚物] 万叶玩家：CombatScenes 不可用，广播 team_no_kazuha");
+            _logger.LogWarning("[联机][聚物] 万叶玩家：第 1 层未命中 + 第 2 层重试耗尽，CombatScenes 不可用，广播 team_no_kazuha");
             FireAndForget(_client.NotifyKazuhaCollectSkippedAsync("team_no_kazuha"), "NotifyKazuhaCollectSkipped(team_no_kazuha)");
             CurrentState = KazuhaCollectState.Skipped;
             return;

@@ -109,6 +109,19 @@ public partial class PathingConditionConfig : ObservableObject
         get => _multiplayerFightTimeoutOverride;
         set => _multiplayerFightTimeoutOverride = value;
     }
+
+    /// <summary>
+    /// 联机锄地是否强制使用固定的"联机战斗策略"文件（纯本地值，读本机 AutoHoeingConfig 的开关）。
+    /// AutoHoeingTask 进入联机分支时设为本机 _config.MultiplayerUseFixedFightStrategy、finally 复位为默认 true。
+    /// AutoFightHandler 仅在 MultiplayerFightTimeoutOverride.HasValue（联机锄地运行中）时读取此值。
+    /// 默认 true = 保持现有"强制固定策略"行为。
+    /// </summary>
+    private static bool _multiplayerUseFixedFightStrategyOverride = true;
+    public static bool MultiplayerUseFixedFightStrategyOverride
+    {
+        get => _multiplayerUseFixedFightStrategyOverride;
+        set => _multiplayerUseFixedFightStrategyOverride = value;
+    }
         
     public static PathingConditionConfig Default => new()
     {

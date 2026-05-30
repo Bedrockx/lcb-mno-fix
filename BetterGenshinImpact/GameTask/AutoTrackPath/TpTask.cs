@@ -126,7 +126,8 @@ public class TpTask
         // 提前调整至恰当的缩放以更快的传送
         if (_tpConfig.MapZoomEnabled || _tpConfig.MapMoveStepDivisor)
         {
-            double currentZoomLevel = GetBigMapZoomLevel(CaptureToRectArea());
+            using var ra3 = CaptureToRectArea();
+            double currentZoomLevel = GetBigMapZoomLevel(ra3);
             if (currentZoomLevel > DisplayTpPointZoomLevel)
             {
                 await AdjustMapZoomLevel(currentZoomLevel, DisplayTpPointZoomLevel);
@@ -295,9 +296,10 @@ public class TpTask
         }
         await Delay(50, ct);
 
-
+        Rect bigMapInAllMapRect;
         // 3. 调整初始缩放等级，避免识别中心点失败
-        var zoomLevel = GetBigMapZoomLevel(CaptureToRectArea());
+        using var ra3 = CaptureToRectArea();
+        var zoomLevel = GetBigMapZoomLevel(ra3);
         if (_tpConfig.MapZoomEnabled || _tpConfig.MapMoveStepDivisor)
         {
             /* 动态调整缩放逻辑：
@@ -308,12 +310,14 @@ public class TpTask
                 await AdjustMapZoomLevel(zoomLevel, DisplayTpPointZoomLevel);
                 zoomLevel = DisplayTpPointZoomLevel;
                 TaskControl.Logger.LogInformation("当前缩放等级过大，调整为 {zoomLevel:0.00}", DisplayTpPointZoomLevel);
+                bigMapInAllMapRect = GetBigMapRect(mapName);
             }
             else if (zoomLevel < _tpConfig.MinZoomLevel - _tpConfig.PrecisionThreshold)
             {
                 await AdjustMapZoomLevel(zoomLevel, _tpConfig.MinZoomLevel);
                 zoomLevel = _tpConfig.MinZoomLevel;
                 TaskControl.Logger.LogInformation("当前缩放等级过小，调整为 {zoomLevel:0.00}", _tpConfig.MinZoomLevel);
+                bigMapInAllMapRect = GetBigMapRect(mapName);
             }
         }
 
@@ -326,10 +330,10 @@ public class TpTask
                 await MoveMapTo(x, y, mapName, minZoomLevel,country);
                 if (_tpConfig.MapMoveStepDivisor)
                 {
-                    int timeoutMs = 80 + _tpConfig.StepIntervalMilliseconds * 10;
+                    int timeoutMs = 800 + _tpConfig.StepIntervalMilliseconds * 10;
                     if (_tpConfig.FastDragRecognitionEnabled)
                     {
-                        await WaitMapStableOrTimeoutAsync(timeoutMs); // fast-drag-recognition-acceleration spec
+                        await WaitMapStableOrTimeoutAsync(1000); // fast-drag-recognition-acceleration spec
                     }
                     else
                     {
@@ -347,9 +351,9 @@ public class TpTask
                 // TODO 部分无法区分点位强制缩放，即使没有zoomEnabled。
             }
         }
-
+        
         // 5. 判断传送点是否在当前界面，若否则移动地图
-        var bigMapInAllMapRect = GetBigMapRect(mapName);
+        bigMapInAllMapRect = GetBigMapRect(mapName);
         var retryCount = 0;
         do
         {
@@ -359,7 +363,7 @@ public class TpTask
                 TaskControl.Logger.LogWarning("多次尝试未移动到目标传送点，传送失败");
                 throw new Exception("多次尝试未移动到目标传送点，传送失败");
             }
-
+            
             TaskControl.Logger.LogInformation("传送点不在当前大地图范围内，重新调整地图位置-1");
             await MoveMapTo(x, y, mapName,2,country, retryTimes);
             if (_tpConfig.MapMoveStepDivisor)
@@ -369,7 +373,7 @@ public class TpTask
                 {
                     // 加速：等像素稳定（远比连续两次模板匹配 GetBigMapRect 快），稳定后再单次 GetBigMapRect
                     // fast-drag-recognition-acceleration spec / design.md §4.2（feedback adjustment）
-                    await WaitMapStableOrTimeoutAsync(timeoutMs);
+                    await WaitMapStableOrTimeoutAsync(1000);
                 }
                 else
                 {
@@ -383,12 +387,32 @@ public class TpTask
             bigMapInAllMapRect = GetBigMapRect(mapName);
         } while (true);
 
+        // 5.5 点击前强制把缩放归一到本次尝试的"可点击级别"，避免步骤 5 的 MoveMapTo(...,2,...)
+        //     把点击缩放带离传送点可点击区间。retryTimes 作为 attempt 序号，使每次重试换档。
+        //     详见 .kiro/specs/teleport-wrong-zoom-no-teleport-button-fix/design.md §2.2。
+        // if (_tpConfig.MapZoomEnabled || _tpConfig.MapMoveStepDivisor)
+        // {
+        //     using var raZoom = CaptureToRectArea();
+        //     double zoomBeforeClick = GetBigMapZoomLevel(raZoom);
+        //     double targetClickZoom = ComputeClickZoomCandidate(retryTimes, DisplayTpPointZoomLevel, _tpConfig.MinZoomLevel);
+        //     if (Math.Abs(zoomBeforeClick - targetClickZoom) > _tpConfig.PrecisionThreshold)
+        //     {
+        //         await AdjustMapZoomLevel(zoomBeforeClick, targetClickZoom);
+        //         TaskControl.Logger.LogInformation("点击前调整缩放：{From:0.00} -> {To:0.00}（第 {Attempt} 次尝试）",
+        //             zoomBeforeClick, targetClickZoom, retryTimes + 1);
+        //         await Delay(_tpConfig.MapMoveStepDivisor ? 50 : 100, ct);
+        //         // 缩放变化使既有 bigMapInAllMapRect 失效，必须重新计算
+        //         bigMapInAllMapRect = GetBigMapRect(mapName);
+        //     }
+        // }
+
         // 6. 计算传送点位置并点击
         // Debug.WriteLine($"({x},{y}) 在 {bigMapInAllMapRect} 内，计算它在窗体内的位置");
         // 注意这个坐标的原点是中心区域某个点，所以要转换一下点击坐标（点击坐标是左上角为原点的坐标系），不能只是缩放
         var (clickX, clickY) = ConvertToGameRegionPosition(mapName, bigMapInAllMapRect, x, y);
         TaskControl.Logger.LogInformation("点击传送点");
-        CaptureToRectArea().ClickTo((int)clickX, (int)clickY);
+        using var ra4 = CaptureToRectArea();
+        ra4.ClickTo((int)clickX, (int)clickY);
 
         // 7. 触发一次快速传送功能
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
@@ -400,13 +424,15 @@ public class TpTask
             bool entered = await FastClickTeleportButtonAsync();
             if (!entered)
             {
-                await ClickTpPoint(CaptureToRectArea());
+                using var ra1 = CaptureToRectArea();
+                await ClickTpPoint(ra1);
             }
         }
         else
         {
             await Delay(500, ct);
-            await ClickTpPoint(CaptureToRectArea());
+            using var ra1 = CaptureToRectArea();
+            await ClickTpPoint(ra1);
         }
 
         // 8. 等待传送完成
@@ -631,8 +657,11 @@ public class TpTask
     /// </summary>
     private async Task<bool> TryToOpenBigMapUi()
     {
+        
+        await WaitMapStableOrTimeoutAsync(600);
+        
         // M 打开地图识别当前位置，中心点为当前位置
-        var ra1 = CaptureToRectArea();
+        using var ra1 = CaptureToRectArea();
         if (Bv.IsInBigMapUi(ra1))
         {
             return true;
@@ -648,28 +677,33 @@ public class TpTask
         }
 
         // 旧行为：固定 1000ms 后再 3 次 500ms 重试
-        await Delay(1000, ct);
-        for (int i = 0; i < 3; i++)
+        await Delay(500, ct);
+        for (int i = 0; i < 30; i++)
         {
-            ra1 = CaptureToRectArea();
-            if (!Bv.IsInBigMapUi(ra1))
+            using var ra12 = CaptureToRectArea();
+            if (!Bv.IsInBigMapUi(ra12))
             {
-                await Delay(500, ct);
+                await Delay(50, ct);
             }
             else
             {
                 return true;
             }
         }
+       
         return false;
     }
 
     /// <summary>
-    /// 加速识别模式：按 M 后轮询等大地图 UI 出现。30ms 一帧，命中即返回 true，超时返回 false。
-    /// 高配机器地图打开动画通常 100-300ms，节省 700-900ms。
-    /// fast-drag-recognition-acceleration spec / step 1 boot delay optimization
+    /// 加速识别模式：按 M 后轮询等大地图 UI 出现即返回（单判据）。
+    /// 之前为了防"地图特征点未渲染→走 SwitchArea 弯路"加过双判据，但用户实测：
+    /// 双判据导致每次都顿一下；旧版本（无特征点判据）也不是每次都走 SwitchArea。
+    /// 改回单判据后，"特征点识别"由下游 SwitchRecentlyCountryMap 入口的 3×100ms retry 兜底
+    /// （见 SwitchRecentlyCountryMap 注释）。最坏 ~300ms 仍能识别成功，避免误走 SwitchArea。
+    ///
+    /// fast-drag-recognition-acceleration spec / step 1 boot delay optimization (single criterion)
     /// </summary>
-    private async Task<bool> WaitForBigMapUiOrTimeoutAsync(int timeoutMs, int pollMs = 30)
+    private async Task<bool> WaitForBigMapUiOrTimeoutAsync(int timeoutMs, int pollMs = 10)
     {
         long deadline = Environment.TickCount + timeoutMs;
         while (Environment.TickCount < deadline)
@@ -680,12 +714,42 @@ public class TpTask
                 using var ra = CaptureToRectArea();
                 if (Bv.IsInBigMapUi(ra))
                 {
+                    await Delay(10, ct);
                     return true;
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                Logger.LogDebug("[快速识别] IsInBigMapUi 探测异常: {Msg}", ex.Message);
+                Logger.LogDebug("[快速识别] OpenBigMapUi 探测异常: {Msg}", ex.Message);
+            }
+            await Delay(pollMs, ct);
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// 加速识别模式：轮询等指定 RecognitionObject 出现，超时兜底。
+    /// 主要用于"等弹窗 / 菜单出现"场景（如 SwitchArea 等地区菜单的白色 X 关闭按钮）。
+    /// fast-drag-recognition-acceleration spec
+    /// </summary>
+    private async Task<bool> WaitForElementOrTimeoutAsync(RecognitionObject ro, int timeoutMs, int pollMs = 15)
+    {
+        long deadline = Environment.TickCount + timeoutMs;
+        while (Environment.TickCount < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                using var ra = CaptureToRectArea();
+                using var found = ra.Find(ro);
+                if (found.IsExist())
+                {
+                    return true;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.LogDebug("[快速识别] WaitForElement 探测异常 {Name}: {Msg}", ro.Name, ex.Message);
             }
             await Delay(pollMs, ct);
         }
@@ -708,6 +772,10 @@ public class TpTask
                 await Delay(300, ct);
                 // throw; // 不抛出异常，继续重试
                 TaskControl.Logger.LogWarning(e.Message + "  重试");
+                // 联机锄地：传送失败重试视为"仍在合法传送中"，刷新 WorldStateMonitor 抑制计时窗口，
+                // 避免长传送被墙钟超时误判被踢出。单机 CurrentWorldStateMonitor==null → no-op。
+                // 详见 .kiro/specs/world-state-monitor-teleport-suppression-premature-expiry-fix/design.md 改动 5。
+                PathExecutor.CurrentWorldStateMonitor?.RefreshTeleportSuppression();
             }
             catch (Exception e) when (e is NormalEndException || e is TaskCanceledException)
             {
@@ -721,6 +789,8 @@ public class TpTask
                 //回到主界面，重置状态
                 await new ReturnMainUiTask().Start(ct);
                 await Delay(1000, ct);
+                // 联机锄地：传送失败重试视为"仍在合法传送中"，刷新抑制计时窗口（同上）。
+                PathExecutor.CurrentWorldStateMonitor?.RefreshTeleportSuppression();
             }
         }
 
@@ -740,9 +810,10 @@ public class TpTask
     public async Task MoveMapTo(double x, double y, string mapName, double finalZoomLevel = 2, string? country = null, int retryTimes = 0)
     {
         // 参数初始化
+        using var ra1 = CaptureToRectArea();
         double minZoomLevel = Math.Min(finalZoomLevel, _tpConfig.MinZoomLevel);
         double maxZoomLevel = _tpConfig.MaxZoomLevel;
-        double currentZoomLevel = GetBigMapZoomLevel(CaptureToRectArea());
+        double currentZoomLevel = GetBigMapZoomLevel(ra1);
         int exceptionTimes = 0;
         var falseCount = 0;
         Point2f mapCenterPoint;
@@ -812,14 +883,16 @@ public class TpTask
         double totalMoveMouseY = _tpConfig.MapScaleFactor * Math.Abs(yOffset) / currentZoomLevel;
         double mouseDistance = Math.Sqrt(totalMoveMouseX * totalMoveMouseX + totalMoveMouseY * totalMoveMouseY);
         // 缩小地图到恰当的缩放
-        if (_tpConfig.MapZoomEnabled || _tpConfig.MapMoveStepDivisor)
+        if ((_tpConfig.MapZoomEnabled || _tpConfig.MapMoveStepDivisor))
         {
             if (mouseDistance > _tpConfig.MapZoomOutDistance)
             {
+                using var ra = CaptureToRectArea();
                 double targetZoomLevel = currentZoomLevel * mouseDistance / _tpConfig.MapZoomOutDistance;
                 targetZoomLevel = Math.Min(targetZoomLevel, maxZoomLevel);
                 await AdjustMapZoomLevel(currentZoomLevel, targetZoomLevel);
-                double nextZoomLevel = GetBigMapZoomLevel(CaptureToRectArea());
+                using var ra2 = CaptureToRectArea();
+                double nextZoomLevel = GetBigMapZoomLevel(ra2);
                 totalMoveMouseX *= currentZoomLevel / nextZoomLevel;
                 totalMoveMouseY *= currentZoomLevel / nextZoomLevel;
                 mouseDistance *= currentZoomLevel / nextZoomLevel;
@@ -839,7 +912,8 @@ public class TpTask
                     if (currentZoomLevel > minZoomLevel + _tpConfig.PrecisionThreshold)
                     {
                         await AdjustMapZoomLevel(currentZoomLevel, targetZoomLevel);
-                        double nextZoomLevel = GetBigMapZoomLevel(CaptureToRectArea());
+                        using var ra4 = CaptureToRectArea();
+                        double nextZoomLevel = GetBigMapZoomLevel(ra4);
                         totalMoveMouseX *= currentZoomLevel / nextZoomLevel;
                         totalMoveMouseY *= currentZoomLevel / nextZoomLevel;
                         mouseDistance *= currentZoomLevel / nextZoomLevel;
@@ -1036,7 +1110,7 @@ public class TpTask
         // Logger.LogInformation("调整地图缩放等级：{zoomLevel:0.000} -> {targetZoomLevel:0.000}", zoomLevel, targetZoomLevel);
         int initialY = (int)(_tpConfig.ZoomStartY + (_tpConfig.ZoomEndY - _tpConfig.ZoomStartY) * (zoomLevel - 1) / 5d);
         int targetY = (int)(_tpConfig.ZoomStartY + (_tpConfig.ZoomEndY - _tpConfig.ZoomStartY) * (targetZoomLevel - 1) / 5d);
-        await MouseClickAndMove(_tpConfig.ZoomButtonX, initialY, _tpConfig.ZoomButtonX, targetY);
+        await MouseClickAndMove(_tpConfig.ZoomButtonX+10, initialY, _tpConfig.ZoomButtonX+10, targetY);
         if (_tpConfig.MapMoveStepDivisor)
         {
             await Delay(50, ct);
@@ -1141,7 +1215,7 @@ public class TpTask
     /// <param name="timeoutMs">兜底超时（与原固定 Delay 等值），超时即返回</param>
     /// <param name="pollMs">每次轮询间隔，默认 30ms（约一帧）</param>
     /// <param name="stableHits">连续多少次采样像素一致视为稳定，默认 2</param>
-    private async Task WaitMapStableOrTimeoutAsync(int timeoutMs, int pollMs = 30, int stableHits = 2)
+    private async Task WaitMapStableOrTimeoutAsync(int timeoutMs, int pollMs = 30, int stableHits = 3)
     {
         long deadline = Environment.TickCount + timeoutMs;
         Vec3b? prev1 = null, prev2 = null;
@@ -1152,12 +1226,19 @@ public class TpTask
             try
             {
                 using var ra = CaptureToRectArea();
-                var p1 = ra.SrcMat.At<Vec3b>(500, 500);
-                var p2 = ra.SrcMat.At<Vec3b>(600, 500);
+                var p1 = ra.SrcMat.At<Vec3b>(960, 540);
+                var p2 = ra.SrcMat.At<Vec3b>(860, 540);
                 if (prev1.HasValue && p1 == prev1.Value && p2 == prev2!.Value)
                 {
                     if (++hits >= stableHits)
                     {
+                        // await Delay(50, ct);
+                        // using var ra2 = CaptureToRectArea();
+                        // if (Bv.BigMapIsUnderground(ra2))
+                        // {
+                        //     using var ra3 = CaptureToRectArea();
+                        //     var aa =ra3.Find(_assets.MapUndergroundToGroundButtonRo, rg => rg.Click());
+                        // }
                         return;
                     }
                 }
@@ -1439,13 +1520,25 @@ public class TpTask
         using var ra2 = CaptureToRectArea();
         if (Bv.BigMapIsUnderground(ra2))
         {
-            ra2.Find(_assets.MapUndergroundToGroundButtonRo).Click();
+            using var ra3 = CaptureToRectArea();
+            ra3.Find(_assets.MapUndergroundToGroundButtonRo, rg => rg.Click());
             await Delay(200, ct);
         }
 
         // 识别当前位置
+        // 第一次识别可能因地图刚打开特征点未渲染而失败 → 短轮询补救（最多 ~450ms）。
+        // fast-drag-recognition-acceleration spec / SwitchRecentlyCountryMap regression safety net：
+        // 防止"识别失败 → minDistance 保持 MaxValue → 误走 SwitchArea 弯路（即使传送点就在旁边）"
         var minDistance = double.MaxValue;
-        var bigMapCenterPointNullable = GetPositionFromBigMapNullable(MapTypes.Teyvat.ToString());
+        Point2f? bigMapCenterPointNullable = GetPositionFromBigMapNullable(MapTypes.Teyvat.ToString());
+        if (bigMapCenterPointNullable == null)
+        {
+            for (int i = 0; i < 3 && bigMapCenterPointNullable == null; i++)
+            {
+                await Delay(150, ct);
+                bigMapCenterPointNullable = GetPositionFromBigMapNullable(MapTypes.Teyvat.ToString());
+            }
+        }
 
         if (bigMapCenterPointNullable != null)
         {
@@ -1495,8 +1588,25 @@ public class TpTask
 
     internal async Task SwitchArea(string areaName)
     {
+        if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
+        {
+            await WaitMapStableOrTimeoutAsync(timeoutMs: 500);
+        }
+        
         GameCaptureRegion.GameRegionClick((rect, scale) => (rect.Width - 160 * scale, rect.Height - 60 * scale));
-        await Delay(300, ct);
+        
+        // 加速识别模式：等地区菜单弹出（白色 X 关闭按钮出现），兜底 300ms 与旧 Delay 等值。
+        // MapCloseButtonWhiteRo = 弹出层（含地区菜单）的白色 X 关闭按钮。
+        // fast-drag-recognition-acceleration spec / SwitchArea menu popup optimization
+        if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
+        {
+            await WaitForElementOrTimeoutAsync(QuickTeleportAssets.Instance.MapCloseButtonWhiteRo, timeoutMs:1000);
+        }
+        else
+        {
+            await Delay(300, ct);
+        }
+
         using var ra = CaptureToRectArea();
         var list = ra.FindMulti(new RecognitionObject
         {
@@ -1636,7 +1746,7 @@ public class TpTask
                 TaskControl.Logger.LogInformation("传送：点击 {Option}", textRegion.Text.Replace(">", ""));
                 var time = TaskContext.Instance().Config.QuickTeleportConfig.TeleportListClickDelay;
                 time = time < 500 ? 500 : time;
-                Thread.Sleep(time);
+                Thread.Sleep(_tpConfig.MapMoveStepDivisor?100:time);
                 ra.Click();
                 hasMapChooseIcon = true;
                 break;
@@ -1663,6 +1773,31 @@ public class TpTask
         var s = Bv.GetBigMapScale(region);
         // 1~6 的缩放等级
         return (-5 * s) + 6;
+    }
+
+    /// <summary>
+    /// 计算第 attempt 次尝试点击传送点时应使用的"可点击缩放"目标级别。
+    /// 缩放语义：值越小越放大（图标越大越易点出传送按键）。在 [minZoom, displayZoom] 区间内
+    /// 随尝试序号收敛——attempt 0 用 displayZoom(4.4)，后续逐步朝 minZoom 放大，
+    /// 使每次重试都换一个不同的、未被证明失败的缩放档位。
+    /// 详见 .kiro/specs/teleport-wrong-zoom-no-teleport-button-fix/design.md §2.1。
+    /// 纯函数：无 UI / Mat / logger 依赖，便于 PBT 撒输入。
+    /// </summary>
+    /// <param name="attempt">尝试序号（0 起，对应 Tp 的 retryTimes/i）</param>
+    /// <param name="displayZoom">传送点显示缩放（DisplayTpPointZoomLevel=4.4）</param>
+    /// <param name="minZoom">最放大可点击下限（TpConfig.MinZoomLevel，默认 2.0）</param>
+    /// <returns>夹在 [minZoom, displayZoom] 的目标缩放</returns>
+    public static double ComputeClickZoomCandidate(int attempt, double displayZoom, double minZoom)
+    {
+        // 防御：保证 lo <= hi（displayZoom/minZoom 顺序异常时不抛）
+        double hi = Math.Max(displayZoom, minZoom);
+        double lo = Math.Min(displayZoom, minZoom);
+        if (attempt <= 0) return hi;            // 第 0 次：传送点显示缩放
+        // 总尝试数固定 3（Tp 的 for i<3）→ 候选点 hi, 中点, lo
+        const int totalAttempts = 3;
+        int clamped = Math.Min(attempt, totalAttempts - 1);
+        double t = (double)clamped / (totalAttempts - 1); // attempt1→0.5, attempt2→1.0
+        return hi - (hi - lo) * t;              // 朝 lo（更放大）线性收敛
     }
 }
 

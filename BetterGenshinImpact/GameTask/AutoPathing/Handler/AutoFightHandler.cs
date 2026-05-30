@@ -92,9 +92,15 @@ internal class AutoFightHandler : IActionHandler
             var originalStrategyName =
                 (config as PathingPartyConfig)?.AutoFightConfig?.StrategyName
                 ?? TaskContext.Instance().Config.AutoFightConfig.StrategyName;
+            // multiplayer-hoeing-selectable-fight-strategy §C4: 按本机开关决定是否覆盖。
+            // 开关关闭 → ShouldApplyFixedStrategy 返回 false → 决策函数等价"不覆盖"（返回 originalResolvedPath）。
+            // 开关读自纯本地静态信号 MultiplayerUseFixedFightStrategyOverride（镜像超时覆盖，AutoHoeingTask 设置/清空）。
+            var applyFixedStrategy = MultiplayerFightStrategyDecisions.ShouldApplyFixedStrategy(
+                isMultiplayerHoeing: true,
+                useFixedFightStrategy: PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride);
             var (resolvedPath, shouldLogOverride) =
                 MultiplayerFightStrategyDecisions.ResolveCombatStrategyPath(
-                    isMultiplayer: true,
+                    isMultiplayer: applyFixedStrategy,
                     fixedFilePath: fixedFightStrategyPath,
                     originalResolvedPath: taskParams.CombatStrategyPath,
                     originalStrategyName: originalStrategyName,
@@ -121,7 +127,7 @@ internal class AutoFightHandler : IActionHandler
                 // multiplayer-kazuha-fixed-fight-overrides §2: 联机万叶玩家专属 10 项战斗参数覆盖
                 // 7 项固定值（旋转寻敌=true, RotaryFactor=1, Q前检测=false, 尝试面敌=false,
                 //          GoDistance=0, 不等待旋转结束=true, 快速连续检查=true, 派蒙模式=true）
-                // 2 项下限钳制（FightWaitNotEndTime ≥ 1000ms, FastCheckDelay ≥ 0.8s）
+                // 2 项钳制（FightWaitNotEndTime ≥ 1000ms, FastCheckDelay ∈ [0.08s, 0.4s]）
                 var kazuhaOverride = MultiplayerKazuhaFightOverrides.Apply(taskParams);
                 _logger.LogInformation(
                     "[联机][万叶] 已应用万叶战斗参数覆盖: " +

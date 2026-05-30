@@ -351,62 +351,19 @@ public class PathExecutor
 
         // 联机模式：预计算所有战斗点的集合点映射
         // key = listIdx * 10000 + syncPointIdx（集合点索引），value = syncPointId
+        // route-variant-sync-by-logical-id spec / R2：自动 vs 手动模式分流。
+        // 整条路线执行期间不切换模式（R2.4）。
         if (MultiplayerCoordinator != null)
         {
             _syncPointMap = new Dictionary<int, string?>();
-            var resolver = new SyncPointResolver();
-            var minDist = TaskContext.Instance().Config.AutoHoeingConfig.SyncPointMinDistance;
-            int totalFightPoints = 0;
-            int mappedSyncPoints = 0;
-            for (int listIdx = 0; listIdx < waypointsList.Count; listIdx++)
+            if (PathingTaskHelper.IsManualMode(task))
             {
-                var syncResult = resolver.ResolveWithIndex(waypointsList[listIdx], minDist);
-                foreach (var (fightIdx, syncPointIdx, syncPoint) in syncResult)
-                {
-                    totalFightPoints++;
-                    if (syncPoint != null && syncPointIdx >= 0)
-                    {
-                        var key = listIdx * 10000 + syncPointIdx;
-                        var syncId = $"{task.FileName}_{listIdx}_{fightIdx}";
-                        _syncPointMap[key] = syncId;
-                        mappedSyncPoints++;
-                        var isImmediate = syncPointIdx == fightIdx;
-                        Logger.LogDebug("[联机] 路线段{ListIdx} 战斗点{FightIdx} → 集合点索引{SyncIdx}{Immediate}: {SyncId}",
-                            listIdx, fightIdx, syncPointIdx,
-                            isImmediate ? "（传送后立即等待）" : "",
-                            syncId);
-                    }
-                    else
-                    {
-                        Logger.LogDebug("[联机] 路线段{ListIdx} 战斗点{FightIdx} → 无集合点（跳过同步）", listIdx, fightIdx);
-                    }
-                }
+                BuildSyncPointMapManual(task, waypointsList);   // R3 新拼法
             }
-            Logger.LogInformation("[联机] 路线 {Name} 预计算完成：{Total} 个战斗点，{Mapped} 个有集合点",
-                task.FileName, totalFightPoints, mappedSyncPoints);
-
-            // 传送点必同步：为每个传送点生成额外的 syncPointId（需求 R1：传送必等待默认启用）
-            Logger.LogInformation("[联机] 传送必同步已启用（默认），为所有传送点生成同步点");
-            int teleportSyncCount = 0;
-            for (int listIdx = 0; listIdx < waypointsList.Count; listIdx++)
+            else
             {
-                for (int wpIdx = 0; wpIdx < waypointsList[listIdx].Count; wpIdx++)
-                {
-                    if (waypointsList[listIdx][wpIdx].Type == "teleport")
-                    {
-                        var key = listIdx * 10000 + wpIdx;
-                        if (!_syncPointMap.ContainsKey(key)) // 不覆盖已有的战斗同步点
-                        {
-                            var syncId = $"{task.FileName}_tp_{listIdx}_{wpIdx}";
-                            _syncPointMap[key] = syncId;
-                            teleportSyncCount++;
-                            Logger.LogDebug("[联机] 路线段{ListIdx} 传送点{WpIdx} → 传送同步点: {SyncId}",
-                                listIdx, wpIdx, syncId);
-                        }
-                    }
-                }
+                BuildSyncPointMapAuto(task, waypointsList);     // 现有 SyncPointResolver 逻辑（R4 零回归）
             }
-            Logger.LogInformation("[联机] 传送点必同步：新增 {Count} 个传送同步点", teleportSyncCount);
         }
 
         await Delay(100, ct);
@@ -578,20 +535,11 @@ public class PathExecutor
                         
                         TryCloseSkipOtherOperations();
 
-                        // 联机模式：到达集合点时等待所有玩家（跳过传送点，传送点在传送后单独处理）
-                        // 快速同步点抢报 watcher 已在 waypoint 循环开始时装配（fast-sync-point-claim-no-effect-fix spec §4.1.A）；
-                        // 此处仅做严格路径等待，watcher 在 waypoint 循环末尾的 finally 内 cancel。
-                        if (MultiplayerCoordinator != null && waypoint.Type != WaypointType.Teleport.Code)
-                        {
-                            // syncId 复用 §抢报反查已计算的 __fastSyncId 避免重复 TryGetValue
-                            if (__fastSyncId != null)
-                            {
-                                var progress = ComputeProgress(CurWaypoints.Item1, CurWaypoint.Item1);
-                                Logger.LogInformation("[联机] 到达集合点，等待所有玩家，syncId={SyncId}, 进度={Progress}", __fastSyncId, progress);
-                                await MultiplayerCoordinator.WaitForAllPlayers(__fastSyncId, ct, progress);
-                                Logger.LogInformation("[联机] 集合完成，继续前进，syncId={SyncId}", __fastSyncId);
-                            }
-                        }
+                        // fastsync-preclaim-fires-after-rendezvous-fix（OQ-1=方案甲）：
+                        // 形式集合等待块已从此处（迭代顶部、MoveTo 之前）挪到下方非传送分支的
+                        // MoveTo/MoveCloseTo 之后、Action 块之前。原因：对「集合点紧跟传送、无前置
+                        // 移动段」路线，顶部等待会先于任何对该 syncId 的抢报触发，导致抢报晚于集合完成。
+                        // 挪动后玩家先走向集合点（MoveTo 内对 fastSyncWaypoint 的抢报先行），到达后再等全员。
 
                         await RecoverWhenLowHp(waypoint,PartyConfig.RedBloodSwitchOnly); // 低血量恢复
 
@@ -621,8 +569,13 @@ public class PathExecutor
                             // 段级缓存中查命中的传送同步点 syncId（None 时为 null），
                             // 透传给 HandleTeleportWaypoint → TpTask.Tp，TpTask.IsLoadingScreen 命中时
                             // 内联抢报。单机 / 缓存 null 时整链路短路。
+                            // fastsync-claim-respect-enable-toggle 修复：仅当用户开启"快速同步点抢报"
+                            // 开关时才透传抢报 syncId；关闭时置 null → TpTask loading 命中也不 fire-and-forget。
+                            // 传送后的严格等待（line ~666 tpSyncId）走独立查询、不受此开关影响。
                             string? __tpFastSyncId = null;
-                            if (MultiplayerCoordinator != null && _wpIdxToSyncIdCache != null)
+                            if (MultiplayerCoordinator != null
+                                && _wpIdxToSyncIdCache != null
+                                && MultiplayerCoordinator.EffectiveConfig.FastSyncPointEnabled)
                             {
                                 _wpIdxToSyncIdCache.TryGetValue(CurWaypoint.Item1, out __tpFastSyncId);
                             }
@@ -776,6 +729,19 @@ public class PathExecutor
                             if (IsTargetPoint(waypoint))
                             {
                                 await MoveCloseTo(waypoint, fastSyncId: __nextPendingSyncId, fastSyncWaypoint: __nextPendingSyncWaypoint);
+                            }
+
+                            // === 形式集合等待块（fastsync-preclaim-fires-after-rendezvous-fix / OQ-1=方案甲）===
+                            // 挪动后位置：MoveTo/MoveCloseTo（走向集合点）之后、Action 块之前。
+                            // 守卫保持 waypoint.Type != Teleport（此分支本就是非传送），__fastSyncId 复用顶部反查。
+                            // 语义：玩家已走到集合点（途中 MoveTo 对 fastSyncWaypoint 的抢报先行）→ 在此等全员
+                            //       → 再执行本 waypoint 的 Action。形式等待原样保留（仍阻塞等全员，不删不改成非阻塞）。
+                            if (MultiplayerCoordinator != null && __fastSyncId != null)
+                            {
+                                var progress = ComputeProgress(CurWaypoints.Item1, CurWaypoint.Item1);
+                                Logger.LogInformation("[联机] 到达集合点，等待所有玩家，syncId={SyncId}, 进度={Progress}", __fastSyncId, progress);
+                                await MultiplayerCoordinator.WaitForAllPlayers(__fastSyncId, ct, progress);
+                                Logger.LogInformation("[联机] 集合完成，继续前进，syncId={SyncId}", __fastSyncId);
                             }
 
                             //skipOtherOperations如果重试，则跳过相关操作，
@@ -1618,8 +1584,120 @@ public class PathExecutor
     }
 
     /// <summary>
-    /// 尝试队伍回血，如果单人回血，由于记录检查时是哪位残血，则当作行走位处理。
+    /// 自动同步模式（route-variant-sync-by-logical-id spec / R4）：现有 SyncPointResolver + Old_Sync_Id_Format。
+    /// 行为与改动前完全一致。
     /// </summary>
+    private void BuildSyncPointMapAuto(PathingTask task, List<List<WaypointForTrack>> waypointsList)
+    {
+        var resolver = new SyncPointResolver();
+        var minDist = TaskContext.Instance().Config.AutoHoeingConfig.SyncPointMinDistance;
+        int totalFightPoints = 0;
+        int mappedSyncPoints = 0;
+        for (int listIdx = 0; listIdx < waypointsList.Count; listIdx++)
+        {
+            var syncResult = resolver.ResolveWithIndex(waypointsList[listIdx], minDist);
+            foreach (var (fightIdx, syncPointIdx, syncPoint) in syncResult)
+            {
+                totalFightPoints++;
+                if (syncPoint != null && syncPointIdx >= 0)
+                {
+                    var key = listIdx * 10000 + syncPointIdx;
+                    var syncId = $"{task.FileName}_{listIdx}_{fightIdx}";
+                    _syncPointMap[key] = syncId;
+                    mappedSyncPoints++;
+                    var isImmediate = syncPointIdx == fightIdx;
+                    Logger.LogDebug("[联机] 路线段{ListIdx} 战斗点{FightIdx} → 集合点索引{SyncIdx}{Immediate}: {SyncId}",
+                        listIdx, fightIdx, syncPointIdx,
+                        isImmediate ? "（传送后立即等待）" : "",
+                        syncId);
+                }
+                else
+                {
+                    Logger.LogDebug("[联机] 路线段{ListIdx} 战斗点{FightIdx} → 无集合点（跳过同步）", listIdx, fightIdx);
+                }
+            }
+        }
+        Logger.LogInformation("[联机] 路线 {Name} 预计算完成（自动模式）：{Total} 个战斗点，{Mapped} 个有集合点",
+            task.FileName, totalFightPoints, mappedSyncPoints);
+
+        Logger.LogInformation("[联机] 传送必同步已启用（默认），为所有传送点生成同步点");
+        int teleportSyncCount = 0;
+        for (int listIdx = 0; listIdx < waypointsList.Count; listIdx++)
+        {
+            for (int wpIdx = 0; wpIdx < waypointsList[listIdx].Count; wpIdx++)
+            {
+                if (waypointsList[listIdx][wpIdx].Type == "teleport")
+                {
+                    var key = listIdx * 10000 + wpIdx;
+                    if (!_syncPointMap.ContainsKey(key))
+                    {
+                        var syncId = $"{task.FileName}_tp_{listIdx}_{wpIdx}";
+                        _syncPointMap[key] = syncId;
+                        teleportSyncCount++;
+                        Logger.LogDebug("[联机] 路线段{ListIdx} 传送点{WpIdx} → 传送同步点: {SyncId}",
+                            listIdx, wpIdx, syncId);
+                    }
+                }
+            }
+        }
+        Logger.LogInformation("[联机] 传送点必同步：新增 {Count} 个传送同步点", teleportSyncCount);
+    }
+
+    /// <summary>
+    /// 手动同步模式（route-variant-sync-by-logical-id spec / R3）：按显式 SyncPointId 标记 + LogicalRouteId 拼 syncId。
+    /// 战斗 syncId 不含任何 fightIdx / wpIdx 索引，A、B 变体可任意调整 waypoint 数量与走法。
+    /// 传送 syncId 仍按 (listIdx, wpIdx) 顺序自动编号，作者负责 A/B 变体传送序列一致。
+    /// </summary>
+    private void BuildSyncPointMapManual(PathingTask task, List<List<WaypointForTrack>> waypointsList)
+    {
+        // R3.6 + hoeing-variant-route 死等修复：LogicalRouteId 为空时的 fallback 命名空间。
+        // 旧实现直接用 task.FileName（带 _a/_b 后缀和 .json），导致同一逻辑路线的不同变体
+        // 或不同目录布局（变体子文件夹 vs 扁平 pathing 目录）下命名空间不一致 → syncId 永不相等 → 死等。
+        // 改用 StripBaseNameAnyVariant 归一化到统一基名，使 fallback 命名空间与
+        // BuildFromFilePath 派生的 LogicalRouteId（基名）一致，保证跨玩家/跨变体 syncId 对齐。
+        string idNamespace = string.IsNullOrEmpty(task.LogicalRouteId)
+            ? BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.RouteVariantNaming.StripBaseNameAnyVariant(task.FileName)
+            : task.LogicalRouteId;
+        bool isFallback = string.IsNullOrEmpty(task.LogicalRouteId);
+
+        int markedSyncPoints = 0;
+        int teleportSyncCount = 0;
+
+        for (int listIdx = 0; listIdx < waypointsList.Count; listIdx++)
+        {
+            var waypoints = waypointsList[listIdx];
+            for (int wpIdx = 0; wpIdx < waypoints.Count; wpIdx++)
+            {
+                var wp = waypoints[wpIdx];
+                var key = listIdx * 10000 + wpIdx;
+
+                if (!string.IsNullOrEmpty(wp.SyncPointId))
+                {
+                    var syncId = $"{idNamespace}_{wp.SyncPointId}";    // R3.1 / R3.2
+                    _syncPointMap[key] = syncId;
+                    markedSyncPoints++;
+                    Logger.LogDebug("[联机] 路线段{ListIdx} waypoint{WpIdx} 显式同步点: {SyncId}{Fb}",
+                        listIdx, wpIdx, syncId, isFallback ? "（fallback FileName 命名）" : "");
+                }
+                else if (wp.Type == "teleport")
+                {
+                    if (!_syncPointMap.ContainsKey(key))
+                    {
+                        var syncId = $"{idNamespace}_tp_{listIdx}_{wpIdx}";   // R3.4
+                        _syncPointMap[key] = syncId;
+                        teleportSyncCount++;
+                        Logger.LogDebug("[联机] 路线段{ListIdx} 传送点{WpIdx} → 传送同步点: {SyncId}{Fb}",
+                            listIdx, wpIdx, syncId, isFallback ? "（fallback FileName 命名）" : "");
+                    }
+                }
+            }
+        }
+
+        Logger.LogInformation("[联机] 路线 {Name} 预计算完成（手动模式{Mode}）：{Marked} 个显式同步点，{Tp} 个传送同步点",
+            task.FileName,
+            isFallback ? "/Fallback" : "",
+            markedSyncPoints, teleportSyncCount);
+    }
     public async Task<bool> TryPartyHealing(CombatScenes? combatScenes = null,PathingPartyConfig? partyConfig = null)
     {
         if (_combatScenes is null)
@@ -1871,6 +1949,25 @@ public class PathExecutor
     }
     
     private async Task TpStatueOfTheSeven(bool switchOnly = false, bool requireLoadingScreen = false)
+    {
+        // return-to-point-suspend-during-revival-teleport spec：
+        // 进入神像传送即置位标志，使两条"战斗中回点"后台循环 return 终止本场回点循环，
+        // 避免把刚传送到神像的角色又拉回战斗点。传送后角色必定不回战斗点，本循环已无意义，
+        // 故直接终止；回点能力由下一场战斗重新启动的新循环恢复。finally 复位保证任何退出路径
+        //（正常 / RetryException / 取消）都不会让标志永久悬挂。该方法是所有"去七天神像"的唯一
+        // 收口点（单机 + 联机共用），故在此置位天然覆盖两种模式。详见 design.md 改动 5 / Property 4。
+        AutoFightTask.IsTeleportingToStatue = true;
+        try
+        {
+            await TpStatueOfTheSevenCore(switchOnly, requireLoadingScreen);
+        }
+        finally
+        {
+            AutoFightTask.IsTeleportingToStatue = false;
+        }
+    }
+
+    private async Task TpStatueOfTheSevenCore(bool switchOnly = false, bool requireLoadingScreen = false)
     {
         // Logger.LogInformation("AutoEatCount111 {text}",PathingConditionConfig.AutoEatCount);
         if (PartyConfig.AutoEatEnabled && PathingConditionConfig.AutoEatCount < 2)
@@ -2238,7 +2335,8 @@ public class PathExecutor
                     fastSyncId,
                     isMultiplayer: MultiplayerCoordinator != null,
                     isConnected: MultiplayerCoordinator?.IsConnected ?? false,
-                    alreadyReported: fastReported))
+                    alreadyReported: fastReported,
+                    fastSyncEnabled: MultiplayerCoordinator?.EffectiveConfig.FastSyncPointEnabled ?? false))
             {
                 fastReported = true;
                 var __progress = ComputeProgress(CurWaypoints.Item1, CurWaypoint.Item1);
@@ -2944,7 +3042,7 @@ public class PathExecutor
 
             if (distance > 500)
             {
-                if (pathExecutorSuspend.CheckAndResetSuspendPoint())
+                if (pathExecutorSuspend.CheckAndResetSuspendPoint() && !TryConsumeRevivalSignal())
                 {
                     throw new RetryNoCountException("可能暂停导致路径过远，重试一次此路线！");
                 }
@@ -3390,7 +3488,8 @@ public class PathExecutor
                     fastSyncId,
                     isMultiplayer: MultiplayerCoordinator != null,
                     isConnected: MultiplayerCoordinator?.IsConnected ?? false,
-                    alreadyReported: fastReported))
+                    alreadyReported: fastReported,
+                    fastSyncEnabled: MultiplayerCoordinator?.EffectiveConfig.FastSyncPointEnabled ?? false))
             {
                 fastReported = true;
                 var __progress = ComputeProgress(CurWaypoints.Item1, CurWaypoint.Item1);
@@ -3715,7 +3814,7 @@ public class PathExecutor
 
         var distance = Navigation.GetDistance(waypoint, position);
         //中途暂停过，地图未识别到
-        if (position is {X:0,Y:0} && GetPositionAndTimeSuspendFlag)
+        if (position is {X:0,Y:0} && GetPositionAndTimeSuspendFlag && !TryConsumeRevivalSignal())
         {
             GetPositionAndTimeSuspendFlag = false;
             throw new RetryNoCountException("可能暂停导致路径过远，重试一次此路线！");

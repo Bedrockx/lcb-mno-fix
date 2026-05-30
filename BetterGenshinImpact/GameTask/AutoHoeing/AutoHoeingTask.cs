@@ -8,6 +8,7 @@ using BetterGenshinImpact.GameTask.AutoPathing;
 using BetterGenshinImpact.GameTask.AutoPathing.Model;
 using BetterGenshinImpact.GameTask.AutoTrackPath;
 using BetterGenshinImpact.GameTask.Common;
+using BetterGenshinImpact.GameTask.Common.Exceptions;
 using BetterGenshinImpact.GameTask.Common.Job;
 using BetterGenshinImpact.GameTask.Model.Area;
 using Microsoft.Extensions.Logging;
@@ -102,6 +103,162 @@ public class AutoHoeingTask : ISoloTask
     }
 
     /// <summary>
+    /// route-variant-sync-by-logical-id spec / R14：对单条计划路线执行
+    /// LogicalRouteId 加载 + 变体偏好查询 + 必要时切换文件 + fallback 处理。
+    /// 返回 (实际加载的 PathingTask, schemaItem)。
+    /// schemaItem.LogicalRouteId 为空字符串时表示老路径，调用方不应纳入 R6 上报比较。
+    /// </summary>
+    private (PathingTask? actualTask, RouteVariantSchemaItem schemaItem) ResolveAndLoadActualVariant(
+        string hostFileName, string hostFullPath, string pathingDir)
+    {
+        PathingTask? loaded;
+        try
+        {
+            loaded = PathingTask.BuildFromFilePath(hostFullPath);
+        }
+        catch (InvalidRouteException ex)
+        {
+            // 代表文件本身就坏（重复 SyncPointId）→ 让调用方拿到 null 后跳过/报错
+            _logger.LogError(ex, "[变体] 代表路线 {Host} 加载失败（InvalidRouteException）", hostFileName);
+            return (null, new RouteVariantSchemaItem { ActualVariantFileName = hostFileName });
+        }
+        catch (Exception ex)
+        {
+            // hoeing-variant-route-empty-json-crash-and-discovery-fix / EB-A：
+            // 空文件 / 不含合法 JSON token / 反序列化失败（如历史遗留的占位 JSON）
+            // 会让 STJ 抛 JsonException。此处兜底跳过该路线（返回 null）、
+            // 由调用方剔除出执行/上报列表并继续其余路线，不终止整个一条龙任务。
+            _logger.LogWarning(ex, "[变体] 代表路线 {Host} 加载失败（空/损坏 JSON），跳过该路线", hostFileName);
+            return (null, new RouteVariantSchemaItem { ActualVariantFileName = hostFileName });
+        }
+        if (loaded == null)
+        {
+            return (null, new RouteVariantSchemaItem { ActualVariantFileName = hostFileName });
+        }
+
+        // route-variant-sync-by-logical-id spec / §15.5：文件夹式变体派生身份。
+        // 代表文件所在变体文件夹 → 基名（= 配对键 = syncId 命名空间）；其总文件夹名 → 偏好 key。
+        var repFolder = RouteVariantNaming.TryGetVariantFolder(hostFullPath);
+        var baseName = repFolder == null ? null : RouteVariantNaming.StripBaseName(hostFileName, repFolder);
+        var topFolderName = RouteVariantNaming.TryGetTopFolderName(hostFullPath);
+
+        // 老路径（非变体布局）OR 单机模式 → 直接返回，不进入替换分支（R15.4）
+        if (string.IsNullOrEmpty(baseName) || _multiplayerCoordinator == null)
+        {
+            return (loaded, BuildSchemaItem(loaded, loaded.FileName));
+        }
+
+        // 加载后强制进手动同步模式：syncId 命名空间 = 基名（即使没替换，代表也得进手动模式才能跨变体对齐）
+        loaded.LogicalRouteId = baseName;
+
+        // topDir = 变体子文件夹的父目录（总线路文件夹，如 传奇）
+        var topDir = Path.GetDirectoryName(Path.GetDirectoryName(hostFullPath)) ?? pathingDir;
+        var scan = RouteVariantScanner.ScanVariants(topDir, forceRefresh: false);
+        var prefs = _config.VariantPreferences ?? new Dictionary<string, string>();
+
+        var result = RouteVariantResolver.Resolve(
+            representativeFileName: hostFileName,
+            representativeAbsolutePath: hostFullPath,
+            baseName: baseName,
+            topFolderName: topFolderName,
+            variantPreferences: prefs,
+            scanByBaseName: scan);
+
+        if (result.Reason != RouteVariantResolver.FallbackReason.None)
+        {
+            _logger.LogWarning("[变体] 偏好不可用，回退到代表 {Host}（原因: {Reason}, 总文件夹={Top}, 基名={Base}）",
+                hostFileName, result.Reason, topFolderName, baseName);
+        }
+
+        PathingTask actualTask = loaded;
+        if (!string.Equals(result.ActualAbsolutePath, hostFullPath, StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var reloaded = PathingTask.BuildFromFilePath(result.ActualAbsolutePath);
+                if (reloaded == null)
+                {
+                    _logger.LogWarning("[变体] 偏好文件 {Pref} 加载返回 null，回退到代表 {Host}",
+                        result.ActualFileName, hostFileName);
+                    actualTask = loaded;
+                }
+                else
+                {
+                    // 偏好变体同样强制进手动模式，命名空间 = 同一基名（保证与代表/其他变体对齐）
+                    reloaded.LogicalRouteId = baseName;
+                    actualTask = reloaded;
+                }
+            }
+            catch (InvalidRouteException ex)
+            {
+                _logger.LogWarning(ex, "[变体] 偏好文件 {Pref} 加载抛 InvalidRouteException，回退到代表 {Host}",
+                    result.ActualFileName, hostFileName);
+                actualTask = loaded;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[变体] 偏好文件 {Pref} 加载失败（FilePreferenceUnreadable），回退到代表 {Host}",
+                    result.ActualFileName, hostFileName);
+                actualTask = loaded;
+            }
+        }
+
+        _logger.LogInformation("[变体] 实际执行 {Actual}（代表={Host}, 基名={Base}）",
+            actualTask.FileName, hostFileName, baseName);
+
+        return (actualTask, BuildSchemaItem(actualTask, actualTask.FileName));
+    }
+
+    /// <summary>
+    /// 从加载完成的 PathingTask 提取 SyncPointList + TeleportSyncPointSequence 用于 R6 上报。
+    /// 段切分必须与 PathExecutor.ConvertWaypointsForTrack 完全一致
+    /// （teleport 遇到且当前段非空时起新段、第一个若是 teleport 则为段0 wpIdx0）。
+    /// </summary>
+    private static RouteVariantSchemaItem BuildSchemaItem(PathingTask task, string actualFileName)
+    {
+        var item = new RouteVariantSchemaItem
+        {
+            LogicalRouteId = task.LogicalRouteId ?? string.Empty,
+            ActualVariantFileName = actualFileName,
+            SyncPointList = new List<string>(),
+            TeleportSyncPointSequence = new List<int[]>()
+        };
+        if (string.IsNullOrEmpty(task.LogicalRouteId)) return item;
+
+        // 复刻 ConvertWaypointsForTrack 的段切分
+        var segments = new List<List<Waypoint>>();
+        var temp = new List<Waypoint>();
+        foreach (var wp in task.Positions)
+        {
+            if (wp.Type == "teleport" && temp.Count > 0)
+            {
+                segments.Add(temp);
+                temp = new List<Waypoint>();
+            }
+            temp.Add(wp);
+        }
+        segments.Add(temp);
+
+        for (int listIdx = 0; listIdx < segments.Count; listIdx++)
+        {
+            var seg = segments[listIdx];
+            for (int wpIdx = 0; wpIdx < seg.Count; wpIdx++)
+            {
+                var wp = seg[wpIdx];
+                if (!string.IsNullOrEmpty(wp.SyncPointId))
+                {
+                    item.SyncPointList.Add(wp.SyncPointId);
+                }
+                if (wp.Type == "teleport")
+                {
+                    item.TeleportSyncPointSequence.Add(new[] { listIdx, wpIdx });
+                }
+            }
+        }
+        return item;
+    }
+
+    /// <summary>
     /// 把 KazuhaSyncWaitSeconds 钳到合法范围 [0, 30]。纯函数，PBT 友好。
     /// </summary>
     private static int ClampSyncWait(int value) => Math.Clamp(value, 0, 30);
@@ -140,24 +297,51 @@ public class AutoHoeingTask : ISoloTask
         var client = _coordinatorClientRef;
         if (client == null || !client.IsConnected) return;  // SignalR 未就绪不声明
 
-        BetterGenshinImpact.GameTask.AutoFight.Model.CombatScenes? combatScenes = null;
-        try
+        // kazuha-declare-multi-recognition-vote:
+        // 把"信一次识别"升级为"3 次完整识别 + 严格多数表决"，拦截单次识别抖动导致的假阳性。
+        const int sampleCount = 3; // Sample_Count，硬编码 3（不做配置项）
+        var votes = new List<bool>(sampleCount);
+
+        for (var i = 0; i < sampleCount; i++)
         {
-            combatScenes = await RunnerContext.Instance.GetCombatScenes(ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[联机][聚物] 识别队伍场景失败，跳过万叶声明");
-            return;
+            BetterGenshinImpact.GameTask.AutoFight.Model.CombatScenes? combatScenes;
+            try
+            {
+                // 3 次均 forceRefresh: true（每次回主界面重新识别，最大化去抖）
+                combatScenes = await RunnerContext.Instance.GetCombatScenes(ct, forceRefresh: true);
+            }
+            catch (OperationCanceledException)
+            {
+                // Requirement 4：取消必须透传，绝不降级为 false 票、绝不声明
+                throw;
+            }
+            catch (Exception ex)
+            {
+                // 非取消异常：沿用现有"静默兜底"语义，但降级为该次记 false 票后继续，而非整体 return
+                _logger.LogWarning(ex, "[联机][聚物] 第 {Index}/{Total} 次识别队伍场景失败，记为不含万叶一票", i + 1, sampleCount);
+                votes.Add(false);
+                continue;
+            }
+
+            if (combatScenes == null)
+            {
+                // Requirement 1.3：识别返回 null 记 false 票（保守），保留原"CombatScenes 不可用"日志
+                _logger.LogInformation("[联机][聚物] 第 {Index}/{Total} 次 CombatScenes 不可用，记为不含万叶一票", i + 1, sampleCount);
+                votes.Add(false);
+                continue;
+            }
+
+            votes.Add(combatScenes.SelectAvatar("枫原万叶") != null);
         }
 
-        if (combatScenes == null)
-        {
-            _logger.LogInformation("[联机][聚物] CombatScenes 不可用，跳过万叶声明");
-            return;
-        }
+        var hasKazuha = KazuhaTeamDetectionDecisions.ShouldDeclareKazuha(votes);
 
-        var hasKazuha = combatScenes.SelectAvatar("枫原万叶") != null;
+        // 票型诊断日志（事后排查抖动用）
+        _logger.LogInformation(
+            "[联机][聚物] 万叶识别表决: 票型={Votes} 结论={Result}",
+            string.Join(",", votes.Select(v => v ? "T" : "F")),
+            hasKazuha ? "含" : "不含");
+
         if (hasKazuha)
         {
             await client.DeclareKazuhaCapabilityAsync();
@@ -217,6 +401,7 @@ public class AutoHoeingTask : ISoloTask
             _config.MinPlayersToSync = 0;
             _config.SyncPointMinDistance = 30.0;
             _config.EnableKazuhaSync = false;
+            _config.MultiplayerUseFixedFightStrategy = true;  // 默认 ON（保持现有固定策略行为）
             _config.KazuhaSyncWaitSeconds = 1;
             _config.KazuhaSyncTimeoutSeconds = 20;
             _config.KazuhaWaitSkillCdSeconds = 5;
@@ -289,6 +474,8 @@ public class AutoHoeingTask : ISoloTask
         {
             // 清除联机战斗超时覆盖值
             PathingConditionConfig.MultiplayerFightTimeoutOverride = null;
+            // multiplayer-hoeing-selectable-fight-strategy §C5: 复位战斗策略开关静态信号为默认 true（保持现有固定行为）
+            PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride = true;
             PathExecutor.CurrentWorldStateMonitor = null;
             PathExecutor.CurrentMultiplayerCoordinator = null;
 
@@ -620,6 +807,8 @@ public class AutoHoeingTask : ISoloTask
 
             // 联机模式：设置战斗超时覆盖值（不修改原始配置，通过 PathingConditionConfig 传递给 AutoFightHandler）
             PathingConditionConfig.MultiplayerFightTimeoutOverride = _config.FightTimeoutSeconds;
+            // multiplayer-hoeing-selectable-fight-strategy §C5: 纯本地开关，读本机 _config（非 hostConfig）
+            PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride = _config.MultiplayerUseFixedFightStrategy;
 
             // 打印所有房主同步的参数
             _logger.LogInformation("[联机] ===== 当前联机参数（房主同步）=====");
@@ -948,6 +1137,8 @@ public class AutoHoeingTask : ISoloTask
 
                         // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                         PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
+                        // multiplayer-hoeing-selectable-fight-strategy §C5: 战斗策略开关纯本地，读本机 _config（不读 hostConfig）
+                        PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride = _config.MultiplayerUseFixedFightStrategy;
 
                         // 多世界模式：保存第一任房主的配置
                         if (_config.MultiWorldEnabled)
@@ -1703,6 +1894,8 @@ public class AutoHoeingTask : ISoloTask
 
                     // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                     PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
+                    // multiplayer-hoeing-selectable-fight-strategy §C5: 战斗策略开关纯本地，读本机 _config（不读 hostConfig）
+                    PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride = _config.MultiplayerUseFixedFightStrategy;
 
                     _logger.LogInformation(
                         "[多世界] 第 {Round} 轮成员已同步房主配置：超时={Timeout}s，最低人数={Min}，最小距离={Dist}，快速同步点抢报启用={FastEn}，路径距离阈值={FastDist:F1}米，传送延迟={FastDelay}ms",
@@ -1832,8 +2025,33 @@ public class AutoHoeingTask : ISoloTask
             // 然后关闭房间，被动踢出还未离开的成员
             // 等待时间 = min(PartyTimeoutSeconds/10, 15) 秒，默认 15 秒
             var waitMs = Math.Min(_config.PartyTimeoutSeconds / 10 * 1000, 15000);
-            _logger.LogInformation("[多世界] 房主等待成员离开（{T}s）后关闭房间", waitMs / 1000);
-            await Task.Delay(waitMs, _ct);
+            _logger.LogInformation("[多世界] 房主等待成员离开（最多 {T}s，踢出按钮归零即提前退出）后关闭房间", waitMs / 1000);
+
+            // 轮询提前退出：每轮回主界面→开 F2→数踢出按钮，连续 5 次为 0 即确认无残留成员，提前继续。
+            // 真实墙钟累计（含检测耗时），到 waitMs 兜底强制继续。间隔固定 1000ms。
+            long fallbackMs = waitMs;
+            var swStart = Environment.TickCount;
+            int consecutiveZero = 0;
+            while (true)
+            {
+                _ct.ThrowIfCancellationRequested();
+                long elapsed = Environment.TickCount - swStart;
+                int kickCount = await autoParty.CountMembersRemainingInHostWorldAsync(_ct);
+                consecutiveZero = HostLeaveEarlyExitDecisions.NextConsecutiveZero(consecutiveZero, kickCount);
+                var leaveDecision = HostLeaveEarlyExitDecisions.Decide(kickCount, consecutiveZero, elapsed, fallbackMs, 5);
+                if (leaveDecision == HostLeaveWaitDecision.EarlyExit)
+                {
+                    _logger.LogInformation("[多世界] 房主检测到成员已全部离开（连续 {N} 次 0 踢出按钮），提前退出等待", consecutiveZero);
+                    break;
+                }
+                if (leaveDecision == HostLeaveWaitDecision.FallbackForceExit)
+                {
+                    _logger.LogInformation("[多世界] 房主等待达兜底上限（{T}s），强制继续（残留踢出按钮={Kick}）", fallbackMs / 1000, kickCount);
+                    break;
+                }
+                await Task.Delay(1000, _ct);
+            }
+
             await client.CloseRoomAsync();
             _logger.LogInformation("[多世界] 房主已关闭房间");
             await Task.Delay(2000, _ct);
@@ -2225,6 +2443,71 @@ public class AutoHoeingTask : ISoloTask
             // 验证已在步骤2完成（服务器收到所有玩家上报后才广播 RouteVerificationPassed）
             // 无需额外等待
             _logger.LogDebug("[联机] 路线验证已在步骤2完成，跳过额外同步等待");
+        }
+
+        // === route-variant-sync-by-logical-id spec / R6 + R14：变体解析 + 启动期 schema 校验 ===
+        // R6.9：仅启动期一次性触发，执行过程不再校验。
+        if (_multiplayerCoordinator != null && _config.MultiplayerEnabled)
+        {
+            var variantSchemaItems = new List<RouteVariantSchemaItem>();
+            var failedRoutes = new List<RouteInfo>();
+            foreach (var route in groupRoutes)
+            {
+                if (string.IsNullOrEmpty(route.FullPath)) continue;
+                var pathingDir = Path.GetDirectoryName(route.FullPath) ?? "";
+                var (actualTask, schemaItem) = ResolveAndLoadActualVariant(route.FileName, route.FullPath, pathingDir);
+
+                // hoeing-variant-route-empty-json-crash-and-discovery-fix / EB-A 2.2：
+                // 加载失败（空/损坏 JSON）→ 该路线既不纳入执行列表也不上报 R6 校验，
+                // 跳过它继续其余路线，避免空占位 JSON 终止整任务。
+                if (actualTask == null)
+                {
+                    _logger.LogWarning("[变体] 路线 {File} 加载失败，已从本场执行列表剔除", route.FileName);
+                    failedRoutes.Add(route);
+                    continue;
+                }
+
+                // R14：若解析出的实际变体与 Host 默认不同，就地替换 route 指向变体文件，
+                // 使 ExecuteRoute 自然加载变体（actualTask 非空且 FullPath 改变时）。
+                if (!string.IsNullOrEmpty(actualTask.FullPath)
+                    && !string.Equals(actualTask.FullPath, route.FullPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    route.FullPath = actualTask.FullPath;
+                    route.FileName = actualTask.FileName;
+                }
+                variantSchemaItems.Add(schemaItem);
+            }
+
+            if (failedRoutes.Count > 0)
+            {
+                groupRoutes.RemoveAll(r => failedRoutes.Contains(r));
+            }
+
+            // 调试模式跳过网络校验（与 MD5 校验的 DebugMode 跳过一致），但变体替换已完成
+            if (_config.DebugMode)
+            {
+                _logger.LogInformation("[变体校验] 调试模式：跳过跨玩家 schema 网络校验（变体替换已完成）");
+            }
+            else
+            {
+                bool variantOk;
+                try
+                {
+                    variantOk = await _multiplayerCoordinator.VerifyRouteVariantSchemaAsync(variantSchemaItems, _ct);
+                }
+                catch (InvalidOperationException ex)   // R8.7：服务端不支持变体功能
+                {
+                    _logger.LogError(ex, "[变体校验] 服务端版本不支持变体功能，停止本场联机锄地");
+                    try { Wpf.Ui.Violeta.Controls.Toast.Warning("服务端版本不支持变体功能，请升级 BgiCoordinatorServer"); } catch { }
+                    return;
+                }
+                if (!variantOk)
+                {
+                    _logger.LogError("[变体校验] 跨玩家 schema 校验失败，停止本场联机锄地");
+                    return;
+                }
+                _logger.LogInformation("[变体校验] 跨玩家 schema 校验通过");
+            }
         }
 
         // 路线为0时直接返回，避免卡住
@@ -2648,6 +2931,49 @@ public class AutoHoeingTask : ISoloTask
     }
 
     /// <summary>
+    /// route-variant-sync-by-logical-id spec：解析锄地线路"所有可能的来源目录"。
+    /// 供 UI 变体偏好面板扫描用——用户可能用普通模式或固定调试线路模式，
+    /// 这里返回所有候选目录（存在的），UI 全部扫一遍合并，避免漏掉用户实际放变体的目录。
+    /// 与 LoadRoutesBasedOnConfig 的三级优先级目录保持一致。
+    /// </summary>
+    /// <summary>
+    /// route-variant-sync-by-logical-id spec：解析锄地线路"所有可能的来源目录"。
+    /// 供 UI 变体偏好面板扫描用——用户可能用普通模式或固定调试线路模式，
+    /// 这里返回所有候选目录（存在的），UI 全部扫一遍合并，避免漏掉用户实际放变体的目录。
+    /// 与 LoadRoutesBasedOnConfig 的三级优先级目录保持一致，并额外纳入整个 Assets 根目录
+    /// （递归扫描所有内置线路子目录，不依赖 SelectedBuiltinRoute 当前值）。
+    /// </summary>
+    public static List<string> ResolveAllHoeingRouteDirs(AutoHoeingConfig config)
+    {
+        var dirs = new List<string>();
+        var baseDir = AppContext.BaseDirectory;
+
+        // 1. 普通模式目录
+        var normalPathing = Path.Combine(baseDir, "User", "JsScript", "AutoHoeingOneDragon", "pathing");
+        if (Directory.Exists(normalPathing)) dirs.Add(normalPathing);
+
+        // 2. 整个 Assets 根目录：RouteVariantScanner.ScanVariants 递归扫子目录，
+        //    一次性覆盖「传奇 / +6 / -6(3人) / DebugRoutes / ...」等所有内置线路子目录，
+        //    不依赖 SelectedBuiltinRoute 当前选了哪个（否则用户没选某目录就扫不到其中的变体）。
+        var assetsRoot = Path.Combine(baseDir, "GameTask", "AutoHoeing", "Assets");
+        if (Directory.Exists(assetsRoot)) dirs.Add(assetsRoot);
+
+        // 3. 用户手填的自定义调试路径（可能在 Assets 之外）
+        if (config != null
+            && !string.IsNullOrWhiteSpace(config.FixedDebugRoutePath)
+            && Directory.Exists(config.FixedDebugRoutePath))
+        {
+            dirs.Add(config.FixedDebugRoutePath);
+        }
+
+        // 去重（按绝对路径，忽略大小写）
+        return dirs
+            .Select(d => Path.GetFullPath(d))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
     /// 根据配置加载路线，实现三级优先级逻辑
     /// 优先级 1: 手动输入的 FixedDebugRoutePath
     /// 优先级 2: 选中的 SelectedBuiltinRoute
@@ -2697,9 +3023,25 @@ public class AutoHoeingTask : ISoloTask
             return routes;
         }
 
-        var files = Directory.GetFiles(dirPath, "*.json")
-            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        // route-variant-sync-by-logical-id spec / §15.4 / R15.3：
+        // 若目录下存在变体子文件夹（A变体/B变体/C变体/D变体），递归扫描并按基名去重，
+        // 每个基名只产出一个代表（A→B→C→D 第一个存在的变体），避免同一逻辑线路的
+        // 多个变体（_a/_b...）被全部跑一遍。非变体布局保持原"仅扫顶层 *.json"行为。
+        var allJson = Directory.GetFiles(dirPath, "*.json", SearchOption.AllDirectories);
+        var hasVariantLayout = allJson.Any(f => RouteVariantNaming.TryGetVariantFolder(f) != null);
+
+        string[] files;
+        if (!hasVariantLayout)
+        {
+            // 老布局：仅顶层 *.json，行为与改前完全一致
+            files = Directory.GetFiles(dirPath, "*.json")
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        else
+        {
+            files = SelectVariantRepresentatives(dirPath, allJson);
+        }
 
         for (int i = 0; i < files.Length; i++)
         {
@@ -2717,6 +3059,53 @@ public class AutoHoeingTask : ISoloTask
         }
 
         return routes;
+    }
+
+    /// <summary>
+    /// route-variant-sync-by-logical-id spec / §15.4：变体布局下选代表。
+    /// - 变体子文件夹（A变体..D变体）内的文件：按基名分组，每基名取 A→B→C→D 第一个存在的代表。
+    /// - 不在变体子文件夹里的普通文件：原样保留。
+    /// 返回排序后的代表绝对路径数组（确定性，跨玩家一致）。
+    /// </summary>
+    private static string[] SelectVariantRepresentatives(string dirPath, string[] allJson)
+    {
+        // 基名 → (变体文件夹 → 绝对路径)
+        var byBase = new Dictionary<string, Dictionary<string, string>>(StringComparer.Ordinal);
+        var nonVariant = new List<string>();
+
+        foreach (var path in allJson)
+        {
+            var folder = RouteVariantNaming.TryGetVariantFolder(path);
+            if (folder == null)
+            {
+                nonVariant.Add(path);
+                continue;
+            }
+            var baseName = RouteVariantNaming.StripBaseName(Path.GetFileName(path), folder);
+            if (string.IsNullOrEmpty(baseName)) { nonVariant.Add(path); continue; }
+
+            if (!byBase.TryGetValue(baseName, out var folderMap))
+            {
+                folderMap = new Dictionary<string, string>(StringComparer.Ordinal);
+                byBase[baseName] = folderMap;
+            }
+            // 同一基名同一变体文件夹理论上只有一个文件；若重复以先扫到的为准
+            if (!folderMap.ContainsKey(folder))
+                folderMap[folder] = path;
+        }
+
+        var representatives = new List<string>();
+        foreach (var (_, folderMap) in byBase)
+        {
+            var repFolder = RouteVariantNaming.PickRepresentativeFolder(folderMap.Keys);
+            if (repFolder != null && folderMap.TryGetValue(repFolder, out var repPath))
+                representatives.Add(repPath);
+        }
+        representatives.AddRange(nonVariant);
+
+        return representatives
+            .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     private void ValidateTeam()
@@ -2953,6 +3342,7 @@ public class AutoHoeingTask : ISoloTask
             _config.MinPlayersToSync = Get("minPlayersToSync", _config.MinPlayersToSync);
             _config.SyncPointMinDistance = Get("syncPointMinDistance", _config.SyncPointMinDistance);
             _config.EnableKazuhaSync = Get("enableKazuhaSync", _config.EnableKazuhaSync);
+            _config.MultiplayerUseFixedFightStrategy = Get("multiplayerUseFixedFightStrategy", _config.MultiplayerUseFixedFightStrategy);
             _config.KazuhaSyncWaitSeconds = ClampSyncWait(Get("kazuhaSyncWaitSeconds", _config.KazuhaSyncWaitSeconds));
             _config.KazuhaSyncTimeoutSeconds = ClampSyncTimeout(Get("kazuhaSyncTimeoutSeconds", _config.KazuhaSyncTimeoutSeconds));
             _config.KazuhaWaitSkillCdSeconds = ClampWaitCd(Get("kazuhaWaitSkillCdSeconds", _config.KazuhaWaitSkillCdSeconds));
@@ -2978,6 +3368,7 @@ public class AutoHoeingTask : ISoloTask
             _config.MinPlayersToSync = 0;
             _config.SyncPointMinDistance = 30.0;
             _config.EnableKazuhaSync = false;
+            _config.MultiplayerUseFixedFightStrategy = true;  // 单机模式重置为默认，避免全局残留影响
             _config.KazuhaSyncWaitSeconds = 1;
             _config.KazuhaSyncTimeoutSeconds = 20;
             _config.KazuhaWaitSkillCdSeconds = 5;
@@ -3015,6 +3406,64 @@ public class AutoHoeingTask : ISoloTask
 
         _config.MultiWorldEnabled = Get("multiWorldEnabled", _config.MultiWorldEnabled);
         _config.MultiWorldCount = Get("multiWorldCount", _config.MultiWorldCount);
+
+        // route-variant-sync-by-logical-id spec / §15.7 / R15.5：
+        // 配置组级变体偏好（key=线路基名, value=变体文件夹名）合并到 _config.VariantPreferences，
+        // 配置组键覆盖全局键。_config 已是全局深拷贝，可安全 mutate（不污染全局单例）。
+        ApplyVariantPreferencesOverride();
+    }
+
+    /// <summary>
+    /// 把配置组 settings["variantPreferences"]（STJ 反序列化为 JsonElement object）合并进
+    /// _config.VariantPreferences。配置组键覆盖全局键；缺失或解析失败则保持全局值（可恢复）。
+    /// </summary>
+    private void ApplyVariantPreferencesOverride()
+    {
+        if (_settingsOverride == null) return;
+        if (!_settingsOverride.TryGetValue("variantPreferences", out var raw) || raw == null) return;
+
+        var parsed = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            if (raw is JsonElement je && je.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in je.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String)
+                    {
+                        var v = prop.Value.GetString();
+                        if (!string.IsNullOrEmpty(prop.Name) && !string.IsNullOrEmpty(v))
+                            parsed[prop.Name] = v!;
+                    }
+                }
+            }
+            else if (raw is IDictionary<string, object?> dict)
+            {
+                foreach (var (k, v) in dict)
+                    if (!string.IsNullOrEmpty(k) && v is string s && !string.IsNullOrEmpty(s))
+                        parsed[k] = s;
+            }
+            else if (raw is Dictionary<string, string> sd)
+            {
+                foreach (var (k, v) in sd)
+                    if (!string.IsNullOrEmpty(k) && !string.IsNullOrEmpty(v))
+                        parsed[k] = v;
+            }
+        }
+        catch (Exception ex)
+        {
+            // 配置组变体偏好解析失败属可恢复异常：保持全局偏好不变，不阻塞任务启动。
+            _logger.LogWarning(ex, "[变体] 配置组变体偏好解析失败，沿用全局偏好");
+            return;
+        }
+
+        if (parsed.Count == 0) return;
+
+        // 在全局深拷贝基础上叠加配置组键（覆盖同名 key）
+        var merged = new Dictionary<string, string>(_config.VariantPreferences ?? new(), StringComparer.Ordinal);
+        foreach (var (k, v) in parsed) merged[k] = v;
+        _config.VariantPreferences = merged;
+        _logger.LogInformation("[变体] 已应用配置组变体偏好 {Count} 条（覆盖全局）", parsed.Count);
     }
 
     /// <summary>
@@ -3090,8 +3539,8 @@ public class AutoHoeingTask : ISoloTask
 
             // ===== 第六部分：联机服务器和同步配置 =====
             new() { Name = "coordinatorServerUrl", Label = "协调服务器地址", Type = "text", DefaultValue = config.CoordinatorServerUrl },
-            new() { Name = "playerName", Label = "玩家名称\n联机时显示给其他玩家", Type = "text", DefaultValue = config.PlayerName },
-            new() { Name = "playerUid", Label = "玩家UID\n用于进入世界和多世界切换", Type = "text", DefaultValue = config.PlayerUid },
+            new() { Name = "playerName", Label = "玩家名(必填)\n联机时显示给其他玩家", Type = "text", DefaultValue = config.PlayerName },
+            new() { Name = "playerUid", Label = "玩家UID(必填)\n用于进入世界和多世界切换", Type = "text", DefaultValue = config.PlayerUid },
             new() { Name = "expectedPlayerCount", Label = "房间期望人数（2-4）\n用于判断人齐条件", Type = "number", DefaultValue = config.ExpectedPlayerCount },
             new() { Name = "roomWhitelist", Label = "房间白名单\n逗号分隔的玩家名称", Type = "text", DefaultValue = config.RoomWhitelist },
             new() { Name = "partyTimeoutSeconds", Label = "组队等待超时（秒）\n超时后根据超时动作处理", Type = "number", DefaultValue = config.PartyTimeoutSeconds },
@@ -3100,6 +3549,7 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "syncTimeoutSeconds", Label = "集合点等待超时（秒）", Type = "number", DefaultValue = config.SyncTimeoutSeconds },
             new() { Name = "minPlayersToSync", Label = "最低开始人数\n低于此人数时集合点直接放行，0=自动等齐所有人", Type = "number", DefaultValue = config.MinPlayersToSync },
             new() { Name = "enableKazuhaSync", Label = "启用万叶聚物同步\n勾选后战后回点时由声明顺序首位含万叶的玩家自动放 E 聚物", Type = "bool", DefaultValue = config.EnableKazuhaSync },
+            new() { Name = "multiplayerUseFixedFightStrategy", Label = "固定使用联机战斗策略\n联机战斗策略为针对联机优化过的，大部分角色的普通战斗策略和联机可能不一样，建议使用联机战斗策略", Type = "bool", DefaultValue = config.MultiplayerUseFixedFightStrategy },
             new() { Name = "kazuhaSyncWaitSeconds", Label = "万叶聚物完成后非万叶玩家停留（秒）\n0-30，默认1，仅在指定万叶玩家+启用走回战斗点时生效", Type = "number", DefaultValue = config.KazuhaSyncWaitSeconds },
             new() { Name = "kazuhaSyncTimeoutSeconds", Label = "万叶聚物同步总超时（秒）\n5-120，默认20，所有玩家在战斗点等待万叶完成的最长时间", Type = "number", DefaultValue = config.KazuhaSyncTimeoutSeconds },
             new() { Name = "kazuhaWaitSkillCdSeconds", Label = "万叶 E 技 CD 等待上限（秒）\n3-10，默认5，超时后直接尝试释放 E 技", Type = "number", DefaultValue = config.KazuhaWaitSkillCdSeconds },

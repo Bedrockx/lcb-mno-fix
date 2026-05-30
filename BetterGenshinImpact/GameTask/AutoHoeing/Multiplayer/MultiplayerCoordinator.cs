@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BetterGenshinImpact.Core.Config;
 using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 
 namespace BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
@@ -248,7 +249,12 @@ public class MultiplayerCoordinator : IAsyncDisposable
         RouteSyncCoordinator?.Reset();
         StateManager?.Reset();
         WaitPointStateManager?.ResetCurrentRound();
-        
+
+        // fastsync-claim-short-circuit-premature-release-fix（OQ-3=c→落地清理）：
+        // syncId 编码不含世界轮次标识（PathExecutor.BuildSyncPointMap*），同名路线跨轮次复用产生相同 syncId。
+        // 不清理则上一轮抢报记录会让本轮 IsFastReported 段内反查误判该点"已抢报"而跳过抢报。
+        _fastReportedSyncIds.Clear();
+
         _logger.LogInformation("[联机] 已重置为新轮次");
     }
 
@@ -353,18 +359,16 @@ public class MultiplayerCoordinator : IAsyncDisposable
 
     public async Task WaitForAllPlayers(string syncId, CancellationToken ct, long syncProgress = -1)
     {
-        // 抢报已经成功的 syncId：自己已经上报过，服务端可能也已经广播过 AllArrived 把 ArrivalSet 清掉了，
-        // 再走一次严格 WaitForAllPlayersAsync 会订阅一个永远不会触发的事件 → 死等到超时。
-        // 直接 short-circuit 返回让调用方继续走（fastsync-redesign-parameter-passing spec 修复）。
-        if (_fastReportedSyncIds.ContainsKey(syncId))
-        {
-            _logger.LogInformation("[联机][FastSync] WaitForAllPlayers short-circuit（本玩家已抢报过）: {SyncId}", syncId);
-            return;
-        }
-
+        // fastsync-claim-short-circuit-premature-release-fix（OQ-1=a）：
+        // 删除「自己已抢报过即短路放行」分支。抢报方真正到达同步点后，照常走严格
+        // subscribe-before-action 路径等全员到齐。抢报「让别人早走」能力由 FastReportAsync 保留。
+        // 组合 7「服务端已广播 + 已清空 ArrivalSet」竞态由服务端对已放行 syncId 的幂等补发 AllArrived 解决
+        // （见 CoordinatorHub.WaitForAllPlayers 补发分支），不再依赖客户端短路规避死等。
+        // wasFastReported 仅用于日志文案区分（OQ-4=a / 方案 B），不参与放行决策。
+        bool wasFastReported = _fastReportedSyncIds.ContainsKey(syncId);
         try
         {
-            await _client.WaitForAllPlayersAsync(syncId, ct, syncProgress);
+            await _client.WaitForAllPlayersAsync(syncId, ct, syncProgress, wasFastReported);
         }
         catch (Exception ex)
         {
@@ -493,6 +497,103 @@ public class MultiplayerCoordinator : IAsyncDisposable
         {
             _client.StartRouteReceived -= onStartRoute;
         }
+    }
+
+    // === 路线变体一致性校验（route-variant-sync-by-logical-id spec / R6 / R8）===
+
+    /// <summary>
+    /// 客户端发起 R6 启动期校验（route-variant-sync-by-logical-id spec / R6 / R8.5-7）。
+    /// 返回值：
+    ///   - true：校验通过 OR 服务端不识别该方法且 items 全空（老路径）
+    ///   - false：校验失败 OR 30s 超时 OR ct 取消
+    /// 抛异常（caller 应终止本场会话）：
+    ///   - InvalidOperationException：服务端不识别新协议但 items 中至少一条非空 LogicalRouteId（R8.7）
+    /// </summary>
+    public async Task<bool> VerifyRouteVariantSchemaAsync(
+        List<RouteVariantSchemaItem> items, CancellationToken ct)
+    {
+        items ??= new List<RouteVariantSchemaItem>();
+        bool selfHasAnyLogicalRouteId = items.Any(i => !string.IsNullOrEmpty(i.LogicalRouteId));
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Action? onPassed = null;
+        Action<string, Dictionary<string, RouteVariantSchemaItem>>? onFailed = null;
+        onPassed = () => tcs.TrySetResult(true);
+        onFailed = (logicalId, playerItems) =>
+        {
+            if (string.IsNullOrEmpty(logicalId))
+            {
+                _logger.LogWarning("[变体校验] 服务端 30s 超时（视为失败）");
+            }
+            else
+            {
+                _logger.LogWarning("[变体校验] LogicalRouteId={LRI} 不一致；玩家文件: {Files}",
+                    logicalId, string.Join(", ",
+                        playerItems.Select(kv => $"{kv.Key}={kv.Value.ActualVariantFileName}")));
+            }
+            tcs.TrySetResult(false);
+        };
+        // subscribe-before-action：先订阅事件再上报，避免服务端在订阅前就广播完成（bgi-config-and-mvvm §5.1）
+        _client.RouteVariantConsistencyPassed += onPassed;
+        _client.RouteVariantConsistencyFailed += onFailed;
+        try
+        {
+            try
+            {
+                await _client.ReportRouteVariantSchemaAsync(items, ct);
+            }
+            catch (HubException ex) when (IsMethodNotFoundException(ex))
+            {
+                if (selfHasAnyLogicalRouteId)
+                {
+                    throw new InvalidOperationException(
+                        "服务端版本不支持变体功能（ReportRouteVariantSchema 方法不存在），请升级 BgiCoordinatorServer", ex);
+                }
+                _logger.LogInformation("[变体校验] 服务端不支持新协议且本玩家全员老路径，按老路径执行");
+                return true;
+            }
+
+            using var localTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, localTimeout.Token);
+            using var reg = linked.Token.Register(() =>
+            {
+                if (!selfHasAnyLogicalRouteId)
+                {
+                    // 全员老线路防御：旧版服务端在"全空"时静默不广播 Passed，
+                    // 新客户端会一直等到此超时。本玩家没有任何变体路线 → 没有 schema 可校验，
+                    // 超时按"放行"处理（老线路一致性已由 MD5 校验覆盖），避免误判失败卡住联机。
+                    // 已升级的服务端会在全空时主动广播 Passed，正常不会走到这里。
+                    _logger.LogInformation("[变体校验] 等待超时且本玩家全员老线路，按放行处理（兼容未升级服务端）");
+                    tcs.TrySetResult(true);
+                }
+                else
+                {
+                    _logger.LogWarning("[变体校验] 客户端等待事件超时 30s，视为失败");
+                    tcs.TrySetResult(false);
+                }
+            });
+            return await tcs.Task;
+        }
+        finally
+        {
+            _client.RouteVariantConsistencyPassed -= onPassed;
+            _client.RouteVariantConsistencyFailed -= onFailed;
+        }
+    }
+
+    /// <summary>
+    /// 识别 HubException 是否为"服务端方法不存在"。
+    /// SignalR 调到不存在的方法时抛 HubException，message 形如：
+    ///   "Method 'ReportRouteVariantSchema' does not exist"
+    ///   "Failed to invoke 'ReportRouteVariantSchema' due to an error on the server. ..."
+    /// </summary>
+    private static bool IsMethodNotFoundException(Exception ex)
+    {
+        if (ex == null) return false;
+        var msg = ex.Message ?? string.Empty;
+        return msg.IndexOf("does not exist", StringComparison.OrdinalIgnoreCase) >= 0
+            || (msg.IndexOf("ReportRouteVariantSchema", StringComparison.OrdinalIgnoreCase) >= 0
+                && msg.IndexOf("error on the server", StringComparison.OrdinalIgnoreCase) >= 0);
     }
 
     // === 中断状态清除 ===

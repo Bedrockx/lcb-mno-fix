@@ -1030,6 +1030,82 @@ public class AutoPartyTask
     }
 
     /// <summary>
+    /// 给定一张已处于 F2 联机界面的截图，统计右侧红色"踢出"按钮数量（0-4）。
+    /// = 仍在房主世界的其他成员数（房主自己没有按钮）。
+    /// 复用 AutoPartyTask.WaitForMembersAsync 的现有扫描方式，不引入新识别模板。
+    /// </summary>
+    internal static int CountKickButtons(ImageRegion checkRa)
+    {
+        var kickCount = 0;
+        for (var i = 4; i > 0; i--)
+        {
+            var aa = RecognitionObject.Ocr(
+                checkRa.Width * 0.5,
+                checkRa.Height * 0.61 - 125 * (4 - i),
+                checkRa.Width * 0.5,
+                checkRa.Height * 0.4 - 30);
+            AutoFightAssets.Instance.KickBtnRa.RegionOfInterest = aa.RegionOfInterest;
+            if (checkRa.Find(AutoFightAssets.Instance.KickBtnRa).IsExist())
+            {
+                kickCount = i;
+                break;
+            }
+        }
+        return kickCount;
+    }
+
+    /// <summary>
+    /// 房主退世界等待阶段：回主界面 → 打开 F2 → 截图 → 数踢出按钮，
+    /// 返回仍在房主世界的其他成员数（0-4）。
+    /// 任一步失败（未回到主界面 / 未打开 F2 / 截图异常）返回 -1（本轮不可观测）。
+    /// </summary>
+    public async Task<int> CountMembersRemainingInHostWorldAsync(CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        try
+        {
+            // 1) 回主界面（加载中先收敛到稳定起点，对齐 Open Question 4）
+            try { await new BetterGenshinImpact.GameTask.Common.Job.ReturnMainUiTask().Start(ct); }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // 可恢复：本轮回主界面失败按"不可观测"处理，下一轮重试
+                _logger.LogDebug(ex, "[自动组队-房主][提前退出] 回主界面失败，本轮记为不可观测");
+                return -1;
+            }
+            await Delay(500, ct);
+            if (!await WaitForMainUi(ct, 10))
+            {
+                _logger.LogDebug("[自动组队-房主][提前退出] 等待主界面超时，本轮记为不可观测");
+                return -1;
+            }
+
+            // 2) 打开 F2（OpenCoOpScreen 内含 3 次重试 + 弹窗处理）
+            if (!await OpenCoOpScreen(ct))
+            {
+                _logger.LogDebug("[自动组队-房主][提前退出] 打开 F2 失败，本轮记为不可观测");
+                return -1;
+            }
+
+            // 3) 截图 + 计数
+            using var checkRa = CaptureToRectArea();
+            var kickCount = CountKickButtons(checkRa);
+            _logger.LogInformation("[自动组队-房主][提前退出] F2 踢出按钮={Kick}（仍在房主世界成员数）", kickCount);
+            return kickCount;
+        }
+        catch (OperationCanceledException)
+        {
+            throw; // 取消语义不吞（Requirement 5.2）
+        }
+        catch (Exception ex)
+        {
+            // 可恢复：截图/识别瞬时异常按"不可观测"处理，不中断轮询
+            _logger.LogWarning(ex, "[自动组队-房主][提前退出] 检测踢出按钮异常，本轮记为不可观测");
+            return -1;
+        }
+    }
+
+    /// <summary>
     /// 在点击 F2 上的"离开队伍"按钮 (1600,1020) 之后，处理可能出现的"退回世界确认"弹窗。
     /// 实现方式：250ms 节拍轮询 ConfirmBtnRo，分三阶段：
     ///   1) 第一段轮询（最多 5s）：找到第一弹窗 → 点击

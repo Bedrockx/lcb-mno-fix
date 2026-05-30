@@ -99,6 +99,14 @@ public class CoordinatorClient : IAsyncDisposable
     /// <summary>当前同步周期内所有玩家都到达战斗点时触发，载荷为 syncKey（routeId:segmentIndex）。</summary>
     public event Action<string>? AllArrivedAtFightPoint;
 
+    // === 路线变体一致性校验事件（route-variant-sync-by-logical-id spec / R6 / R8）===
+    /// <summary>服务端按 LogicalRouteId 分组比对全部通过时触发（无参）。</summary>
+    public event Action? RouteVariantConsistencyPassed;
+    /// <summary>
+    /// 服务端校验失败时触发。载荷：logicalRouteId（空字符串表示 30s 超时）+ playerItems（connId → 该玩家上报的 schema）。
+    /// </summary>
+    public event Action<string, Dictionary<string, Models.RouteVariantSchemaItem>>? RouteVariantConsistencyFailed;
+
     public List<PlayerInfo> CurrentPlayerList { get; set; } = new();
     public int CurrentRoomPlayerCount { get; set; }
     public string HostPlayerUid { get; set; } = string.Empty;
@@ -173,6 +181,14 @@ public class CoordinatorClient : IAsyncDisposable
 
             _connection.On("RouteVerificationPassed",
                 () => RouteVerificationPassed?.Invoke());
+
+            // === 路线变体一致性校验订阅（route-variant-sync-by-logical-id spec）===
+            _connection.On("RouteVariantConsistencyPassed",
+                () => RouteVariantConsistencyPassed?.Invoke());
+
+            _connection.On<string, Dictionary<string, Models.RouteVariantSchemaItem>>(
+                "RouteVariantConsistencyFailed",
+                (logicalId, playerItems) => RouteVariantConsistencyFailed?.Invoke(logicalId, playerItems));
 
             _connection.On<string>("RoomClosed",
                 reason => RoomClosed?.Invoke(reason));
@@ -779,6 +795,22 @@ public class CoordinatorClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// 上报本玩家所有计划路线的变体 schema 摘要（route-variant-sync-by-logical-id spec / R6 / R8）。
+    /// 旧服务端不识别此方法时抛 HubException，调用方（MultiplayerCoordinator.VerifyRouteVariantSchemaAsync）
+    /// 按 R8.6 / R8.7 分流。不静默 catch，让 caller 决定 fallback / 显式报错。
+    /// </summary>
+    public async Task ReportRouteVariantSchemaAsync(
+        List<Models.RouteVariantSchemaItem> items, CancellationToken ct = default)
+    {
+        if (_connection == null || !IsConnected)
+            throw new InvalidOperationException("CoordinatorClient 未连接");
+
+        await _connection.InvokeAsync("ReportRouteVariantSchema", items, ct);
+        _logger.LogInformation("[变体校验] 已上报 {Count} 条 schema（含非空 LogicalRouteId {NonEmpty} 条）",
+            items?.Count ?? 0, items?.Count(i => !string.IsNullOrEmpty(i.LogicalRouteId)) ?? 0);
+    }
+
+    /// <summary>
     /// 房主调用此方法把房间标记为已开锄（spec lock-room-after-start §4.1）。
     /// 服务端从此 JoinRoom 拒绝非重连新玩家、GetOnlineRooms 也不再返回此房间。
     /// 旧服务端无此 Hub 方法 → 抛 HubException 被静默吞掉，不影响主任务（bugfix §3.9）。
@@ -1088,7 +1120,7 @@ public class CoordinatorClient : IAsyncDisposable
     /// 等待所有玩家到达指定同步点
     /// syncProgress：当前同步点的全局进度值（用于服务端判定异常玩家是否会经过此点）
     /// </summary>
-    public async Task WaitForAllPlayersAsync(string syncId, CancellationToken ct, long syncProgress = -1)
+    public async Task WaitForAllPlayersAsync(string syncId, CancellationToken ct, long syncProgress = -1, bool wasFastReported = false)
     {
         if (_connection == null || !IsConnected) return;
 
@@ -1118,6 +1150,27 @@ public class CoordinatorClient : IAsyncDisposable
             // 本地等待 AllArrived 事件（受 CT 控制，可被用户取消）
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(120));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            // fastsync-claim-short-circuit-premature-release-fix（OQ-4=a / 方案 B）：
+            // 短探测窗口区分"全员已到 / 服务端补发命中 → 立即放行"与"全员未到 → 进入等待"。
+            // 200ms 内收到 AllArrived（含服务端 Clients.Caller 补发）即视为立即放行。
+            // wasFastReported 仅决定日志文案前缀，不影响放行逻辑。
+            const int replayProbeMs = 200;
+            var probe = await Task.WhenAny(tcs.Task, Task.Delay(replayProbeMs, linkedCts.Token));
+            if (probe == tcs.Task && tcs.Task.IsCompletedSuccessfully)
+            {
+                if (wasFastReported)
+                    _logger.LogInformation("[联机][FastSync] 已抢报且全员已到，立即放行: {SyncId}", syncId);
+                else
+                    _logger.LogInformation("[联机] 同步点全员已到，立即放行: {SyncId}", syncId);
+                return;
+            }
+
+            if (wasFastReported)
+                _logger.LogInformation("[联机][FastSync] 已抢报但全员未到，进入等待: {SyncId}", syncId);
+            else
+                _logger.LogInformation("[联机] 同步点全员未到，进入等待: {SyncId}", syncId);
+
             await tcs.Task.WaitAsync(linkedCts.Token);
         }
         catch (OperationCanceledException)

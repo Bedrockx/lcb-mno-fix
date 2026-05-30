@@ -63,4 +63,15 @@ public static class MultiplayerFightStrategyDecisions
 
         return (fixedFilePath, shouldLog);
     }
+
+    /// <summary>
+    /// 决策"是否对联机锄地战斗应用固定策略覆盖"。
+    /// 等价于把布尔拼装从 AutoFightHandler 中提出来便于 PBT。
+    /// 调用方将返回值作为 ResolveCombatStrategyPath 的 isMultiplayer 实参：
+    /// true → 走联机覆盖逻辑；false → 等价"不覆盖"（返回 originalResolvedPath）。
+    /// </summary>
+    /// <param name="isMultiplayerHoeing">是否处于联机锄地运行分支（Multiplayer_Signal）。</param>
+    /// <param name="useFixedFightStrategy">本机开关 MultiplayerUseFixedFightStrategy 的值。</param>
+    public static bool ShouldApplyFixedStrategy(bool isMultiplayerHoeing, bool useFixedFightStrategy)
+        => isMultiplayerHoeing && useFixedFightStrategy;
 }
