@@ -401,6 +401,17 @@ public class CoordinatorHub : Hub
         }
     }
 
+    /// <summary>上报战斗参与者（multiplayer-shared-fight-end-quorum-sync spec，配额分母）</summary>
+    public Task ReportFightParticipant(string syncKey)
+    {
+        var (_, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        if (roomCode == null) return Task.CompletedTask;
+
+        _roomManager.UpdateHeartbeat(Context.ConnectionId);
+        _roomManager.RecordFightParticipant(roomCode, syncKey, Context.ConnectionId);
+        return Task.CompletedTask;
+    }
+
     /// <summary>心跳，更新 LastHeartbeat</summary>
     public Task Heartbeat()
     {
@@ -828,7 +839,13 @@ public class CoordinatorHub : Hub
         var (room, roomCode) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
         if (room != null && room.HostConnectionId == Context.ConnectionId)
         {
-            room.HostRouteList = routeNames;
+            // lock(room)：与 GetHostRouteListStatus 读侧互斥，保证 (HostRouteList, HostRouteListUploaded)
+            // 两字段的写入对读侧表现为单一原子快照（multiplayer-member-skip-round-stuck-roundend-sync-fix）。
+            lock (room)
+            {
+                room.HostRouteList = routeNames;
+                room.HostRouteListUploaded = true;
+            }
             _logger.LogInformation("房间 {Code} 房主路线列表已上传，共 {Count} 条", roomCode, routeNames.Count);
             // 广播通知成员路线列表已就绪
             await Clients.Group(roomCode).SendAsync("HostRouteListReady", routeNames);
@@ -840,6 +857,42 @@ public class CoordinatorHub : Hub
     {
         var (room, _) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
         return Task.FromResult(room?.HostRouteList ?? []);
+    }
+
+    /// <summary>
+    /// 查询房主是否已上传过路线列表（含上传空列表）。
+    /// multiplayer-host-empty-route-member-wait-timeout-fix：成员据此区分
+    /// "房主从未上传"（false → 继续等待）与"房主上传了空列表"（true + 列表空 → 优雅跳过本轮）。
+    /// </summary>
+    public Task<bool> IsHostRouteListUploaded()
+    {
+        var (room, _) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        return Task.FromResult(room?.HostRouteListUploaded ?? false);
+    }
+
+    /// <summary>
+    /// 原子返回房主路线列表状态：(Uploaded, RouteNames) 同一时刻快照。
+    /// multiplayer-member-skip-round-stuck-roundend-sync-fix：取代成员侧
+    /// GetHostRouteList + IsHostRouteListUploaded 两次独立查询，消除 TOCTOU 竞态
+    /// （房主在两次查询之间 SetHostRouteList(非空) 导致成员拿到 uploaded=true+count=0 误判跳过）。
+    /// lock(room) 与 SetHostRouteList 写侧互斥，并复制列表快照，确保读到的 Uploaded 与 RouteNames
+    /// 来自同一时刻、且返回后不被房主并发改动。
+    /// </summary>
+    public Task<HostRouteListStatus> GetHostRouteListStatus()
+    {
+        var (room, _) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        if (room == null)
+        {
+            return Task.FromResult(new HostRouteListStatus { Uploaded = false, RouteNames = [] });
+        }
+        lock (room)
+        {
+            return Task.FromResult(new HostRouteListStatus
+            {
+                Uploaded = room.HostRouteListUploaded,
+                RouteNames = room.HostRouteList != null ? new List<string>(room.HostRouteList) : [],
+            });
+        }
     }
 
     /// <summary>上报已加入世界，全员加入时广播 AllWorldJoined</summary>
@@ -1189,6 +1242,11 @@ public class CoordinatorHub : Hub
             // === 集体卡死监测字段重置（multiplayer-mutual-wait-collective-skip §3.10 / §8.4 改动 4）===
             room.ConsecutiveCollectiveSkipCount = 0;
             room.LastArrivalSetsSnapshot = null;
+
+            // === 房主路线列表上传标志重置（multiplayer-host-empty-route-member-wait-timeout-fix）===
+            // 新一轮房主重新筛选并上传路线列表，避免沿用上一轮的"已上传"状态导致成员误判
+            room.HostRouteList = [];
+            room.HostRouteListUploaded = false;
             room.ObservationStartTime = default;
             room.CollectiveSkipTimer?.Dispose();
             room.CollectiveSkipTimer = null;
@@ -1197,6 +1255,11 @@ public class CoordinatorHub : Hub
             // syncId 不含轮次标识，同名路线跨轮复用。不清理则上一轮已广播的 syncId 残留，
             // 本轮第一个到达者一调 WaitForAllPlayers 即被补发 AllArrived → 跨轮误放。
             room.BroadcastedSyncIds.Clear();
+
+            // multiplayer-shared-fight-end-quorum-sync: 多世界轮换清空战斗参与者集合，避免陈旧分母
+            room.FightParticipantSets.Clear();
+            room.FightDoneSets.Clear();
+            room.FightDoneBroadcasted.Clear();
 
             _logger.LogInformation("[ResetForNewWorldRound] 房间{RoomCode}进入第{Round}轮，等待点、异常状态、万叶候选已重置", roomCode, newRound);
         }

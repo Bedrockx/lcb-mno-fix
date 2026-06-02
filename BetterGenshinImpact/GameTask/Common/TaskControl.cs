@@ -122,7 +122,7 @@ public class TaskControl
                 {
                     var enter = qq.FindMulti(GetConfirmRa());
                     using var enterDone = enter.FirstOrDefault(t =>
-                        Regex.IsMatch(t.Text, "连接已断开") || Regex.IsMatch(t.Text, "点击进入"));
+                        Regex.IsMatch(t.Text, "连接已断开") || Regex.IsMatch(t.Text, "点击进入") || Regex.IsMatch(t.Text, "更新通知"));
                     if (enterDone != null)
                     {
                         IsSuspendedByWindow = true;
@@ -284,6 +284,15 @@ public class TaskControl
 
     private static void CheckAndActivateGameWindow()
     {
+        // 用户按快捷键暂停 → 这是"希望 BGI 停下"的唯一明确信号（steering spec-adjacent-state-audit §2）。
+        // 暂停期间不抢焦点、不持续检测，直到用户再次按热键解除暂停。
+        // 注意：Sleep/Delay 路径已被 TrySuspend 的 while 循环挡住；本守门主要覆盖
+        // CaptureGameImage 30s 等待循环这条调用栈（它每 200ms 调一次本函数）。
+        if (RunnerContext.Instance.IsSuspend)
+        {
+            return;
+        }
+
         if (IsSuspendedByNetwork)
         {
             Logger.LogInformation("网络恢复中，暂停尝试恢复窗口");

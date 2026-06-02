@@ -23,8 +23,28 @@ public class Room
     /// <summary>syncPointId → 已完成战斗的 connectionId 集合</summary>
     public Dictionary<string, HashSet<string>> FightDoneSets { get; set; } = [];
 
+    /// <summary>syncKey → 战斗参与者 connectionId 集合（multiplayer-shared-fight-end-quorum-sync spec，配额分母）</summary>
+    public Dictionary<string, HashSet<string>> FightParticipantSets { get; set; } = [];
+
+    /// <summary>
+    /// 已广播过 AllFightDone 的 syncKey 集合（multiplayer-shared-fight-end-quorum-sync spec design §11.3，轮终标志）。
+    /// 广播达成时加入；下一拨用同一战斗点的玩家上报参与者/投票时，发现含此 syncKey 即触发
+    /// FightParticipantSets/FightDoneSets 周期清空，开启新一轮，消除上一轮残留污染（D2）。
+    /// 多世界轮换 ResetForNewWorldRound 一并清空。
+    /// </summary>
+    public HashSet<string> FightDoneBroadcasted { get; set; } = [];
+
     /// <summary>房主筛选后的最终路线文件名列表（按执行顺序）</summary>
     public List<string> HostRouteList { get; set; } = [];
+
+    /// <summary>
+    /// 房主是否已上传过路线列表（含上传空列表的情况）。
+    /// multiplayer-host-empty-route-member-wait-timeout-fix：用于区分
+    /// "房主从未上传"（默认 false）与"房主上传了空列表（CD全过滤）"（true + HostRouteList 为空）。
+    /// 成员据此在收到空列表时判断应优雅跳过本轮还是继续等待。
+    /// SetHostRouteList 置 true；多世界轮换 ResetForNewWorldRound 重置为 false。
+    /// </summary>
+    public bool HostRouteListUploaded { get; set; } = false;
 
     /// <summary>房间白名单</summary>
     public List<string> Whitelist { get; set; } = [];

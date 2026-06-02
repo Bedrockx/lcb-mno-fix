@@ -671,6 +671,40 @@ public class CoordinatorClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// 上报战斗参与者（按 syncKey 分组）。multiplayer-shared-fight-end-quorum-sync spec。
+    /// 失败静默忽略，不阻塞战斗。旧服务端无此 Hub 方法 → HubException 被吞，行为退化。
+    /// </summary>
+    public async Task NotifyFightParticipantAsync(string syncKey, CancellationToken ct = default)
+    {
+        if (_connection == null || !IsConnected) return;
+        try
+        {
+            await _connection.InvokeAsync("ReportFightParticipant", syncKey, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机][结束配额] NotifyFightParticipantAsync 失败（静默忽略）syncKey={Key}", syncKey);
+        }
+    }
+
+    /// <summary>
+    /// 上报本地战斗完成投票（复用现有 Hub 方法 ReportFightDone(syncKey)）。
+    /// multiplayer-shared-fight-end-quorum-sync spec。失败静默忽略。
+    /// </summary>
+    public async Task NotifyFightDoneAsync(string syncKey, CancellationToken ct = default)
+    {
+        if (_connection == null || !IsConnected) return;
+        try
+        {
+            await _connection.InvokeAsync("ReportFightDone", syncKey, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机][结束配额] NotifyFightDoneAsync 失败（静默忽略）syncKey={Key}", syncKey);
+        }
+    }
+
+    /// <summary>
     /// 万叶玩家广播"开始执行聚物动作"。
     /// multiplayer-kazuha-collect-point-broadcast: 加 syncKey + 聚物点 (collectX, collectY) 三参。
     /// 调用方在朝向 / 位置识别失败时传 (NaN, NaN)，由 **客户端 + 服务端 + 其他客户端订阅** 三层 IsValid 守卫过滤。
@@ -915,6 +949,47 @@ public class CoordinatorClient : IAsyncDisposable
         {
             _logger.LogWarning(ex, "GetHostRouteListAsync 失败");
             return new List<string>();
+        }
+    }
+
+    /// <summary>
+    /// 查询房主是否已上传过路线列表（含上传空列表的情况）。
+    /// multiplayer-host-empty-route-member-wait-timeout-fix：成员收到空列表时据此区分
+    /// "房主从未上传"（false → 继续等待）与"房主上传了空列表（CD全过滤）"（true → 优雅跳过本轮）。
+    /// 连接异常或旧服务端不支持此方法时返回 false（安全降级：成员落回原 90s 等待路径，不会误跳过）。
+    /// </summary>
+    public async Task<bool> IsHostRouteListUploadedAsync()
+    {
+        if (_connection == null || !IsConnected) return false;
+        try
+        {
+            return await _connection.InvokeAsync<bool>("IsHostRouteListUploaded");
+        }
+        catch (Exception ex)
+        {
+            // 旧服务端不支持此方法 → HubException；降级为 false（保守，宁可多等不可误跳）
+            _logger.LogWarning(ex, "IsHostRouteListUploadedAsync 失败（旧服务端兼容，降级为 false）");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 原子获取房主路线列表状态 (Uploaded, RouteNames)，取代 GetHostRouteList + IsHostRouteListUploaded
+    /// 两次独立查询，消除 TOCTOU 竞态（multiplayer-member-skip-round-stuck-roundend-sync-fix）。
+    /// 旧服务端无此方法 → HubException → 降级返回 (false, 空)，调用方落回"继续等待房主推送"保守路径（宁等勿误判为空）。
+    /// </summary>
+    public async Task<(bool Uploaded, List<string> RouteNames)> GetHostRouteListStatusAsync()
+    {
+        if (_connection == null || !IsConnected) return (false, new List<string>());
+        try
+        {
+            var s = await _connection.InvokeAsync<HostRouteListStatusDto>("GetHostRouteListStatus");
+            return (s?.Uploaded ?? false, s?.RouteNames ?? new List<string>());
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GetHostRouteListStatusAsync 失败（旧服务端兼容，降级为 (false, 空)）");
+            return (false, new List<string>());
         }
     }
 

@@ -483,6 +483,27 @@ public class PathExecutor
                         
                         CurWaypoint = (waypoints.FindIndex(wps => wps == waypoint), waypoint);
 
+                        // return-to-point-stale-prev-position-drift-fix (d) 线路中间节点首帧播种（进入该节点一次，Q8）：
+                        // 区别于上方第 0 个 waypoint 首帧播种（waypoints[0] 非 TP 时已 SetPrevPosition）——此处处理 i>=1 的中间节点。
+                        // 用"上一个 waypoint"坐标播种（角色刚从那走来，比目标节点 waypoint 更接近真实位置），
+                        // 避免中间节点前恰好识别中断时局部匹配/异常 catch 沿用残留（BC3，低概率）。
+                        // 当前/上一个 waypoint 任一为 TP 点则跳过（TP 后首帧由 pathexecutor-teleport-fresh-position-fallback-fix 覆盖）。
+                        // 仅 SetPrevPosition 覆写 prev，绝不 Navigation.Reset()。识别成功立即用真值刷新 → 单机零回归。
+                        {
+                            var __curIdx = CurWaypoint.Item1;
+                            if (__curIdx >= 1)
+                            {
+                                var __prevWp = waypoints[__curIdx - 1];
+                                if (waypoint.Type != WaypointType.Teleport.Code
+                                    && __prevWp.Type != WaypointType.Teleport.Code)
+                                {
+                                    var __seed = KazuhaCollectPositionGuardDecisions.ComputeMidRouteSeedAnchor(
+                                        __prevWp.X, __prevWp.Y, waypoint.X, waypoint.Y);
+                                    Navigation.SetPrevPosition((float)__seed.X, (float)__seed.Y);
+                                }
+                            }
+                        }
+
                         // === 抢报 syncId 反查（fastsync-redesign-parameter-passing spec / OQ-1=c）===
                         // 段级缓存 _wpIdxToSyncIdCache 中查命中的 syncId（None 时为 null）。
                         // 透传给 MoveTo / MoveCloseTo / HandleTeleportWaypoint，函数内部循环
@@ -836,6 +857,13 @@ public class PathExecutor
                                         {
                                             Logger.LogInformation("[联机] 战斗完成，走回战斗点集合");
                                             waypoint.Type =  WaypointType.Target.Code;
+
+                                            // kazuha-collect-fightpoint-position-misrecognition-fix 方案 A（首帧播种）：
+                                            // 走回战斗点的 MoveTo/MoveCloseTo 逐帧 GetPosition 之前，用战斗点坐标播种 Navigation 单例锚点，
+                                            // 避免沿用上一段远处残留的 _prevX/_prevY 导致局部匹配锚错 / 全局 garbage（BC1/BC2）。
+                                            // 仅 SetPrevPosition 覆写 prev，绝不调用 Navigation.Reset()（Navigation 是进程级共享单例，避免副作用）。
+                                            var __seed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(waypoint.X, waypoint.Y);
+                                            Navigation.SetPrevPosition((float)__seed.X, (float)__seed.Y);
 
                                             // multiplayer-kazuha-collect-speedup-and-position-fix:
                                             // BC3+BC4: MoveCloseTo 之前 kick off 后台预备（仅万叶玩家+缓存命中时实际工作，
@@ -3229,11 +3257,12 @@ public class PathExecutor
             var diff = _rotateTask.RotateToApproach(targetOrientation, screen2);
             if (num > 20)
             {
-                if (Math.Abs(diff) > 5)
+                // diff == null 表示本轮未真实测量到角度（抢锁失败），不累加也不清零卡死计数，保持上一轮状态
+                if (diff.HasValue && Math.Abs(diff.Value) > 5)
                 {
                     consecutiveRotationCountBeyondAngle++;
                 }
-                else
+                else if (diff.HasValue)
                 {
                     consecutiveRotationCountBeyondAngle = 0;
                 }

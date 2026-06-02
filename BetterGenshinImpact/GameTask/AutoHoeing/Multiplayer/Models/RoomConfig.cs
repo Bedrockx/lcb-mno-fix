@@ -55,4 +55,10 @@ public class RoomConfig
     public double FastSyncPathingDistance { get; set; } = 10.0;
     /// <summary>传送 loading 命中后到抢报之间的延迟毫秒数，范围 [0, 3000]，默认 0</summary>
     public int FastSyncTeleportLoadingDelayMs { get; set; } = 0;
+
+    // === 共享战斗配额结束同步（multiplayer-shared-fight-end-quorum-sync spec, 与服务端 RoomConfig 严格对称）===
+    /// <summary>启用联机共享战斗配额结束同步（主开关），默认 false。关闭时 CheckFightFinish 行为一字不变（零回归）</summary>
+    public bool SharedFightEndQuorumEnabled { get; set; } = false;
+    /// <summary>配额比例 [0.0,1.0]，默认 0.5。达成条件 doneCount ≥ ⌈participants × ratio⌉</summary>
+    public double SharedFightEndQuorumRatio { get; set; } = 0.5;
 }

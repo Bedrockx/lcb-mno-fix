@@ -35,6 +35,7 @@ using BetterGenshinImpact.GameTask.AutoPathing.Model.Enum;
 using System.Text.RegularExpressions;
 using BetterGenshinImpact.Core.Script.Dependence;
 using BetterGenshinImpact.GameTask.AutoPathing;
+using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
 
 namespace BetterGenshinImpact.GameTask.AutoFight;
 
@@ -93,6 +94,37 @@ public class AutoFightTask : ISoloTask
     ///   - IsSuspend / IsSuspendedByCapture（用户主动暂停 / 截图暂停）
     /// </summary>
     public static volatile bool IsTeleportingToStatue = false;
+
+    /// <summary>
+    /// "战斗中回点移动进行中"引用计数（fight-return-to-point-seek-rotation-conflict-fix spec）。
+    /// 唯一语义：当前有至少一个回点发起方正在执行移动/回点（count &gt; 0）。
+    ///
+    /// 写者（成对）：三个回点发起方在真正执行移动前后调用 EnterReturnToFightPoint() / ExitReturnToFightPoint()：
+    ///   - B：KazuhaContinuousReturnLoopAsync（MoveCloseTo 前后）
+    ///   - C：GeneralReturnToFightPointLoopAsync（MoveTo 前后）
+    ///   - E：AutoFightSeek.SeekAndFightAsync 内置回点分支（MoveTo 前后）
+    /// 读者（唯一）：AutoFightSeek.SeekAndFightAsync 的两处 MoveMouseBy 前，经
+    ///   AutoFightSeekDecisions.ShouldSkipSeekRotation(IsReturningToFightPoint) 判定是否跳过甩鼠标。
+    ///
+    /// 用引用计数（而非单一 bool）的原因：万叶玩家场景下 B（后台循环）与 E（寻敌内置回点）
+    ///   可能并发置位（同源 _taskParam.KazuhaContinuousReturn），单一 bool 存在
+    ///   "一方复位掩盖另一方仍在进行"的风险；引用计数保证嵌套/重叠安全。
+    /// 跨线程：Interlocked 增减 + Volatile.Read，无复合判断，线程安全。
+    ///
+    /// 严禁与以下信号合并 / 混用 / 重命名（语义完全不同）：
+    ///   - IsTeleportingToStatue（神像传送进行中 → 回点循环 return 终止）
+    ///   - IsSuspend / IsSuspendedByCapture（用户主动暂停 / 截图暂停）
+    /// </summary>
+    private static int _returnToFightPointDepth;
+
+    /// <summary>回点移动是否进行中（引用计数 &gt; 0）。读者：SeekAndFightAsync 的 MoveMouseBy 门控。</summary>
+    public static bool IsReturningToFightPoint => System.Threading.Volatile.Read(ref _returnToFightPointDepth) > 0;
+
+    /// <summary>进入回点移动（计数 +1）。回点发起方在真正执行移动前调用，必须与 ExitReturnToFightPoint 成对（try-finally）。</summary>
+    public static void EnterReturnToFightPoint() => System.Threading.Interlocked.Increment(ref _returnToFightPointDepth);
+
+    /// <summary>退出回点移动（计数 -1）。必须在 finally 中调用，保证任何退出路径都复位。</summary>
+    public static void ExitReturnToFightPoint() => System.Threading.Interlocked.Decrement(ref _returnToFightPointDepth);
 
     /// <summary>
     /// 最近一次"看到敌人"的时间戳。
@@ -284,6 +316,13 @@ public class AutoFightTask : ISoloTask
     /// 详见 fight-strategy-fallback-use-real-flow/design.md §2.1 / §2.6。
     /// </summary>
     private bool _useC1Fallback;
+
+    // fight-end-return-loop-not-joined-movement-overlap-fix:
+    // 保存后台回点循环 Task 引用 + 专用 CTS，战斗结束时 cancel + join 消除移动重叠窗口。
+    private Task? _kazuhaReturnLoopTask;
+    private Task? _generalReturnLoopTask;
+    private CancellationTokenSource? _returnLoopCts;
+    private const int ReturnLoopJoinTimeoutMs = 3000;
 
     public AutoFightTask(AutoFightParam taskParam)
     {
@@ -790,6 +829,38 @@ public class AutoFightTask : ISoloTask
         //旋转次数
         var rotationLimit = _taskParam.RotaryFactor == 1 ? 500 : _taskParam.FinishDetectConfig.RotationMode && _taskParam.FinishDetectConfig.RotateFindEnemyEnabled ? 50 : 6;
 
+        // === 共享战斗配额结束同步：订阅 AllFightDone + 上报参与者（subscribe-before-action）===
+        // 仅 IsEnabled（联机+连接+房主开关）时启用；否则三字段保持默认，全程零回归。
+        _quorumVoted = false;
+        _allFightDoneReceived = false;
+        _currentFightSyncKey = "";
+        var __quorumCoordinator = BetterGenshinImpact.GameTask.AutoPathing.PathExecutor.CurrentMultiplayerCoordinator;
+        Action<string>? __onAllFightDone = null;
+        var __quorumEnabled = SharedFightEndQuorumDecisions.IsEnabled(
+            __quorumCoordinator != null,
+            __quorumCoordinator?.IsConnected ?? false,
+            __quorumCoordinator?.EffectiveConfig.SharedFightEndQuorumEnabled ?? false);
+        if (__quorumEnabled)
+        {
+            var __wp = FightWaypoint;
+            var __routeIndex = __quorumCoordinator!.CurrentRouteIndex;
+            _currentFightSyncKey = __wp == null
+                ? $"{__routeIndex}:0:0"
+                : $"{__routeIndex}:{__wp.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}:{__wp.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}";
+            __onAllFightDone = key =>
+            {
+                if (key == _currentFightSyncKey)
+                {
+                    _allFightDoneReceived = true;
+                    FightEndTotoly = true; // 立即打断仍在酣战的主循环
+                }
+            };
+            __quorumCoordinator.Client.AllFightDone += __onAllFightDone;
+            // 先订阅再上报参与者（配额分母）；与投票同源 syncKey 保证一致
+            _ = __quorumCoordinator.ReportFightParticipantAsync(_currentFightSyncKey);
+            Logger.LogInformation("[联机][结束配额] 已启用，订阅 AllFightDone 并上报参与者 syncKey={Key}", _currentFightSyncKey);
+        }
+
         // 战斗操作
         var fightTask = Task.Run(async () =>
         {
@@ -802,6 +873,20 @@ public class AutoFightTask : ISoloTask
             _totolyEndCount = 0;
             _2ndEndFlag = false;
             LastEnemySeenAt = DateTime.UtcNow;
+
+            // return-to-point-stale-prev-position-drift-fix (b) 战斗开始首帧播种：
+            // 进入战斗、任何后台子任务（持续回点循环 / SeekAndFightAsync）首次 GetPosition 之前，
+            // 用开战点（FightWaypoint）坐标播种 Navigation 单例锚点，避免沿用上一段移动残留的
+            // _prevX/_prevY 导致首帧识别失败时局部匹配锚错（BC1）。验证"用开战点做前一个有效坐标"的推测。
+            // 仅 SetPrevPosition 覆写 prev，绝不 Navigation.Reset()（进程级共享单例）。
+            // 单机/联机共用同一战斗路径，FightWaypoint 单机也有值；识别成功立即用真值刷新 → 单机零回归。
+            // fightTask 任务体每场战斗只执行一次 → 天然"只播一次"。
+            var __fightWp = FightWaypoint;
+            if (__fightWp is not null)
+            {
+                var __seed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(__fightWp.X, __fightWp.Y);
+                Navigation.SetPrevPosition((float)__seed.X, (float)__seed.Y);
+            }
 
             #region 基于战斗检测经验值开关万叶拾取功能同步任务
             
@@ -834,7 +919,10 @@ public class AutoFightTask : ISoloTask
                 if (_taskParam.KazuhaContinuousReturn)
                 {
                     // 万叶专属循环（最高优先级，§3.11 一行不动）
-                    _ = Task.Run(() => KazuhaContinuousReturnLoopAsync(cts2.Token), cts2.Token);
+                    // fight-end-return-loop-not-joined-movement-overlap-fix:
+                    // 用专用回点 CTS（linked cts2）派生 token，保存 Task 引用供战斗结束 join。
+                    _returnLoopCts = CancellationTokenSource.CreateLinkedTokenSource(cts2.Token);
+                    _kazuhaReturnLoopTask = Task.Run(() => KazuhaContinuousReturnLoopAsync(_returnLoopCts.Token), _returnLoopCts.Token);
                 }
                 else if (_taskParam.FinishDetectConfig.ReturnToFightPointEnabled)
                 {
@@ -856,9 +944,12 @@ public class AutoFightTask : ISoloTask
                             intervalMs, triggerDistance, stopDistance,
                             timeTriggerEnabled, rotateFindEnemyEnabled, timeTriggerSeconds))
                     {
-                        _ = Task.Run(() => GeneralReturnToFightPointLoopAsync(
-                            cts2.Token, intervalMs, triggerDistance, stopDistance,
-                            timeTriggerEnabled, timeTriggerSeconds, rotateFindEnemyEnabled), cts2.Token);
+                        // fight-end-return-loop-not-joined-movement-overlap-fix:
+                        // 用专用回点 CTS（linked cts2）派生 token，保存 Task 引用供战斗结束 join。
+                        _returnLoopCts = CancellationTokenSource.CreateLinkedTokenSource(cts2.Token);
+                        _generalReturnLoopTask = Task.Run(() => GeneralReturnToFightPointLoopAsync(
+                            _returnLoopCts.Token, intervalMs, triggerDistance, stopDistance,
+                            timeTriggerEnabled, timeTriggerSeconds, rotateFindEnemyEnabled), _returnLoopCts.Token);
                     }
                     else
                     {
@@ -1489,6 +1580,52 @@ public class AutoFightTask : ISoloTask
 
         await fightTask;
 
+        // === 共享战斗配额结束同步：解订阅 AllFightDone（subscribe-before-action 配对清理）===
+        if (__onAllFightDone != null && __quorumCoordinator != null)
+        {
+            __quorumCoordinator.Client.AllFightDone -= __onAllFightDone;
+        }
+
+        // fight-end-return-loop-not-joined-movement-overlap-fix:
+        // 战斗结束：先 cancel 回点 CTS 立即打断进行中的 MoveCloseTo(万叶)/MoveTo(通用)，
+        // 再 join 两条后台回点循环，确保进入 PathExecutor 战后走回点流程前无并行移动子系统。
+        // 无循环（单机/联机非万叶+总开关关）时两 Task 引用均 null → 整段跳过（单机零回归）。
+        if (ReturnLoopJoinDecisions.ShouldJoin(_kazuhaReturnLoopTask != null, _generalReturnLoopTask != null))
+        {
+            try { _returnLoopCts?.Cancel(); }
+            catch (Exception ex) { Logger.LogWarning(ex, "[回点][join] cancel 回点 CTS 异常，忽略并继续 join"); }
+
+            var __returnLoopTasks = new List<Task>();
+            if (_kazuhaReturnLoopTask != null) __returnLoopTasks.Add(_kazuhaReturnLoopTask);
+            if (_generalReturnLoopTask != null) __returnLoopTasks.Add(_generalReturnLoopTask);
+            try
+            {
+                var __all = Task.WhenAll(__returnLoopTasks);
+                var __winner = await Task.WhenAny(__all, Task.Delay(ReturnLoopJoinTimeoutMs));
+                if (__winner != __all)
+                {
+                    Logger.LogWarning("[回点][join] 等待后台回点循环结束超时({Timeout}ms)，cancel 已发出，继续战后流程", ReturnLoopJoinTimeoutMs);
+                }
+                else if (__all.IsFaulted)
+                {
+                    // 循环内部已 catch OperationCanceledException return，正常不抛；此处兜底意外异常
+                    Logger.LogWarning(__all.Exception, "[回点][join] 后台回点循环以异常结束，已忽略");
+                }
+            }
+            catch (Exception ex)
+            {
+                // join 自身不可抛出致 Start 崩；循环内异常 / cancel 引发的 OCE 在此兜底吞掉并记录
+                Logger.LogWarning(ex, "[回点][join] join 后台回点循环异常，已忽略并继续");
+            }
+            finally
+            {
+                try { _returnLoopCts?.Dispose(); } catch { /* CTS 已 dispose 可恢复，忽略 */ }
+                _returnLoopCts = null;
+                _kazuhaReturnLoopTask = null;
+                _generalReturnLoopTask = null;
+            }
+        }
+
         if (_taskParam.KazuhaPickupEnabled && _taskParam.ExpKazuhaPickup && !_isExperiencePickup && (combatScenes.GetAvatars().Select( a => a.Name).Contains("枫原万叶") || combatScenes.GetAvatars().Select( a => a.Name).Contains("琴")))
         {
             TaskControl.Logger.LogInformation("基于怪物经验判断：{text} 经验值显示","等待");
@@ -1882,15 +2019,64 @@ public class AutoFightTask : ISoloTask
     
     private volatile bool _2ndEndFlag = false;
 
+    // === 共享战斗配额结束同步状态（multiplayer-shared-fight-end-quorum-sync spec）===
+    // 仅当 IsEnabled（联机+连接+房主开关）时启用；单机/开关关时三字段保持默认，CheckFightFinish 行为一字不变。
+    private volatile bool _quorumVoted;            // 本地是否已投过 done 票（每场战斗一次）
+    private volatile bool _allFightDoneReceived;   // 是否已收到本场 syncKey 的 AllFightDone 广播
+    private string _currentFightSyncKey = "";      // 本场战斗 syncKey（routeIndex:X:Y）
+
+    /// <summary>
+    /// 共享战斗配额结束协调：返回 true=应立即真结束（维持原语义 / 已收到全队广播）；
+    /// false=已投票，继续战斗循环等待 AllFightDone 或超时（multiplayer-shared-fight-end-quorum-sync spec）。
+    /// 未启用（单机/断连/开关关）时恒返回 true → 调用方走原"立即结束"逻辑（零回归）。
+    /// </summary>
+    private bool TryCoordinateSharedFightEnd()
+    {
+        var coordinator = BetterGenshinImpact.GameTask.AutoPathing.PathExecutor.CurrentMultiplayerCoordinator;
+        if (!SharedFightEndQuorumDecisions.IsEnabled(
+                coordinator != null,
+                coordinator?.IsConnected ?? false,
+                coordinator?.EffectiveConfig.SharedFightEndQuorumEnabled ?? false))
+        {
+            return true; // 未启用：维持原立即结束语义
+        }
+
+        if (_allFightDoneReceived) return true; // 已收到全队广播 → 真结束
+
+        if (!_quorumVoted)
+        {
+            _quorumVoted = true;
+            _ = coordinator!.ReportFightDoneAsync(_currentFightSyncKey); // fire-and-forget，内部静默失败
+            Logger.LogInformation("[联机][结束配额] 本地判定结束，已投票 done，继续战斗等待全队 syncKey={Key}", _currentFightSyncKey);
+        }
+        return false; // 继续战斗，不离开战斗点
+    }
+
     public async Task<bool> CheckFightFinish(int delayTime = 1500, int detectDelayTime = 450,CancellationToken ct = default,Avatar? avatar = null)
     {
         if (_totolyFlag || _fightDurationExceeded)
         {
             return false;
         }
-        
+
+        // 共享战斗配额结束（multiplayer-shared-fight-end-quorum-sync spec, design §11.4）：
+        // 已投票 → 不再按 L 做视觉检测（OpenPartySetupScreen），无论是否已收到广播（根除 D3 的"结束前多 L 一次"）。
+        //   - 已收到全队 AllFightDone 广播（_allFightDoneReceived=true）→ return true 真结束；
+        //   - 未收到广播 → return false 继续战斗输出，仅等广播（handler 置 FightEndTotoly）或战斗超时兜底。
+        // _quorumVoted 仅在功能启用时被置 true，单机/开关关时恒 false → 零回归。
+        if (_quorumVoted)
+        {
+            return _allFightDoneReceived;
+        }
+
         if(_totolyEndCount >= 1)
         {
+            // 共享战斗配额结束门控：未启用走原逻辑；启用则投票后继续战斗直到广播/超时
+            if (!TryCoordinateSharedFightEnd())
+            {
+                _totolyFlag = false;
+                return false;
+            }
             Logger.LogWarning("二次检查：战斗结束。");
             _2ndEndFlag = true;
             FightEndTotoly = true;
@@ -2062,6 +2248,12 @@ public class AutoFightTask : ISoloTask
                     _taskParam.FinishDetectConfig.EndModel && _taskParam.FinishDetectConfig.RotateFindEnemyEnabled
                         ? "派蒙模式"
                         : "默认模式");
+                // 共享战斗配额结束门控：未启用走原逻辑；启用则投票后继续战斗直到广播/超时
+                if (!TryCoordinateSharedFightEnd())
+                {
+                    _totolyFlag = false;
+                    return false;
+                }
                 //取消正在进行的换队
                 _2ndEndFlag = true;
                 FightEndTotoly = true;
@@ -2854,6 +3046,17 @@ public class AutoFightTask : ISoloTask
             TaskControl.Logger.LogInformation("[联机][万叶] 持续回点后台任务已启动 (interval={Interval}ms, threshold={Threshold:F1})",
                 returnIntervalMs, returnDistanceThreshold);
 
+            // return-to-point-stale-prev-position-drift-fix (c) 回点首帧播种（循环启动一次，Q8）：
+            // 回点循环首轮 GetPosition 之前用战斗点坐标播种，避免战后被怪推开残留导致
+            // "距战斗点 381 > 4.0" 类异常大距离（BC2）。只在 while 之前播一次，循环体每轮不覆写
+            // （不压制局部匹配连续帧累积）。与 PathExecutor.cs:838-846 联机万叶分支时序/调用栈不同，无重复。
+            var __returnWp = FightWaypoint;
+            if (__returnWp is not null)
+            {
+                var __seed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(__returnWp.X, __returnWp.Y);
+                Navigation.SetPrevPosition((float)__seed.X, (float)__seed.Y);
+            }
+
             while (!token.IsCancellationRequested && !FightEndTotoly)
             {
                 try
@@ -2914,7 +3117,17 @@ public class AutoFightTask : ISoloTask
                     // 战斗中玩家与战斗点距离一般较小（被怪推开 1-5 单位），MoveCloseTo 25 步小碎步就够；
                     // 用 MoveTo 真寻路反而可能因为有寻路逻辑导致绕远 / 翻越障碍。
                     // 默认 closeDistance=2.0 / tailDelayMs=null / maxSteps=25 即可（原 MoveCloseTo 行为）。
-                    await pathExecutor.MoveCloseTo(fightWaypoint);
+                    // 标记回点移动进行中：让 D（SeekAndFightAsync 两处 MoveMouseBy）让位。
+                    // try-finally 保证任何退出路径都复位计数。
+                    AutoFightTask.EnterReturnToFightPoint();
+                    try
+                    {
+                        await pathExecutor.MoveCloseTo(fightWaypoint);
+                    }
+                    finally
+                    {
+                        AutoFightTask.ExitReturnToFightPoint();
+                    }
                     lastReturnAt = DateTime.UtcNow;
                 }
                 catch (OperationCanceledException) { return; }
@@ -2964,6 +3177,16 @@ public class AutoFightTask : ISoloTask
                 "[AutoFight][回点] 通用版后台任务已启动 (interval={Interval}ms, trigger={Trigger:F1}, stop={Stop:F1}, timeTrigger={TimeEnabled} {TimeSec}s)",
                 intervalMs, triggerDistance, stopDistance,
                 timeTriggerEnabled && rotateFindEnemyEnabled, timeTriggerSeconds);
+
+            // return-to-point-stale-prev-position-drift-fix (c) 回点首帧播种（循环启动一次，Q8）：
+            // 单机 / 联机未开万叶聚物的通用回点缺口——首轮测距前用战斗点坐标播种，避免沿用战后残留。
+            // 只在 while 之前播一次，循环体每轮不覆写。
+            var __returnWp = FightWaypoint;
+            if (__returnWp is not null)
+            {
+                var __seed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(__returnWp.X, __returnWp.Y);
+                Navigation.SetPrevPosition((float)__seed.X, (float)__seed.Y);
+            }
 
             while (!token.IsCancellationRequested && !FightEndTotoly)
             {
@@ -3096,6 +3319,9 @@ public class AutoFightTask : ISoloTask
                         }
                     }, endWatcher.Token);
 
+                    // 标记回点移动进行中：让 D（SeekAndFightAsync 两处 MoveMouseBy）让位。
+                    // Enter 放在 try 第一行、Exit 放在既有 finally 内，与 W 键释放一同执行，保证任何退出路径都复位。
+                    AutoFightTask.EnterReturnToFightPoint();
                     try
                     {
                         // 每轮新建 PathExecutor，传入 linked CTS Token 以便 FightEndTotoly 时立即打断
@@ -3106,6 +3332,7 @@ public class AutoFightTask : ISoloTask
                     }
                     finally
                     {
+                        AutoFightTask.ExitReturnToFightPoint();
                         endWatcher.Cancel();
                         try { await watcherTask; } catch { /* ignore */ }
                         // 兜底释放 W 键，避免战斗结束 / 取消时角色继续前进

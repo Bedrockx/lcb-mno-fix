@@ -113,8 +113,10 @@ public class SingleModeNullRefPreservationTest
         // 成员等待事件
         Assert.Contains("HostRouteListReady", content);
 
-        // 成员直接拉取兜底
-        Assert.Contains("GetHostRouteListAsync", content);
+        // 成员直接拉取兜底（multiplayer-member-skip-round-stuck-roundend-sync-fix：
+        // 原 GetHostRouteListAsync + IsHostRouteListUploadedAsync 两次独立查询已合并为
+        // 一次原子 GetHostRouteListStatusAsync，消除 TOCTOU）
+        Assert.Contains("GetHostRouteListStatusAsync", content);
 
         // 成员分支注释标识
         Assert.Contains("成员：等待房主路线列表就绪事件", content);
@@ -134,8 +136,8 @@ public class SingleModeNullRefPreservationTest
         // 90秒超时
         Assert.Contains("TimeSpan.FromSeconds(90)", content);
 
-        // 超时日志
-        Assert.Contains("等待房主上传路线列表超时（90秒），停止锄地", content);
+        // 超时日志（multiplayer-host-empty-route-member-wait-timeout-fix 后文案含"房主未上传"）
+        Assert.Contains("等待房主上传路线列表超时（90秒", content);
     }
 
     // ─────────────────────────────────────────────────────────────────────────

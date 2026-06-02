@@ -134,6 +134,11 @@ public class RoomManager
                     if (set.Remove(existing.ConnectionId))
                         set.Add(connectionId);
                 }
+                foreach (var set in room.FightParticipantSets.Values)
+                {
+                    if (set.Remove(existing.ConnectionId))
+                        set.Add(connectionId);
+                }
                 // 如果被替换的是房主，同步更新 HostConnectionId
                 if (room.HostConnectionId == existing.ConnectionId)
                     room.HostConnectionId = connectionId;
@@ -151,6 +156,11 @@ public class RoomManager
                         set.Add(connectionId);
                 }
                 foreach (var set in room.FightDoneSets.Values)
+                {
+                    if (set.Remove(existingByName.ConnectionId))
+                        set.Add(connectionId);
+                }
+                foreach (var set in room.FightParticipantSets.Values)
                 {
                     if (set.Remove(existingByName.ConnectionId))
                         set.Add(connectionId);
@@ -195,6 +205,8 @@ public class RoomManager
                     foreach (var set in room.ArrivalSets.Values)
                         set.Remove(connectionId);
                     foreach (var set in room.FightDoneSets.Values)
+                        set.Remove(connectionId);
+                    foreach (var set in room.FightParticipantSets.Values)
                         set.Remove(connectionId);
                     room.WorldJoinedSet.Remove(connectionId);
                     room.RouteVerificationDoneSet.Remove(connectionId);
@@ -272,6 +284,15 @@ public class RoomManager
 
         lock (room)
         {
+            // 周期复位（design §11.3）：与 RecordFightParticipant 对称，防止"投票先于参与者上报到达"
+            // 时读到上一轮残留集合（网络乱序兜底，D2）。
+            if (room.FightDoneBroadcasted.Contains(syncPointId))
+            {
+                room.FightParticipantSets.Remove(syncPointId);
+                room.FightDoneSets.Remove(syncPointId);
+                room.FightDoneBroadcasted.Remove(syncPointId);
+            }
+
             if (!room.FightDoneSets.TryGetValue(syncPointId, out var doneSet))
             {
                 doneSet = [];
@@ -279,7 +300,47 @@ public class RoomManager
             }
 
             doneSet.Add(connectionId);
-            return AllOnlineMembersReported(room, doneSet);
+
+            // multiplayer-shared-fight-end-quorum-sync: 开关关闭维持现状全员语义（零回归）
+            if (!(room.HostConfig?.SharedFightEndQuorumEnabled ?? false))
+                return AllOnlineMembersReported(room, doneSet);
+
+            // 开关开启：配额 + 战斗参与者分母
+            var participants = room.FightParticipantSets.TryGetValue(syncPointId, out var ps) && ps.Count > 0
+                ? ps
+                : doneSet;
+            var reached = SharedFightEndQuorumDecisions.IsQuorumReached(
+                doneSet.Count, participants.Count, room.HostConfig?.SharedFightEndQuorumRatio ?? 0.5);
+
+            if (reached)
+            {
+                // 标记该 syncKey 已广播终态 → 下一拨参与者/投票触发周期复位（design §11.3）
+                room.FightDoneBroadcasted.Add(syncPointId);
+            }
+            return reached;
+        }
+    }
+
+    /// <summary>记录战斗参与者（按 syncKey 分组，配额分母用）。multiplayer-shared-fight-end-quorum-sync spec。</summary>
+    public void RecordFightParticipant(string roomCode, string syncKey, string connectionId)
+    {
+        if (!_rooms.TryGetValue(roomCode, out var room)) return;
+        lock (room)
+        {
+            // 周期复位（design §11.3）：若该 syncKey 上一轮已广播终态，首个新参与者触发清空，开启新一轮，
+            // 消除上一拨战斗在同一战斗点的残留 connectionId/done 票（D2 污染修复）。
+            if (room.FightDoneBroadcasted.Contains(syncKey))
+            {
+                room.FightParticipantSets.Remove(syncKey);
+                room.FightDoneSets.Remove(syncKey);
+                room.FightDoneBroadcasted.Remove(syncKey);
+            }
+            if (!room.FightParticipantSets.TryGetValue(syncKey, out var set))
+            {
+                set = [];
+                room.FightParticipantSets[syncKey] = set;
+            }
+            set.Add(connectionId);
         }
     }
 

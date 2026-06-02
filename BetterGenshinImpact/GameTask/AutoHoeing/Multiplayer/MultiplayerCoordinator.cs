@@ -67,6 +67,9 @@ public class MultiplayerCoordinator : IAsyncDisposable
     /// </summary>
     public AutoHoeingConfig EffectiveConfig => _config;
 
+    /// <summary>暴露底层 CoordinatorClient 供 AutoFightTask 订阅 AllFightDone 事件（multiplayer-shared-fight-end-quorum-sync spec）。</summary>
+    public CoordinatorClient Client => _client;
+
     // === 连续超时控制（需求 5）===
     private int _consecutiveSyncTimeoutCount;
     private int _consecutiveSkipCount;
@@ -412,6 +415,32 @@ public class MultiplayerCoordinator : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[联机] 上报战斗状态失败");
+        }
+    }
+
+    /// <summary>上报战斗参与者（multiplayer-shared-fight-end-quorum-sync spec）。</summary>
+    public async Task ReportFightParticipantAsync(string syncKey)
+    {
+        try
+        {
+            await _client.NotifyFightParticipantAsync(syncKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机][结束配额] 上报战斗参与者失败 syncKey={Key}", syncKey);
+        }
+    }
+
+    /// <summary>上报本地战斗完成投票（multiplayer-shared-fight-end-quorum-sync spec）。</summary>
+    public async Task ReportFightDoneAsync(string syncKey)
+    {
+        try
+        {
+            await _client.NotifyFightDoneAsync(syncKey);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机][结束配额] 上报战斗完成投票失败 syncKey={Key}", syncKey);
         }
     }
 

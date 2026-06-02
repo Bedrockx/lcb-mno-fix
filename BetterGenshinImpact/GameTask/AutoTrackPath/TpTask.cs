@@ -239,7 +239,7 @@ public class TpTask
                 // 打开地图前释放所有按键
                 Simulation.ReleaseAllKey();
                 await Delay(20, ct);
-                await CheckInBigMapUi();
+                await CheckInBigMapUi(i);
                 return;
             }
             catch (Exception e) when (e is NormalEndException || e is TaskCanceledException)
@@ -296,6 +296,7 @@ public class TpTask
             await SwitchArea(MapTypesExtensions.ParseFromName(mapName).GetDescription());
         }
         await Delay(50, ct);
+        await WaitMapStableOrTimeoutAsync(1000); 
 
         Rect bigMapInAllMapRect;
         // 3. 调整初始缩放等级，避免识别中心点失败
@@ -354,6 +355,7 @@ public class TpTask
         }
         
         // 5. 判断传送点是否在当前界面，若否则移动地图
+        await WaitMapStableOrTimeoutAsync(1000,20,5); // fast-drag-recognition-acceleration spec
         bigMapInAllMapRect = GetBigMapRect(mapName);
         var retryCount = 0;
         do
@@ -639,14 +641,14 @@ public class TpTask
         return (clickX, clickY);
     }
 
-    public async Task CheckInBigMapUi()
+    public async Task CheckInBigMapUi(int retryCount = 0)
     {
         // 尝试打开地图失败后，先回到主界面后再次尝试打开地图
-        if (!await TryToOpenBigMapUi())
+        if (!await TryToOpenBigMapUi(retryCount))
         {
             await new ReturnMainUiTask().Start(ct);
             await Delay(500, ct);
-            if (!await TryToOpenBigMapUi())
+            if (!await TryToOpenBigMapUi(retryCount))
             {
                 throw new RetryException("打开大地图失败，请检查按键绑定中「打开地图」按键设置是否和原神游戏中一致！");
             }
@@ -656,11 +658,8 @@ public class TpTask
     /// <summary>
     /// 尝试打开地图界面
     /// </summary>
-    private async Task<bool> TryToOpenBigMapUi()
+    private async Task<bool> TryToOpenBigMapUi(int retryCount = 0)
     {
-        
-        await WaitMapStableOrTimeoutAsync(600);
-        
         // M 打开地图识别当前位置，中心点为当前位置
         using var ra1 = CaptureToRectArea();
         if (Bv.IsInBigMapUi(ra1))
@@ -669,12 +668,17 @@ public class TpTask
         }
 
         Simulation.SendInput.SimulateAction(GIActions.OpenMap);
-
+        
         // 加速识别模式：轮询等大地图 UI 出现，兜底 2500ms（≈旧逻辑 1000+500*3 上限）
         // fast-drag-recognition-acceleration spec / step 1 boot delay optimization
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
         {
-            return await WaitForBigMapUiOrTimeoutAsync(timeoutMs: 2500);
+            await WaitMapStableOrTimeoutAsync(timeoutMs: 1000); 
+            using var ra2 = CaptureToRectArea();
+            if (ra2.Find(QuickTeleportAssets.Instance.MapScaleButtonRo).IsExist())
+            {
+                return true;
+            }
         }
 
         // 旧行为：固定 1000ms 后再 3 次 500ms 重试
@@ -684,7 +688,7 @@ public class TpTask
             using var ra12 = CaptureToRectArea();
             if (!Bv.IsInBigMapUi(ra12))
             {
-                await Delay(50, ct);
+                await Delay(50+retryCount*100, ct);
             }
             else
             {
@@ -842,7 +846,8 @@ public class TpTask
                 {
                     Logger.LogDebug("缩放后依然失败，尝试强制跃迁...");
                     await ForceJumpToTargetArea(x, y, mapName); 
-                    await Delay(300, ct);
+                    await Delay(100, ct);
+                    await WaitMapStableOrTimeoutAsync(1000);
                     
                     try
                     {
@@ -864,7 +869,8 @@ public class TpTask
                 if (_tpConfig.MapMoveStepDivisor)Simulation.SendInput.Mouse.LeftButtonUp();
                 Logger.LogDebug("缩放已在最佳区间附近，直接尝试强制跃迁...");
                 await ForceJumpToTargetArea(x, y, mapName); 
-                await Delay(300, ct);
+                await Delay(100, ct);
+                await WaitMapStableOrTimeoutAsync(1000);
                 
                 try
                 {
@@ -1216,7 +1222,7 @@ public class TpTask
     /// <param name="timeoutMs">兜底超时（与原固定 Delay 等值），超时即返回</param>
     /// <param name="pollMs">每次轮询间隔，默认 30ms（约一帧）</param>
     /// <param name="stableHits">连续多少次采样像素一致视为稳定，默认 2</param>
-    private async Task WaitMapStableOrTimeoutAsync(int timeoutMs, int pollMs = 30, int stableHits = 3)
+    private async Task WaitMapStableOrTimeoutAsync(int timeoutMs, int pollMs = 30, int stableHits = 2)
     {
         long deadline = Environment.TickCount + timeoutMs;
         Vec3b? prev1 = null, prev2 = null;
@@ -1227,19 +1233,13 @@ public class TpTask
             try
             {
                 using var ra = CaptureToRectArea();
-                var p1 = ra.SrcMat.At<Vec3b>(960, 540);
+                var p1 = ra.SrcMat.At<Vec3b>(860, 520);
                 var p2 = ra.SrcMat.At<Vec3b>(860, 540);
-                if (prev1.HasValue && p1 == prev1.Value && p2 == prev2!.Value)
+                if (ra.Find(QuickTeleportAssets.Instance.MapScaleButtonRo).IsExist() && prev1.HasValue && p1 == prev1.Value && p2 == prev2!.Value)
                 {
                     if (++hits >= stableHits)
                     {
-                        // await Delay(50, ct);
-                        // using var ra2 = CaptureToRectArea();
-                        // if (Bv.BigMapIsUnderground(ra2))
-                        // {
-                        //     using var ra3 = CaptureToRectArea();
-                        //     var aa =ra3.Find(_assets.MapUndergroundToGroundButtonRo, rg => rg.Click());
-                        // }
+                        Logger.LogDebug("检测到地图稳定");
                         return;
                     }
                 }
@@ -1258,6 +1258,7 @@ public class TpTask
             }
             await Delay(pollMs, ct);
         }
+        Logger.LogDebug("检测到地图失败");
     }
 
     /// <summary>
@@ -1385,8 +1386,13 @@ public class TpTask
             if (mapScaleButtonRa.IsExist())
             {
                 try
-                {
-                    rect = MapManager.GetMap(mapName, _mapMatchingMethod).GetBigMapRect(ra.CacheGreyMat);
+                {  
+                    using var ra2 = CaptureToRectArea();
+                    using var mapScaleButtonRa2 = ra2.Find(QuickTeleportAssets.Instance.MapScaleButtonRo);
+                    if (mapScaleButtonRa2.IsExist())
+                    {
+                        rect = MapManager.GetMap(mapName, _mapMatchingMethod).GetBigMapRect(ra.CacheGreyMat);
+                    }
                 }
                 catch (Exception)
                 {
@@ -1405,7 +1411,7 @@ public class TpTask
             {
                 throw new RetryException("当前不在地图界面");
             }
-        }, TimeSpan.FromMilliseconds(500), 5);
+        }, TimeSpan.FromMilliseconds(60), 20);
 
         if (rect == default)
         {
@@ -1425,42 +1431,60 @@ public class TpTask
 
     public Point2f GetBigMapCenterPoint(string mapName)
     {
-        // 判断是否在地图界面
-        using var ra = CaptureToRectArea();
-        using var mapScaleButtonRa = ra.Find(QuickTeleportAssets.Instance.MapScaleButtonRo);
-        if (mapScaleButtonRa.IsExist())
+        Point2f p = new Point2f();
+        bool inMapUi = false;
+
+        // 大地图可能打开较慢，重试 5 次、每次间隔 100 毫秒，直到识别到非空位置
+        for (int attempt = 0; attempt < 10; attempt++)
         {
-            Point2f p;
-            try
+            // 判断是否在地图界面
+            using var ra = CaptureToRectArea();
+            using var mapScaleButtonRa = ra.Find(QuickTeleportAssets.Instance.MapScaleButtonRo);
+            if (mapScaleButtonRa.IsExist())
             {
-                p = MapManager.GetMap(mapName, _mapMatchingMethod).GetBigMapPosition(ra.CacheGreyMat);
-            }
-            catch (Exception ex)
-            {
-                throw new MapPositionNotRecognizedException("大地图特征点匹配引发异常：" + ex.Message, ex);
+                inMapUi = true;
+                try
+                {
+                    p = MapManager.GetMap(mapName, _mapMatchingMethod).GetBigMapPosition(ra.CacheGreyMat);
+                }
+                catch (Exception ex)
+                {
+                    throw new MapPositionNotRecognizedException("大地图特征点匹配引发异常：" + ex.Message, ex);
+                }
+
+                if (!p.IsEmpty())
+                {
+                    break;
+                }
             }
 
-            if (p.IsEmpty())
+            if (attempt < 4)
             {
-                if (_tpConfig.MapMoveStepDivisor)Simulation.SendInput.Mouse.LeftButtonUp();
-                throw new MapPositionNotRecognizedException("大地图特征点匹配识别位置失败");
+                Thread.Sleep(70);
             }
-
-            Debug.WriteLine("识别大地图在全地图位置：" + p);
-            // 提瓦特大陆由于用的256的图，需要做特殊逻辑
-            var (x, y) = (p.X, p.Y);
-            if (mapName == MapTypes.Teyvat.ToString())
-            {
-                (x, y) = (p.X * TeyvatMap.BigMap256ScaleTo2048, p.Y * TeyvatMap.BigMap256ScaleTo2048);
-            }
-
-            return MapManager.GetMap(mapName, _mapMatchingMethod).ConvertImageCoordinatesToGenshinMapCoordinates(new Point2f(x, y))!.Value;
         }
-        else
+
+        if (!inMapUi)
         {
             if (_tpConfig.MapMoveStepDivisor)Simulation.SendInput.Mouse.LeftButtonUp();
             throw new InvalidOperationException("当前不在地图界面");
         }
+
+        if (p.IsEmpty())
+        {
+            if (_tpConfig.MapMoveStepDivisor)Simulation.SendInput.Mouse.LeftButtonUp();
+            throw new MapPositionNotRecognizedException("大地图特征点匹配识别位置失败");
+        }
+
+        Debug.WriteLine("识别大地图在全地图位置：" + p);
+        // 提瓦特大陆由于用的256的图，需要做特殊逻辑
+        var (x, y) = (p.X, p.Y);
+        if (mapName == MapTypes.Teyvat.ToString())
+        {
+            (x, y) = (p.X * TeyvatMap.BigMap256ScaleTo2048, p.Y * TeyvatMap.BigMap256ScaleTo2048);
+        }
+
+        return MapManager.GetMap(mapName, _mapMatchingMethod).ConvertImageCoordinatesToGenshinMapCoordinates(new Point2f(x, y))!.Value;
     }
 
     /// <summary>
@@ -1591,7 +1615,7 @@ public class TpTask
     {
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
         {
-            await WaitMapStableOrTimeoutAsync(timeoutMs: 500);
+            await WaitMapStableOrTimeoutAsync(timeoutMs: 3000);
         }
         
         GameCaptureRegion.GameRegionClick((rect, scale) => (rect.Width - 160 * scale, rect.Height - 60 * scale));
@@ -1601,6 +1625,7 @@ public class TpTask
         // fast-drag-recognition-acceleration spec / SwitchArea menu popup optimization
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
         {
+            await Delay(100, ct);
             await WaitForElementOrTimeoutAsync(QuickTeleportAssets.Instance.MapCloseButtonWhiteRo, timeoutMs:1000);
         }
         else
@@ -1726,8 +1751,8 @@ public class TpTask
         using var mapChooseIconRoi = imageRegion.CacheGreyMat[_assets.MapChooseIconRoi].Clone();
         var rResultList = MatchTemplateHelper.MatchMultiPicForOnePic(mapChooseIconRoi, _assets.MapChooseIconGreyMatList, isHdrCapture ? 0.7 : 0.8);
         // 按高度排序
-        if (rResultList.Count > 0)
-        {
+        if (rResultList.Count > 0) {
+           
             rResultList = [.. rResultList.OrderBy(x => x.Y)];
             // 点击最高的
             foreach (var iconRect in rResultList)
@@ -1749,7 +1774,7 @@ public class TpTask
                 TaskControl.Logger.LogInformation("传送：点击 {Option}", textRegion.Text.Replace(">", ""));
                 var time = TaskContext.Instance().Config.QuickTeleportConfig.TeleportListClickDelay;
                 time = time < 500 ? 500 : time;
-                Thread.Sleep(_tpConfig.MapMoveStepDivisor?100:time);
+                Thread.Sleep(_tpConfig.MapMoveStepDivisor?200:time);
                 ra.Click();
                 hasMapChooseIcon = true;
                 break;
@@ -1773,7 +1798,16 @@ public class TpTask
     /// <returns></returns>
     public double GetBigMapZoomLevel(ImageRegion region)
     {
-        var s = Bv.GetBigMapScale(region);
+        //失败后重试2次
+        double s = 0;
+        for (int i = 0; i < 10; i++)
+        {
+            s = Bv.GetBigMapScale(region);
+            if( s > 0) break;
+             TaskControl.Logger.LogWarning("获取大地图缩放级别失败，重试中...（{Attempt}/2）", i + 1);
+             Thread.Sleep(100);
+        }
+        
         // 1~6 的缩放等级
         return (-5 * s) + 6;
     }

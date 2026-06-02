@@ -422,6 +422,10 @@ public class AutoHoeingTask : ISoloTask
             _config.FastSyncPathingDistance = 10.0;
             _config.FastSyncTeleportLoadingDelayMs = 0;
 
+            // === 共享战斗配额结束同步重置（multiplayer-shared-fight-end-quorum-sync spec）===
+            _config.SharedFightEndQuorumEnabled = false;
+            _config.SharedFightEndQuorumRatio = 0.5;
+
             ApplySettingsOverride();
         }
 
@@ -755,6 +759,9 @@ public class AutoHoeingTask : ISoloTask
                     FastSyncPointEnabled = _config.FastSyncPointEnabled,
                     FastSyncPathingDistance = _config.FastSyncPathingDistance,
                     FastSyncTeleportLoadingDelayMs = _config.FastSyncTeleportLoadingDelayMs,
+                    // === 共享战斗配额结束同步上传（multiplayer-shared-fight-end-quorum-sync spec）===
+                    SharedFightEndQuorumEnabled = _config.SharedFightEndQuorumEnabled,
+                    SharedFightEndQuorumRatio = _config.SharedFightEndQuorumRatio,
                 };
                 
                 // 房主上传配置，带重试机制（最多3次）
@@ -826,6 +833,8 @@ public class AutoHoeingTask : ISoloTask
                 _config.MutualWaitStableSeconds, _config.MaxConsecutiveCollectiveSkips);
             _logger.LogInformation("[联机] 快速同步点抢报：启用={E}, 路径距离阈值={D:F1}米, 传送延迟={T}ms",
                 _config.FastSyncPointEnabled, _config.FastSyncPathingDistance, _config.FastSyncTeleportLoadingDelayMs);
+            _logger.LogInformation("[联机] 共享战斗配额结束同步：启用={E}, 配额比例={R:F2}",
+                _config.SharedFightEndQuorumEnabled, _config.SharedFightEndQuorumRatio);
             _logger.LogInformation("[联机] =====================================");
 
             _multiplayerCoordinator.OnDegraded += reason =>
@@ -1134,6 +1143,9 @@ public class AutoHoeingTask : ISoloTask
                         _config.FastSyncPointEnabled = hostConfig.FastSyncPointEnabled;
                         _config.FastSyncPathingDistance = FastSyncDecisions.ClampPathingDistance(hostConfig.FastSyncPathingDistance);
                         _config.FastSyncTeleportLoadingDelayMs = FastSyncDecisions.ClampTeleportDelay(hostConfig.FastSyncTeleportLoadingDelayMs);
+                        // === 共享战斗配额结束同步同步（multiplayer-shared-fight-end-quorum-sync spec）===
+                        _config.SharedFightEndQuorumEnabled = hostConfig.SharedFightEndQuorumEnabled;
+                        _config.SharedFightEndQuorumRatio = SharedFightEndQuorumDecisions.ClampRatio(hostConfig.SharedFightEndQuorumRatio);
 
                         // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                         PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -1891,6 +1903,9 @@ public class AutoHoeingTask : ISoloTask
                     _config.FastSyncPointEnabled = hostConfig.FastSyncPointEnabled;
                     _config.FastSyncPathingDistance = FastSyncDecisions.ClampPathingDistance(hostConfig.FastSyncPathingDistance);
                     _config.FastSyncTeleportLoadingDelayMs = FastSyncDecisions.ClampTeleportDelay(hostConfig.FastSyncTeleportLoadingDelayMs);
+                    // === 共享战斗配额结束同步同步（multiplayer-shared-fight-end-quorum-sync spec，多世界轮换块）===
+                    _config.SharedFightEndQuorumEnabled = hostConfig.SharedFightEndQuorumEnabled;
+                    _config.SharedFightEndQuorumRatio = Multiplayer.SharedFightEndQuorumDecisions.ClampRatio(hostConfig.SharedFightEndQuorumRatio);
 
                     // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                     PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -2027,7 +2042,21 @@ public class AutoHoeingTask : ISoloTask
             var waitMs = Math.Min(_config.PartyTimeoutSeconds / 10 * 1000, 15000);
             _logger.LogInformation("[多世界] 房主等待成员离开（最多 {T}s，踢出按钮归零即提前退出）后关闭房间", waitMs / 1000);
 
-            // 轮询提前退出：每轮回主界面→开 F2→数踢出按钮，连续 5 次为 0 即确认无残留成员，提前继续。
+            // 方向 B：进入等待前建立一次稳定起点（回主界面，关闭可能的菜单/弹窗），
+            // F2 在首轮 CountKickButtonsInF2Async 内打开一次，之后停留 F2 每轮仅截图+计数。
+            try
+            {
+                await new BetterGenshinImpact.GameTask.Common.Job.ReturnMainUiTask().Start(_ct);
+                await Task.Delay(500, _ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // 可恢复：建立起点失败按"首轮检测自动开 F2"处理，不中断退世界流程
+                _logger.LogWarning(ex, "[多世界] 进入等待阶段回主界面异常，首轮将自动打开 F2");
+            }
+
+            // 轮询提前退出：停留 F2 每轮截图→数踢出按钮，连续 3 次为 0 即确认无残留成员，提前继续。
             // 真实墙钟累计（含检测耗时），到 waitMs 兜底强制继续。间隔固定 1000ms。
             long fallbackMs = waitMs;
             var swStart = Environment.TickCount;
@@ -2036,9 +2065,9 @@ public class AutoHoeingTask : ISoloTask
             {
                 _ct.ThrowIfCancellationRequested();
                 long elapsed = Environment.TickCount - swStart;
-                int kickCount = await autoParty.CountMembersRemainingInHostWorldAsync(_ct);
+                int kickCount = await autoParty.CountKickButtonsInF2Async(_ct);
                 consecutiveZero = HostLeaveEarlyExitDecisions.NextConsecutiveZero(consecutiveZero, kickCount);
-                var leaveDecision = HostLeaveEarlyExitDecisions.Decide(kickCount, consecutiveZero, elapsed, fallbackMs, 5);
+                var leaveDecision = HostLeaveEarlyExitDecisions.Decide(kickCount, consecutiveZero, elapsed, fallbackMs, 3);
                 if (leaveDecision == HostLeaveWaitDecision.EarlyExit)
                 {
                     _logger.LogInformation("[多世界] 房主检测到成员已全部离开（连续 {N} 次 0 踢出按钮），提前退出等待", consecutiveZero);
@@ -2320,8 +2349,10 @@ public class AutoHoeingTask : ISoloTask
                 List<string> hostRouteNames;
                 try
                 {
-                    // 先尝试直接拉取（房主可能已经上传了）
-                    var existing = await _coordinatorClientRef.GetHostRouteListAsync();
+                    // 先尝试直接拉取（房主可能已经上传了）。
+                    // 原子查询 (uploaded, names) 同源，消除 TOCTOU：避免房主在两次独立查询之间上传非空列表，
+                    // 导致拿到 uploaded=true + count=0 误判跳过（multiplayer-member-skip-round-stuck-roundend-sync-fix）。
+                    var (hostUploadedNow, existing) = await _coordinatorClientRef.GetHostRouteListStatusAsync();
                     if (existing.Count > 0)
                     {
                         hostRouteNames = existing;
@@ -2329,18 +2360,49 @@ public class AutoHoeingTask : ISoloTask
                     }
                     else
                     {
-                        // 等待推送事件，最多90秒
+                        // 拿到空列表：可能是"房主还没上传"，也可能是"房主上传了空列表（CD全过滤）"。
+                        // hostUploadedNow 与 existing 来自同一原子快照：uploaded=true 且 count=0 才是真·空列表。
+                        // 不能用 IsHostReadyAsync 代理：房主在组队阶段就上报就绪（早于路线上传），会误判。
+                        // multiplayer-host-empty-route-member-wait-timeout-fix（方案A）+ multiplayer-member-skip-round-stuck-roundend-sync-fix（原子快照）。
+                        if (HostRouteListDecisions.ClassifyMemberRouteListResult(hostUploadedNow, 0, timedOut: false)
+                            == HostRouteListDecisions.MemberRouteListOutcome.SkipRoundEmpty)
+                        {
+                            _logger.LogWarning("[联机] 房主已上传且路线列表为空（可能全部在CD中），跳过本轮执行");
+                            return;
+                        }
+
+                        // 房主尚未上传：等待推送事件，最多90秒
                         _logger.LogInformation("[联机] 等待房主上传路线列表...");
                         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(90));
                         using var linked = CancellationTokenSource.CreateLinkedTokenSource(_ct, timeoutCts.Token);
                         using var reg = linked.Token.Register(() => routeListTcs.TrySetResult([]));
                         hostRouteNames = await routeListTcs.Task;
                         if (hostRouteNames.Count > 0)
+                        {
                             _logger.LogInformation("[联机] 收到房主路线列表推送，共 {Count} 条", hostRouteNames.Count);
+                        }
                         else
                         {
-                            _logger.LogError("[联机] 等待房主上传路线列表超时（90秒），停止锄地");
-                            return;
+                            // 等待结束仍为空：再查一次服务端原子快照，区分"房主路线为空"与"纯超时未收到"。
+                            var (hostUploadedAfter, namesAfter) = await _coordinatorClientRef.GetHostRouteListStatusAsync();
+                            // 极端情况：等待期间推送丢失但服务端已有非空列表 → 用快照内容兜底正常继续。
+                            if (namesAfter.Count > 0)
+                            {
+                                hostRouteNames = namesAfter;
+                                _logger.LogInformation("[联机] 二次确认获取到房主路线列表，共 {Count} 条", hostRouteNames.Count);
+                            }
+                            else
+                            {
+                                var outcome = HostRouteListDecisions.ClassifyMemberRouteListResult(hostUploadedAfter, namesAfter.Count, timedOut: true);
+                                if (outcome == HostRouteListDecisions.MemberRouteListOutcome.SkipRoundEmpty)
+                                {
+                                    _logger.LogWarning("[联机] 房主已上传且路线列表为空（可能全部在CD中），跳过本轮执行");
+                                    return;
+                                }
+
+                                _logger.LogError("[联机] 等待房主上传路线列表超时（90秒，房主未上传），停止本轮锄地");
+                                return;
+                            }
                         }
                     }
                 }
@@ -3360,6 +3422,10 @@ public class AutoHoeingTask : ISoloTask
                 Get("fastSyncPathingDistance", _config.FastSyncPathingDistance));
             _config.FastSyncTeleportLoadingDelayMs = FastSyncDecisions.ClampTeleportDelay(
                 Get("fastSyncTeleportLoadingDelayMs", _config.FastSyncTeleportLoadingDelayMs));
+            // === 共享战斗配额结束同步（multiplayer-shared-fight-end-quorum-sync spec）===
+            _config.SharedFightEndQuorumEnabled = Get("sharedFightEndQuorumEnabled", _config.SharedFightEndQuorumEnabled);
+            _config.SharedFightEndQuorumRatio = Multiplayer.SharedFightEndQuorumDecisions.ClampRatio(
+                Get("sharedFightEndQuorumRatio", _config.SharedFightEndQuorumRatio));
         }
         else
         {
@@ -3383,6 +3449,9 @@ public class AutoHoeingTask : ISoloTask
             _config.FastSyncPointEnabled = false;
             _config.FastSyncPathingDistance = 10.0;
             _config.FastSyncTeleportLoadingDelayMs = 0;
+            // === 共享战斗配额结束同步（单机重置为默认值）===
+            _config.SharedFightEndQuorumEnabled = false;
+            _config.SharedFightEndQuorumRatio = 0.5;
 
             // 单机模式：重置固定调试线路字段，避免联机全局配置残留影响
             // 如果 settings 显式包含这些键，后续 ContainsKey 逻辑会覆盖回来
@@ -3569,6 +3638,10 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "fastSyncPointEnabled", Label = "启用快速同步点抢报\n开启后路径同步点距离 ≤ 阈值 / 传送 loading 命中即抢先上报，减少队伍互等时间。包括战斗点（O1=A）", Type = "bool", DefaultValue = config.FastSyncPointEnabled },
             new() { Name = "fastSyncPathingDistance", Label = "路径抢报距离阈值（米，原神坐标系）\n距 waypoint ≤ 阈值时抢报，范围 5-30，默认 10。低值更保守、高值更激进", Type = "number", DefaultValue = config.FastSyncPathingDistance },
             new() { Name = "fastSyncTeleportLoadingDelayMs", Label = "传送 loading 抢报延迟（毫秒）\nloading 命中后延迟多少毫秒抢报，范围 0-3000，默认 0。高网络延迟环境可上调", Type = "number", DefaultValue = config.FastSyncTeleportLoadingDelayMs },
+
+            // ===== 共享战斗配额结束同步（multiplayer-shared-fight-end-quorum-sync spec, host-controlled）=====
+            new() { Name = "sharedFightEndQuorumEnabled", Label = "启用共享战斗配额结束同步（房主设置，同步成员）\n开启后联机共享战斗中本地判定结束改为投票，参与者中 done 数 ≥ ⌈人数×比例⌉ 时全队一起结束，避免无仇恨玩家提前离队", Type = "bool", DefaultValue = config.SharedFightEndQuorumEnabled },
+            new() { Name = "sharedFightEndQuorumRatio", Label = "配额比例（0-1，默认 0.5 过半）\n达成条件 doneCount ≥ ⌈participants × ratio⌉", Type = "number", DefaultValue = config.SharedFightEndQuorumRatio },
 
             // ===== 第七部分：多世界连续锄地配置 =====
             new() { Name = "multiWorldEnabled", Label = "启用多世界连续锄地\n房主设定，完成一个世界后轮换到下一个玩家的世界", Type = "bool", DefaultValue = config.MultiWorldEnabled },
