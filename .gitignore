@@ -43,3 +43,7 @@ __pycache__/
 
 # Server local deployment overrides
 BgiCoordinatorServer/docker-compose.override.yml
+
+
+# Claude
+.claude/*
