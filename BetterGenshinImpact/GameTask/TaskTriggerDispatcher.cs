@@ -16,6 +16,8 @@ using BetterGenshinImpact.GameTask.Common.BgiVision;
 using BetterGenshinImpact.GameTask.GameLoading;
 using Fischless.GameCapture.Graphics;
 using BetterGenshinImpact.Service;
+using BetterGenshinImpact.Service.Model;
+using BetterGenshinImpact.Service.Model.OverlayMetric;
 using Vanara.PInvoke;
 using Rect = OpenCvSharp.Rect;
 using static BetterGenshinImpact.GameTask.Common.TaskControl;
@@ -25,6 +27,7 @@ namespace BetterGenshinImpact.GameTask
     public class TaskTriggerDispatcher : IDisposable
     {
         private readonly ILogger<TaskTriggerDispatcher> _logger = App.GetLogger<TaskTriggerDispatcher>();
+        private readonly OverlayMetricsService? _metricsService = App.GetService<OverlayMetricsService>();
 
         private static TaskTriggerDispatcher? _instance;
 
@@ -269,11 +272,14 @@ namespace BetterGenshinImpact.GameTask
         public void Tick(object? sender, EventArgs e)
         {
             var hasLock = false;
+            var tickMetrics = new DispatcherTickMetrics();
             try
             {
+                // 上一帧还没处理完时只记录跳过次数，不等待锁；等待时间不应混入本轮处理耗时。
                 Monitor.TryEnter(_locker, ref hasLock);
                 if (!hasLock)
                 {
+                    _metricsService?.RecordSkippedTick();
                     // 正在执行时跳过
                     return;
                 }
@@ -407,8 +413,11 @@ namespace BetterGenshinImpact.GameTask
                 _frameIndex = (_frameIndex + 1) % (int)(CaptureContent.MaxFrameIndexSecond * 1000d / _timer.Interval);
 
                 var speedTimer = new SpeedTimer();
+                // 从真正开始截图处计时，前面的窗口状态检查不计入 BetterGI 本轮处理耗时。
+                tickMetrics.Begin();
                 // 捕获游戏画面
                 var bitmap = GameCapture.Capture();
+                tickMetrics.EndCapture();
                 speedTimer.Record("截图");
 
                 if (bitmap == null)
@@ -469,7 +478,10 @@ namespace BetterGenshinImpact.GameTask
                             if ((PrevGameUiCategory != content.CurrentGameUiCategory || (DateTime.Now - PrevGameUiChangeTime).TotalSeconds <= 30) // UI变化了后的30s内则所有触发器执行一遍
                                 || trigger.SupportedGameUiCategory == content.CurrentGameUiCategory)
                             {
+                                // 触发器耗时只累计触发器执行本体，便于和截图耗时、总处理耗时拆开观察。
+                                var triggerStart = Stopwatch.GetTimestamp();
                                 trigger.OnCapture(content);
+                                tickMetrics.AddTriggerCost(triggerStart);
                                 speedTimer.Record(trigger.Name);
                             }
                         }
@@ -482,6 +494,8 @@ namespace BetterGenshinImpact.GameTask
             }
             finally
             {
+                tickMetrics.EndProcessing();
+
                 if ((DateTime.Now - _prevManualGc).TotalSeconds > 2)
                 {
                     GC.Collect();
@@ -491,6 +505,12 @@ namespace BetterGenshinImpact.GameTask
                 if (hasLock)
                 {
                     Monitor.Exit(_locker);
+                }
+
+                if (tickMetrics.IsEnabled)
+                {
+                    // 释放调度锁后再发布指标，避免 UI 订阅回调参与实时触发器锁竞争。
+                    tickMetrics.Publish(_metricsService);
                 }
             }
         }
