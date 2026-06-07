@@ -60,6 +60,16 @@
             <converters:OverlayRelativeOrAbsoluteConverter x:Key="OverlayRelativeOrAbsoluteConverter" />
             <sys:Double x:Key="MapPointPickerHeightRatio">0.62</sys:Double>
             <sys:Double x:Key="MapPointPickerVerticalOffset">-12</sys:Double>
+            <!--  派蒙菜单 UID 1080p Rect(169,200,111,18) 比例  -->
+            <sys:Double x:Key="PaimonMenuUidLeftRatio">0.08802083333</sys:Double>
+            <sys:Double x:Key="PaimonMenuUidTopRatio">0.18518518518</sys:Double>
+            <sys:Double x:Key="PaimonMenuUidWidthRatio">0.0578125</sys:Double>
+            <sys:Double x:Key="PaimonMenuUidHeightRatio">0.01666666666</sys:Double>
+            <!--  联机输入 UID 1080p Rect(163,105,150,25) 比例  -->
+            <sys:Double x:Key="CoopInputUidLeftRatio">0.08489583333</sys:Double>
+            <sys:Double x:Key="CoopInputUidTopRatio">0.09722222222</sys:Double>
+            <sys:Double x:Key="CoopInputUidWidthRatio">0.078125</sys:Double>
+            <sys:Double x:Key="CoopInputUidHeightRatio">0.02314814814</sys:Double>
         </ResourceDictionary>
     </Window.Resources>
 
@@ -336,6 +346,73 @@
                        Fill="White"
                        IsHitTestVisible="False"
                        Visibility="{Binding Config.MaskWindowConfig.UidCoverEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+            <!--  UID遮盖：派蒙菜单 / 联机输入（任意矩形，按窗口比例定位）  -->
+            <Canvas Grid.Row="0"
+                    Grid.RowSpan="4"
+                    Grid.Column="0"
+                    Grid.ColumnSpan="6"
+                    IsHitTestVisible="False"
+                    ClipToBounds="True">
+                <!--  派蒙菜单 UID 1080p Rect(169,200,111,18)  -->
+                <Rectangle Fill="White"
+                           IsHitTestVisible="False"
+                           Visibility="{Binding Config.MaskWindowConfig.PaimonMenuUidCoverEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Canvas.Left>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource PaimonMenuUidLeftRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualWidth" />
+                        </MultiBinding>
+                    </Canvas.Left>
+                    <Canvas.Top>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource PaimonMenuUidTopRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualHeight" />
+                        </MultiBinding>
+                    </Canvas.Top>
+                    <Rectangle.Width>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource PaimonMenuUidWidthRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualWidth" />
+                        </MultiBinding>
+                    </Rectangle.Width>
+                    <Rectangle.Height>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource PaimonMenuUidHeightRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualHeight" />
+                        </MultiBinding>
+                    </Rectangle.Height>
+                </Rectangle>
+                <!--  联机输入 UID 1080p Rect(163,105,150,25)  -->
+                <Rectangle Fill="White"
+                           IsHitTestVisible="False"
+                           Visibility="{Binding Config.MaskWindowConfig.CoopInputUidCoverEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Canvas.Left>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource CoopInputUidLeftRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualWidth" />
+                        </MultiBinding>
+                    </Canvas.Left>
+                    <Canvas.Top>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource CoopInputUidTopRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualHeight" />
+                        </MultiBinding>
+                    </Canvas.Top>
+                    <Rectangle.Width>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource CoopInputUidWidthRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualWidth" />
+                        </MultiBinding>
+                    </Rectangle.Width>
+                    <Rectangle.Height>
+                        <MultiBinding Converter="{StaticResource OverlayRelativeOrAbsoluteConverter}">
+                            <Binding Source="{StaticResource CoopInputUidHeightRatio}" />
+                            <Binding RelativeSource="{RelativeSource AncestorType=Window}" Path="ActualHeight" />
+                        </MultiBinding>
+                    </Rectangle.Height>
+                </Rectangle>
+            </Canvas>
 
             <!--  方位  -->
             <Viewbox Grid.Column="2" Grid.Row="0"

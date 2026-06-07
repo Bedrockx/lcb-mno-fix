@@ -58,6 +58,30 @@ public partial class MaskWindowConfig : ObservableObject
     public static readonly Rect UidCoverRightBottomRect = new(1920 - 1685, 1080 - 1053, 178, 22);
 
     /// <summary>
+    ///     派蒙菜单UID遮盖是否启用
+    /// </summary>
+    [ObservableProperty]
+    private bool _paimonMenuUidCoverEnabled;
+
+    /// <summary>
+    ///     联机输入UID遮盖是否启用
+    /// </summary>
+    [ObservableProperty]
+    private bool _coopInputUidCoverEnabled;
+
+    /// <summary>
+    ///     1080p下派蒙菜单UID遮盖的位置与大小
+    /// </summary>
+    [NonSerialized]
+    public static readonly Rect PaimonMenuUidCoverRect = new(169, 200, 111, 18);
+
+    /// <summary>
+    ///     1080p下联机输入UID遮盖的位置与大小
+    /// </summary>
+    [NonSerialized]
+    public static readonly Rect CoopInputUidCoverRect = new(163, 105, 150, 25);
+
+    /// <summary>
     /// 显示FPS
     /// </summary>
     [ObservableProperty]
