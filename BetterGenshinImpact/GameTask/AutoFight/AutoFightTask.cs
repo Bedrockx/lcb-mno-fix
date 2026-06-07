@@ -3087,6 +3087,23 @@ public class AutoFightTask : ISoloTask
 
                 if (currentPos is { X: 0, Y: 0 }) continue;
 
+                // BC1 护栏复核（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 1a）：
+                // (0,0) 过滤只挡识别失败，挡不住"数值合法但距战斗点两万单位"的 garbage 远点。
+                // 循环体内重算 seed（ComputeSeedAnchor 恒等返回战斗点，无副作用，绝不 SetPrevPosition 覆写——
+                // 遵守 return-to-point-stale-prev-position-drift-fix 的"循环体不覆写"约束），
+                // 用 IsRecognizedPositionTrustworthy 复核；garbage 远点本轮拒绝 continue（Q3 单帧即拒）。
+                var __guardSeed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(fightWaypoint.X, fightWaypoint.Y);
+                if (!KazuhaCollectPositionGuardDecisions.IsRecognizedPositionTrustworthy(
+                        currentPos, __guardSeed.X, __guardSeed.Y,
+                        KazuhaCollectPositionGuardDecisions.RecognizedPositionGuardThreshold))
+                {
+                    var __guardDist = Navigation.GetDistance(fightWaypoint, currentPos);
+                    TaskControl.Logger.LogDebug(
+                        "[联机][万叶] 持续回点：识别坐标距战斗点 {Dist:F1} > {Threshold:F1}，疑似异常远点，本轮拒绝",
+                        __guardDist, KazuhaCollectPositionGuardDecisions.RecognizedPositionGuardThreshold);
+                    continue;
+                }
+
                 var realtimeDistance = Navigation.GetDistance(fightWaypoint, currentPos);
                 if (!AutoFightSeekDecisions.ShouldTriggerContinuousReturn(
                         realtimeDistance, returnDistanceThreshold,
@@ -3111,29 +3128,68 @@ public class AutoFightTask : ISoloTask
                 try
                 {
                     fightWaypoint.MoveMode = MoveModeEnum.Walk.Code;
-                    TaskControl.Logger.LogInformation("[联机][万叶] 持续回点：距战斗点 {Dist:F1} > {Threshold:F1}，触发 MoveCloseTo",
-                        realtimeDistance, returnDistanceThreshold);
-                    // 持续回点用 MoveCloseTo（小碎步精确接近），不是 MoveTo（真寻路）。
-                    // 战斗中玩家与战斗点距离一般较小（被怪推开 1-5 单位），MoveCloseTo 25 步小碎步就够；
-                    // 用 MoveTo 真寻路反而可能因为有寻路逻辑导致绕远 / 翻越障碍。
-                    // 默认 closeDistance=2.0 / tailDelayMs=null / maxSteps=25 即可（原 MoveCloseTo 行为）。
-                    // 标记回点移动进行中：让 D（SeekAndFightAsync 两处 MoveMouseBy）让位。
-                    // try-finally 保证任何退出路径都复位计数。
-                    AutoFightTask.EnterReturnToFightPoint();
-                    try
+                    // BC2 距离自适应（改动 1b）：复用 PathExecutorDecisions.ShouldPreMoveTo(realtimeDistance, 4.0)
+                    // 分流——远距离（> 4.0）用 MoveTo 真寻路拉回，近距离（<= 4.0）保持原 MoveCloseTo 精接近。
+                    // 阈值 4.0 对齐 PathExecutor 战后聚物分支 ShouldPreMoveTo(preDistance, 4.0)（Q1）。
+                    if (PathExecutorDecisions.ShouldPreMoveTo(realtimeDistance, 4.0))
                     {
-                        await pathExecutor.MoveCloseTo(fightWaypoint);
+                        TaskControl.Logger.LogInformation("[联机][万叶] 持续回点：距战斗点 {Dist:F1} > 4.0，触发 MoveTo 真寻路",
+                            realtimeDistance);
+                        // 远距离 MoveTo 分支（Q4）：每轮新建 PathExecutor(moveCts.Token) + endWatcher 监测 FightEndTotoly
+                        // 立即打断，finally 释放 W 键，对齐通用循环 GeneralReturnToFightPointLoopAsync 的 MoveTo 用法。
+                        // isGetOut:false（BC3 调用点②）关闭脱困，避免战斗场景抢镜头/抢移动。
+                        using var moveCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        using var endWatcher = new CancellationTokenSource();
+                        var watcherTask = Task.Run(async () =>
+                        {
+                            while (!endWatcher.Token.IsCancellationRequested)
+                            {
+                                if (FightEndTotoly)
+                                {
+                                    try { moveCts.Cancel(); } catch { /* already disposed */ }
+                                    return;
+                                }
+                                try { await Task.Delay(100, endWatcher.Token); } catch { return; }
+                            }
+                        }, endWatcher.Token);
+
+                        AutoFightTask.EnterReturnToFightPoint();
+                        try
+                        {
+                            var movePathExecutor = new PathExecutor(moveCts.Token);
+                            await movePathExecutor.MoveTo(fightWaypoint,
+                                isGetOut: false, task: null, nextWaypoint: null, nextDistance: null,
+                                retryDis: 4, isPoint: false, closeDistance: returnDistanceThreshold);
+                        }
+                        finally
+                        {
+                            AutoFightTask.ExitReturnToFightPoint();
+                            endWatcher.Cancel();
+                            try { await watcherTask; } catch { /* ignore */ }
+                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                        }
                     }
-                    finally
+                    else
                     {
-                        AutoFightTask.ExitReturnToFightPoint();
+                        TaskControl.Logger.LogInformation("[联机][万叶] 持续回点：距战斗点 {Dist:F1} <= 4.0，触发 MoveCloseTo",
+                            realtimeDistance);
+                        // 近距离 MoveCloseTo 分支保持现状（Q4）：while 外单实例 pathExecutor，耗时短。
+                        AutoFightTask.EnterReturnToFightPoint();
+                        try
+                        {
+                            await pathExecutor.MoveCloseTo(fightWaypoint);
+                        }
+                        finally
+                        {
+                            AutoFightTask.ExitReturnToFightPoint();
+                        }
                     }
                     lastReturnAt = DateTime.UtcNow;
                 }
                 catch (OperationCanceledException) { return; }
                 catch (Exception ex)
                 {
-                    TaskControl.Logger.LogError(ex, "[联机][万叶] 持续回点 MoveCloseTo 异常，本轮跳过");
+                    TaskControl.Logger.LogError(ex, "[联机][万叶] 持续回点移动异常，本轮跳过");
                 }
             }
         }
@@ -3224,6 +3280,23 @@ public class AutoFightTask : ISoloTask
                 }
 
                 if (currentPos is { X: 0, Y: 0 }) continue;
+
+                // BC1 护栏复核（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 2a / Q8）：
+                // 通用循环同样只挡 (0,0)、不挡 garbage 远点。护栏放在 (0,0) 过滤之后、realtimeDistance 计算 +
+                // triggerHitCount 容差累加之前，故护栏拒绝（continue）天然不污染 triggerHitCount
+                // （与派蒙不可见 continue 对称，Preservation 3.11）。seed 用循环体内重算 ComputeSeedAnchor
+                // （恒等返回战斗点，无副作用，不 SetPrevPosition 覆写——遵守循环体不覆写约束）。
+                var __guardSeed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(fightWaypoint.X, fightWaypoint.Y);
+                if (!KazuhaCollectPositionGuardDecisions.IsRecognizedPositionTrustworthy(
+                        currentPos, __guardSeed.X, __guardSeed.Y,
+                        KazuhaCollectPositionGuardDecisions.RecognizedPositionGuardThreshold))
+                {
+                    var __guardDist = Navigation.GetDistance(fightWaypoint, currentPos);
+                    TaskControl.Logger.LogDebug(
+                        "[AutoFight][回点] 识别坐标距战斗点 {Dist:F1} > {Threshold:F1}，疑似异常远点，本轮拒绝（不污染 triggerHitCount）",
+                        __guardDist, KazuhaCollectPositionGuardDecisions.RecognizedPositionGuardThreshold);
+                    continue;
+                }
 
                 var realtimeDistance = Navigation.GetDistance(fightWaypoint, currentPos);
 

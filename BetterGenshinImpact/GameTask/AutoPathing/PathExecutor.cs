@@ -906,7 +906,13 @@ public class PathExecutor
                                                         // 再交给 WaitAtFightPointAsync，路线不会再次复用同一 fightWaypoint 实例做远距离移动，
                                                         // 故对原对象的污染影响可控。
                                                         waypoint.MoveMode = MoveModeEnum.Walk.Code;
-                                                        await MoveTo(waypoint, isGetOut: true, task: null, nextWaypoint: null,
+                                                        // BC3 调用点③（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 3）：
+                                                        // isGetOut: true → false 关闭卡死脱困，避免脱困逻辑在战后聚物粗接近期间
+                                                        // 随机扭动/跳跃/复苏传送，与战斗主循环/聚物定位抢镜头抢移动。
+                                                        // 其余实参（retryDis:4 / isPoint:false / MoveMode=Walk）与二段式逻辑
+                                                        // （ShouldPreMoveTo 门控、后续 MoveCloseTo 精接近、聚物广播等待）保持不变。
+                                                        // Q7 兜底：关脱困后复苏残血卡住由后续 MoveCloseTo maxSteps 超时 + 上层 join 下一段重新汇合接管。
+                                                        await MoveTo(waypoint, isGetOut: false, task: null, nextWaypoint: null,
                                                             nextDistance: null, retryDis: 4, isPoint: false);
                                                     }
                                                 }
