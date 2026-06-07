@@ -15,22 +15,37 @@ using System.Linq;
 public static class EmptyRoundPreSkipDecisions
 {
     /// <summary>
-    /// 计算房主本轮经 CD 过滤后的待跑线路文件名集合（与步骤1 SetHostRouteList 上传内容一致）。
+    /// 计算房主本轮"实际会执行"的线路文件名集合，与执行端 ProcessRoutesByGroup 对齐：
+    ///   1) CD 过滤：StartRouteIndex>0 旁路 CD（全部计入），否则剔除 CD 中线路（与步骤1 SetHostRouteList 一致）；
+    ///   2) 起始偏移：再 Skip(Math.Max(0, StartRouteIndex-1))（与 groupRoutes.Skip(startIndex) 一致）。
+    /// 二者叠加后为空 → 本轮进世界也无线路可跑 → Empty_Round。
+    /// multiplayer-preskip-ignores-startrouteindex-offset-fix：
+    /// StartRouteIndex 超过线路数导致 Skip 后为 0 条，也必须在进世界前判空。
     /// </summary>
     /// <param name="routeFileNames">本轮分组过滤后（Group==targetGroup && Selected）的线路文件名，顺序保留。</param>
-    /// <param name="startRouteIndex">_config.StartRouteIndex；>0 时旁路 CD 过滤。</param>
+    /// <param name="startRouteIndex">_config.StartRouteIndex；>0 时旁路 CD，且作为 1-based 起始偏移 Skip(startRouteIndex-1)。</param>
     /// <param name="isOnCooldown">线路文件名 → 是否在 CD 的委托。</param>
     public static List<string> FilterHostRouteSet(
         IEnumerable<string> routeFileNames, int startRouteIndex, Func<string, bool> isOnCooldown)
     {
         if (routeFileNames == null) return new List<string>();
+
+        // 1) CD 过滤（与步骤1 SetHostRouteList 规则一致）
+        List<string> afterCd;
         if (startRouteIndex > 0)
         {
-            // 与步骤1一致：StartRouteIndex>0 旁路 CD，全部线路计入。
-            return routeFileNames.ToList();
+            afterCd = routeFileNames.ToList(); // StartRouteIndex>0 旁路 CD，全部线路计入
         }
-        var cd = isOnCooldown ?? (_ => false);
-        return routeFileNames.Where(name => !cd(name)).ToList();
+        else
+        {
+            var cd = isOnCooldown ?? (_ => false);
+            afterCd = routeFileNames.Where(name => !cd(name)).ToList();
+        }
+
+        // 2) 起始偏移 Skip（与执行端 ProcessRoutesByGroup 的 groupRoutes.Skip(Math.Max(0, StartRouteIndex-1)) 对齐）。
+        // StartRouteIndex 跨过全部线路时 Skip 后为空 → 实际无线路可跑 → Empty_Round。
+        var skip = Math.Max(0, startRouteIndex - 1);
+        return skip > 0 ? afterCd.Skip(skip).ToList() : afterCd;
     }
 
     /// <summary>
