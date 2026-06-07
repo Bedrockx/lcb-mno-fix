@@ -295,8 +295,16 @@ public class TpTask
             // 直接切换地区
             await SwitchArea(MapTypesExtensions.ParseFromName(mapName).GetDescription());
         }
-        await Delay(50, ct);
-        await WaitMapStableOrTimeoutAsync(1000); 
+
+        if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
+        {
+            await Delay(100, ct);
+            await WaitMapStableOrTimeoutAsync(500); 
+        }
+        else
+        {
+            await Delay(500, ct);
+        }
 
         Rect bigMapInAllMapRect;
         // 3. 调整初始缩放等级，避免识别中心点失败
@@ -1615,7 +1623,7 @@ public class TpTask
     {
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
         {
-            await WaitMapStableOrTimeoutAsync(timeoutMs: 3000);
+            await WaitMapStableOrTimeoutAsync(timeoutMs: 50);
         }
         
         GameCaptureRegion.GameRegionClick((rect, scale) => (rect.Width - 160 * scale, rect.Height - 60 * scale));
