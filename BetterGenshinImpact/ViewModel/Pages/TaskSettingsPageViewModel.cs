@@ -4,6 +4,7 @@ using BetterGenshinImpact.Core.Script.Project;
 using BetterGenshinImpact.GameTask;
 using BetterGenshinImpact.GameTask.AutoArtifactSalvage;
 using BetterGenshinImpact.GameTask.AutoCook;
+using BetterGenshinImpact.GameTask.AutoBoss;
 using BetterGenshinImpact.GameTask.AutoDomain;
 using BetterGenshinImpact.GameTask.AutoFight;
 using BetterGenshinImpact.GameTask.AutoFriendship;
@@ -95,6 +96,12 @@ public partial class TaskSettingsPageViewModel : ViewModel
     private string _switchAutoDomainButtonText = "启动";
 
     [ObservableProperty]
+    private bool _switchAutoBossEnabled;
+
+    [ObservableProperty]
+    private string _switchAutoBossButtonText = "启动";
+
+    [ObservableProperty]
     private int _autoStygianOnslaughtRoundNum;
 
     [ObservableProperty]
@@ -140,7 +147,9 @@ public partial class TaskSettingsPageViewModel : ViewModel
 
     public static List<int> BossNumList = [1, 2, 3];
 
-    public static List<string> AvatarIndexList { get; } = new List<string> { "", "1", "2", "3", "4" };
+    public static List<string> AutoBossNameList = [.. AutoBossData.SupportedBossNames];
+
+    public static List<string> AvatarIndexList = ["", "1", "2", "3", "4"];
     public static List<string> LeyLineOutcropTypeList = ["启示之花", "藏金之花"];
     public static List<string> LeyLineOutcropCountryList = ["蒙德", "璃月", "稻妻", "须弥", "枫丹", "纳塔", "挪德卡莱"];
 
@@ -800,6 +809,7 @@ public partial class TaskSettingsPageViewModel : ViewModel
         SwitchAutoGeniusInvokationEnabled = false;
         SwitchAutoWoodEnabled = false;
         SwitchAutoDomainEnabled = false;
+        SwitchAutoBossEnabled = false;
         SwitchAutoFightEnabled = false;
         SwitchAutoMusicGameEnabled = false;
         SwitchAutoAlbumEnabled = false;
@@ -946,6 +956,22 @@ public partial class TaskSettingsPageViewModel : ViewModel
         }
 
         return false;
+    }
+
+    [RelayCommand]
+    private async Task OnSwitchAutoBoss()
+    {
+        if (GetFightStrategy(Config.AutoBossConfig.StrategyName, out var path))
+        {
+            return;
+        }
+
+        SwitchAutoBossEnabled = true;
+        AutoBossParam param = new AutoBossParam(path);
+        param.SetAutoBossConfig(Config.AutoBossConfig);
+        await new TaskRunner()
+            .RunSoloTaskAsync(new AutoBossTask(param));
+        SwitchAutoBossEnabled = false;
     }
 
     [RelayCommand]

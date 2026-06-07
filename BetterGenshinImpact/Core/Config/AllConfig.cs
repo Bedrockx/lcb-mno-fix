@@ -1,5 +1,6 @@
 using BetterGenshinImpact.GameTask;
 using BetterGenshinImpact.GameTask.AutoDomain;
+using BetterGenshinImpact.GameTask.AutoBoss;
 using BetterGenshinImpact.GameTask.AutoFight;
 using BetterGenshinImpact.GameTask.AutoFishing;
 using BetterGenshinImpact.GameTask.AutoGeniusInvokation;
@@ -202,6 +203,11 @@ public partial class AllConfig : ObservableObject
     ///     自动秘境配置
     /// </summary>
     public AutoDomainConfig AutoDomainConfig { get; set; } = new();
+
+    /// <summary>
+    ///     自动首领讨伐配置
+    /// </summary>
+    public AutoBossConfig AutoBossConfig { get; set; } = new();
     
     //自动秘境使能
     public bool AutoDomainEnable { get; set; } = false;
@@ -332,6 +338,7 @@ public partial class AllConfig : ObservableObject
         AutoWoodConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoFightConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoDomainConfig.PropertyChanged += OnAnyPropertyChanged;
+        AutoBossConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoStygianOnslaughtConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoArtifactSalvageConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoRedeemCodeConfig.PropertyChanged += OnAnyPropertyChanged;
