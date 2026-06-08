@@ -994,6 +994,26 @@ public class CoordinatorClient : IAsyncDisposable
     }
 
     /// <summary>
+    /// 查询服务端权威轮换序列（UID 列表，第 i 项 = 第 i 轮房主 UID）。
+    /// 由首任房主 MarkRoomStarted 时生成，整场只生成一次，保证各客户端轮换序列完全一致。
+    /// 旧服务端无此方法 → HubException → 返回 null，由调用方降级本地 CurrentPlayerList 快照。
+    /// multiplayer-server-authoritative-round-order。
+    /// </summary>
+    public async Task<List<string>?> GetRoundHostOrderAsync()
+    {
+        if (_connection == null || !IsConnected) return null;
+        try
+        {
+            return await _connection.InvokeAsync<List<string>>("GetRoundHostOrder");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[联机] GetRoundHostOrderAsync 失败（旧服务端/异常），降级本地快照");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// 上报成员进度（跳过后广播）
     /// </summary>
     public async Task SendMemberProgressAsync(int routeIndex)

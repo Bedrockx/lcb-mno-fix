@@ -830,7 +830,30 @@ public class CoordinatorHub : Hub
         }
         room.IsStarted = true;
         _logger.LogInformation("[MarkRoomStarted] 房间 {Code} 已锁定，IsStarted=true", roomCode);
+
+        // multiplayer-server-authoritative-round-order：首轮锁房时全员已在房间
+        // （客户端 MarkRoomStarted 在 AllWorldJoined 之后），此刻 Players 是全集，
+        // 生成权威轮换序列（首项=首任房主，其余 UID 升序）。整场只生成一次（幂等）。
+        // 客户端 GetRoundHostOrder 查询此序列构造 playerOrder，保证各端轮换序列一致。
+        lock (room)
+        {
+            if (room.RoundHostOrder.Count == 0)
+            {
+                var hostUid = room.Players.Count > 0 ? room.Players[0].PlayerUid : "";
+                room.RoundHostOrder = RoundHostOrderDecisions.Build(room.Players, hostUid);
+                _logger.LogInformation("[RoundOrder] 房间 {Code} 生成权威轮换序列：{Order}",
+                    roomCode, string.Join(" -> ", room.RoundHostOrder));
+            }
+        }
         return Task.CompletedTask;
+    }
+
+    /// <summary>返回本房间权威轮换序列（UID 列表）。未生成 / 房间不存在 → 空列表。</summary>
+    public Task<List<string>> GetRoundHostOrder()
+    {
+        var (room, _) = _roomManager.GetRoomByConnectionId(Context.ConnectionId);
+        if (room == null) return Task.FromResult(new List<string>());
+        lock (room) { return Task.FromResult(new List<string>(room.RoundHostOrder)); }
     }
 
     /// <summary>房主上传最终路线列表，并广播通知成员</summary>
