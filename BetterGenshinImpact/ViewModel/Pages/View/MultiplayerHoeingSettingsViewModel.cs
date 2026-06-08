@@ -82,7 +82,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     [ObservableProperty] private string _memberPartyTimeoutSeconds = "";
 
     // ===== E 战斗策略 =====
-    [ObservableProperty] private bool _multiplayerUseFixedFightStrategy = true;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(FightStrategySelectable))]
+    private bool _multiplayerUseFixedFightStrategy = true;
 
     // ===== F 线路设置 =====
     [ObservableProperty] private bool _debugMode;
@@ -108,6 +110,7 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     public bool FastSyncParamsEnabled => FastSyncPointEnabled;
     public bool SharedFightEndQuorumParamsEnabled => SharedFightEndQuorumEnabled;
     public bool MultiWorldCountEnabled => MultiWorldEnabled;
+    public bool FightStrategySelectable => !MultiplayerUseFixedFightStrategy;
     public bool IsBuiltinOnlineMode => RouteModeDecisions.IsBuiltinOnline(RouteModeSelection);
     public System.Windows.Visibility ShowManualRoute => IsBuiltinOnlineMode ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
     public System.Windows.Visibility ShowGroupIndex => IsBuiltinOnlineMode ? System.Windows.Visibility.Collapsed : System.Windows.Visibility.Visible;

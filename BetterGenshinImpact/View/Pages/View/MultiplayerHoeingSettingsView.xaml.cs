@@ -70,6 +70,7 @@ public partial class MultiplayerHoeingSettingsView : UserControl
         HookVariantPanel();        // VariantExpander.Expanded += BuildVariantPanelContent; _refreshVariantPanel = ...
         HookFightStrategyButton(); // "打开联机战斗策略文件" → MultiplayerFightStrategyFileHelper.OpenForEdit()
         HookDocButtons();          // 变体卡 Header 的"使用教程"/"制作规则" → OpenDoc
+        HookFightStrategyCombo();  // E 卡片复刻战斗策略下拉（绑配置组 AutoFightConfig.StrategyName）
 
         ViewModel.PropertyChanged += OnViewModelPropertyChanged;   // 衔接 UpdateButtonStates
     }
@@ -277,13 +278,13 @@ public partial class MultiplayerHoeingSettingsView : UserControl
 
             _builtinRouteContainer.Children.Add(buttonPanel);
 
-            _builtinRouteContainer.Children.Add(new TextBlock
-            {
-                Text = "手动输入路径优先级高于按钮选择",
-                FontSize = 11,
-                Foreground = SystemColors.GrayTextBrush,
-                Margin = new Thickness(0, 4, 0, 0)
-            });
+            // _builtinRouteContainer.Children.Add(new TextBlock
+            // {
+            //     Text = "手动输入路径优先级高于按钮选择",
+            //     FontSize = 11,
+            //     Foreground = SystemColors.GrayTextBrush,
+            //     Margin = new Thickness(0, 4, 0, 0)
+            // });
 
             // 初始化状态（可见性由 XAML BuiltinRouteHost 绑定 ShowManualRoute 控制，本方法只管启用/高亮）
             UpdateButtonStates();
@@ -407,10 +408,81 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             BetterGenshinImpact.GameTask.AutoFight.MultiplayerFightStrategyFileHelper.OpenForEdit();
     }
 
+    // 配置组战斗策略配置（与配置组战斗策略框同一对象）；弹窗由配置组项打开，理论恒非空，仍加守卫
+    private BetterGenshinImpact.GameTask.AutoFight.AutoFightConfig? GroupFightConfig
+        => _item.GroupInfo?.Config?.PathingConfig?.AutoFightConfig;
+
+    // E 卡片战斗策略下拉：复刻配置组选项（User\AutoFight 下 *.txt + "根据队伍自动选择"），初值取配置组 StrategyName
+    private void HookFightStrategyCombo()
+    {
+        try
+        {
+            var folder = Global.Absolute(@"User\AutoFight");
+            Directory.CreateDirectory(folder);
+            var list = new List<string> { "根据队伍自动选择" };
+            foreach (var f in Directory.GetFiles(folder, "*.txt", SearchOption.AllDirectories))
+            {
+                var name = f.Replace(folder, "").Replace(".txt", "");
+                if (name.StartsWith('\\')) name = name[1..];
+                if (!string.IsNullOrWhiteSpace(name)) list.Add(name);
+            }
+            FightStrategyCombo.ItemsSource = list;
+
+            var cur = GroupFightConfig?.StrategyName;
+            FightStrategyCombo.SelectedItem =
+                (!string.IsNullOrEmpty(cur) && list.Contains(cur)) ? cur : "根据队伍自动选择";
+        }
+        catch (Exception ex)
+        {
+            // 加载策略列表失败不应阻断弹窗（可恢复异常）
+            _logger.LogWarning(ex, "[联机战斗策略] 加载策略下拉失败");
+        }
+    }
+
     private void HookDocButtons()
     {
-        VariantTutorialButton.Click += (s, e) => { e.Handled = true; OpenDoc("联机锄地使用教程.md"); };
+        // 顶部"使用教程"按钮 → 打开使用教程 md（迁自原 VariantTutorialButton）
+        TopTutorialButton.Click += (s, e) => { e.Handled = true; OpenDoc("联机锄地使用教程.md"); };
+        // 变体卡"线路变体说明" → 弹窗展示简明说明
+        VariantHelpButton.Click += (s, e) => { e.Handled = true; ShowVariantHelpDialog(); };
+        // "制作规则"不变
         VariantRulesButton.Click += (s, e) => { e.Handled = true; OpenDoc("联机锄地变体线路制作规则.md"); };
+    }
+
+    // 线路变体说明弹窗：用既有 Wpf.Ui MessageBox 展示简明说明（不跳转文件），单关闭按钮
+    private void ShowVariantHelpDialog()
+    {
+        try
+        {
+            var text =
+                "线路变体：同一条线路的不同打法版本（最多 A/B/C/D 四个）。\n\n" +
+                "• 多人锄地时，不同成员可各跑同一线路的不同变体（如 A 打左侧怪、B 打右侧怪），在战斗点附近自动对齐、一起放行。\n" +
+                "• 在「线路变体偏好」里按总文件夹选一次变体，该文件夹下所有线路都按此变体跑。\n" +
+                "• 没选变体、或所选变体缺少某条线路时，自动回退到代表变体（A→B→C→D 第一个存在的），不会中断。\n" +
+                "• 老线路没有变体子文件夹时行为不变，照常全自动同步。\n\n" +
+                "想自己制作变体线路？点击「制作规则」查看详细规范。";
+
+            var box = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = "线路变体说明",
+                Content = new TextBlock
+                {
+                    Text = text,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(4)
+                },
+                CloseButtonText = "知道了",
+                Owner = Application.Current.MainWindow,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            };
+            _ = box.ShowDialogAsync();
+        }
+        catch (Exception ex)
+        {
+            // 弹窗构建/显示异常不应让配置弹窗崩溃（可恢复异常）
+            _logger.LogWarning(ex, "[变体说明] 弹窗显示失败");
+            Toast.Warning("显示线路变体说明失败，请查看日志");
+        }
     }
 
     // 打开输出根目录下的某个 md 说明文档
@@ -616,6 +688,17 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             SaveSoloBranch();
         }
         SaveVariantPreferences();
+        SaveFightStrategySelection();
+    }
+
+    // 战斗策略下拉写回：写入配置组 AutoFightConfig.StrategyName（与配置组战斗策略框同一参数，运行时非固定分支生效）
+    private void SaveFightStrategySelection()
+    {
+        var gfc = GroupFightConfig;
+        if (gfc != null && FightStrategyCombo.SelectedItem is string sel && !string.IsNullOrEmpty(sel))
+        {
+            gfc.StrategyName = sel;
+        }
     }
 
     // 单机分支保存（迁现状，逐字符等价）：遍历 settingItems + controls 写值 + Remove 联机专属字段

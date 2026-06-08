@@ -15,10 +15,22 @@
     </UserControl.Resources>
 
     <StackPanel Margin="12">
-        <!--  顶部：启用联机锄地模式  -->
-        <ui:ToggleSwitch Margin="0,0,0,12"
-                         Content="启用联机锄地模式"
-                         IsChecked="{Binding MultiplayerEnabled, Mode=TwoWay}" />
+        <!--  顶部：启用联机锄地模式 + 使用教程  -->
+        <Grid Margin="0,0,0,12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <ui:ToggleSwitch Grid.Column="0"
+                             VerticalAlignment="Center"
+                             Content="启用联机锄地模式"
+                             IsChecked="{Binding MultiplayerEnabled, Mode=TwoWay}" />
+            <ui:Button x:Name="TopTutorialButton"
+                       Grid.Column="1"
+                       Margin="0,0,10,0"
+                       VerticalAlignment="Center"
+                       Content="联机锄地使用教程" />
+        </Grid>
 
         <!--  单机内容区占位（MultiplayerEnabled=false 显示），code-behind 填充  -->
         <ContentControl x:Name="SoloPanelHost"
@@ -336,13 +348,20 @@
                 <StackPanel>
                     <ui:TextBlock Margin="0,0,0,6"
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                  Text="联机锄地战斗策略已固定为 User\AutoFight\联机战斗策略.txt（文件不存在时回退至配置组中的选择）。点击下方按钮可编辑该文件。"
+                                  Text="联机锄地战斗策略已固定为 User\AutoFight\联机战斗策略.txt，点击下方按钮可编辑该策略文件。"
                                   TextWrapping="Wrap" />
-                    <ui:Button x:Name="OpenFightStrategyButton"
-                               HorizontalAlignment="Left"
-                               Content="打开联机战斗策略文件" />
+                    <StackPanel Orientation="Horizontal">
+                        <ui:Button x:Name="OpenFightStrategyButton"
+                                   VerticalAlignment="Center"
+                                   Content="打开联机战斗策略文件" />
+                        <ComboBox x:Name="FightStrategyCombo"
+                                  Width="170"
+                                  Margin="12,0,0,0"
+                                  VerticalAlignment="Center"
+                                  IsEnabled="{Binding FightStrategySelectable}" />
+                    </StackPanel>
                     <ui:ToggleSwitch Margin="0,8,0,0"
-                                     Content="固定使用联机战斗策略(关闭即使用配置组中选择的策略)"
+                                     Content="固定使用联机战斗策略(关闭即使用右方战斗策略)"
                                      IsChecked="{Binding MultiplayerUseFixedFightStrategy, Mode=TwoWay}" />
                     <ui:TextBlock Margin="0,4,0,0"
                                   Foreground="DarkRed"
@@ -368,7 +387,6 @@
                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                                   TextWrapping="Wrap">
                         如果使用单机调试线路，关闭联机选项进行线路调试，建议使用联机内置线路，针对联机做了优化。<LineBreak />
-                        提示：把你自己的线路文件夹拷贝到内置线路文件夹（安装目录下的 GameTask\AutoHoeing\Assets），即可作为内置线路被选择。
                     </ui:TextBlock>
                     <!--  从第几条路线开始  -->
                     <ui:TextBlock Margin="0,0,0,2" Text="从第几条路线开始(0=CD过滤)" />
@@ -377,17 +395,6 @@
                                 HorizontalAlignment="Left"
                                 PlaceholderText="0=从头"
                                 Text="{Binding StartRouteIndex, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                    <!--  手动指定线路目录 - 仅「固定内置联机线路」模式下显示  -->
-                    <StackPanel Visibility="{Binding ShowManualRoute}">
-                        <ui:TextBlock Margin="0,0,0,2" Text="手动指定线路目录" />
-                        <ui:TextBlock Margin="0,0,0,2"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="留空则使用下方按钮选择"
-                                      TextWrapping="Wrap" />
-                        <ui:TextBox Margin="0,0,0,4"
-                                    PlaceholderText="调试线路目录（留空使用内置）"
-                                    Text="{Binding FixedDebugRoutePath, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                    </StackPanel>
                     <!--  执行线路（groupIndex）下拉 - 仅「单机调试线路」模式下显示  -->
                     <StackPanel Visibility="{Binding ShowGroupIndex}">
                         <ui:TextBlock Margin="0,0,0,2" Text="执行线路" />
@@ -436,17 +443,17 @@
                     <Border Grid.Column="0"
                             Grid.Row="1"
                             Grid.ColumnSpan="3"
-                            Margin="0,8,40,8"
+                            Margin="0,8,30,8"
                             BorderBrush="{ui:ThemeResource ControlFillColorSecondaryBrush}"
-                            BorderThickness="0,0,40,1" />
+                            BorderThickness="0,0,30,1" />
                     
                     <StackPanel Grid.Column="1" Grid.Row="0"
                                 Margin="12,0,8,0"
                                 HorizontalAlignment="Left"
                                 Orientation="Horizontal">
-                        <ui:Button x:Name="VariantTutorialButton"
+                        <ui:Button x:Name="VariantHelpButton"
                                    Margin="0,0,6,0"
-                                   Content="使用教程" />
+                                   Content="线路变体说明" />
                         <ui:Button x:Name="VariantRulesButton" Content="制作规则" />
                     </StackPanel>
                     
