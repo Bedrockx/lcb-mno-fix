@@ -1573,8 +1573,11 @@ public class AutoFightTask : ISoloTask
                 FightStatusFlag = false;
                 FightEndTotoly  = true;
                 image?.Dispose();
-                GC.Collect();//释放内存
-                GC.WaitForPendingFinalizers();//释放内存
+                // 移除原 GC.Collect() + GC.WaitForPendingFinalizers() 同步阻塞续命：
+                // 该续命补丁是为了兜底回收 ImageRegion 未释放的原生 Mat（旧 bug：ImageRegion.Dispose
+                // 用 new 隐藏导致 using/接口/基类引用释放时走空的 Region.Dispose，SrcMat 永不释放）。
+                // 根因已修（Region.Dispose 改 virtual、ImageRegion.Dispose 改 override），
+                // SrcMat 现在随 using 正常释放，无需在战斗结束关键路径上同步阻塞等终结器（消除 2~3 秒停顿的 GC 部分）。
                 Dispatcher.IsCustomCts = false;
             }
         }, cts2.Token);

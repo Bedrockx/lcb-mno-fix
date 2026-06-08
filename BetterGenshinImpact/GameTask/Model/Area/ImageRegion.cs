@@ -474,7 +474,7 @@ public class ImageRegion : Region
         }
     }
 
-    public new void Dispose()
+    public override void Dispose()
     {
         _cacheImage?.Dispose();
         _cacheGreyMat?.Dispose();
