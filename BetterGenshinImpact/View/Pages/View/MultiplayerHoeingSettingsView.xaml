@@ -343,7 +343,7 @@
                              Icon="{ui:SymbolIcon Flash24}"
                              IsExpanded="True">
                 <ui:CardExpander.Header>
-                    <ui:TextBlock FontTypography="Body" Text="联机战斗策略（固定文件）" />
+                    <ui:TextBlock FontTypography="Body" Text="联机战斗策略" />
                 </ui:CardExpander.Header>
                 <StackPanel>
                     <ui:TextBlock Margin="0,0,0,6"
