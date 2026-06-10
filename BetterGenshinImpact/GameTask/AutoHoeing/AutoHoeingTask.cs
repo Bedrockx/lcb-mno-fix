@@ -3472,6 +3472,9 @@ public class AutoHoeingTask : ISoloTask
             _config.KazuhaSyncTimeoutSeconds = ClampSyncTimeout(Get("kazuhaSyncTimeoutSeconds", _config.KazuhaSyncTimeoutSeconds));
             _config.KazuhaWaitSkillCdSeconds = ClampWaitCd(Get("kazuhaWaitSkillCdSeconds", _config.KazuhaWaitSkillCdSeconds));
             _config.KazuhaSecondApproachMaxSteps = ClampSecondApproachMaxSteps(Get("kazuhaSecondApproachMaxSteps", _config.KazuhaSecondApproachMaxSteps));
+            // 万叶回点异常坐标重播种重识别修复：纯本地调试参数回读（阈值 double，次数 int；Get 泛型推断同 SyncPointMinDistance 的 double 用法）
+            _config.KazuhaReturnAbnormalCoordThreshold = Get("kazuhaReturnAbnormalCoordThreshold", _config.KazuhaReturnAbnormalCoordThreshold);
+            _config.KazuhaReturnReseedRetryCount = Get("kazuhaReturnReseedRetryCount", _config.KazuhaReturnReseedRetryCount);
             NormalizeKazuhaTimeoutOrder(_config);
             _config.FightTimeoutSeconds = Get("fightTimeoutSeconds", _config.FightTimeoutSeconds);
             // === 集体卡死监测（multiplayer-mutual-wait-collective-skip §8.8 / OQ-1~OQ-5 默认值）===
@@ -3686,6 +3689,8 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "kazuhaSyncTimeoutSeconds", Label = "万叶聚物同步总超时（秒）\n5-120，默认20，所有玩家在战斗点等待万叶完成的最长时间", Type = "number", DefaultValue = config.KazuhaSyncTimeoutSeconds },
             new() { Name = "kazuhaWaitSkillCdSeconds", Label = "万叶 E 技 CD 等待上限（秒）\n3-10，默认5，超时后直接尝试释放 E 技", Type = "number", DefaultValue = config.KazuhaWaitSkillCdSeconds },
             new() { Name = "kazuhaSecondApproachMaxSteps", Label = "拾取前精接近步数（联机万叶聚物）\n1-30，默认6（约0.5s上限），战后回点完成第一段后再做二段精接近的最大步数", Type = "number", DefaultValue = config.KazuhaSecondApproachMaxSteps },
+            new() { Name = "kazuhaReturnAbnormalCoordThreshold", Label = "回点异常坐标阈值\n默认50，战后回点/持续回点读到的坐标距战斗点超过此值视为识别漂移，触发重播种+重识别", Type = "number", DefaultValue = config.KazuhaReturnAbnormalCoordThreshold },
+            new() { Name = "kazuhaReturnReseedRetryCount", Label = "回点重识别重试次数\n默认3，命中异常阈值后重播种战斗点锚点并重识别的最大重试次数", Type = "number", DefaultValue = config.KazuhaReturnReseedRetryCount },
             new() { Name = "syncPointMinDistance", Label = "集合点与战斗点的最小距离阈值\n小于此距离的点不作为集合点", Type = "number", DefaultValue = config.SyncPointMinDistance },
 
             // ===== 联机战斗配置 =====

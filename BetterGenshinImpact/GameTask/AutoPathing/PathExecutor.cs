@@ -880,6 +880,10 @@ public class PathExecutor
                                             // 注意：用 Navigation.GetPosition（公开 static）直接取小地图坐标，
                                             // 不能用 PathExecutor.GetPosition（默认 isPoint:true 会触发 ResolveAnomalies / 按 ESC）。
                                             // 位置识别失败 → 返回 (0,0) → 跳过 MoveTo 走 MoveCloseTo 单段兜底。
+                                            // hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix 路径 B：
+                                            // __coordTrusted 门控——坐标 N 次重识别仍异常时置 false，
+                                            // 跳过 MoveTo + 两段 MoveCloseTo + 广播二段，仅进 WaitAtFightPointAsync 兜底。
+                                            bool __coordTrusted = true;
                                             {
                                                 Point2f currentPos;
                                                 try
@@ -895,25 +899,52 @@ public class PathExecutor
                                                 }
                                                 if (currentPos is not { X: 0, Y: 0 })
                                                 {
-                                                    var preDistance = Navigation.GetDistance(waypoint, currentPos);
-                                                    if (PathExecutorDecisions.ShouldPreMoveTo(preDistance, 4.0))
+                                                    // hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix 路径 B：
+                                                    // (0,0) 过滤后、ShouldPreMoveTo 之前插入"异常判定 + 重播种 + 重识别重试"helper，
+                                                    // 与路径 A 调用同一 KazuhaReturnReseedGuard 保证对称（bugfix §3.9）。
+                                                    // 阈值/次数读 AutoHoeingConfig 调试参数（默认 50 / 3，替代旧硬编码 180）。
+                                                    var __hoeingCfg = TaskContext.Instance().Config.AutoHoeingConfig;
+                                                    var __guardResult = await KazuhaReturnReseedGuard.EvaluateAndReseedAsync(
+                                                        currentPos, waypoint.X, waypoint.Y,
+                                                        __hoeingCfg.KazuhaReturnAbnormalCoordThreshold,
+                                                        __hoeingCfg.KazuhaReturnReseedRetryCount,
+                                                        reseedAnchor: () => Navigation.SetPrevPosition((float)waypoint.X, (float)waypoint.Y),
+                                                        reSample: () =>
+                                                        {
+                                                            using var s = CaptureToRectArea();
+                                                            return Navigation.GetPosition(s, waypoint.MapName, waypoint.MapMatchMethod);
+                                                        },
+                                                        delay: token => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, token),
+                                                        log: m => Logger.LogInformation("[联机] 战后聚物回点{Msg}", m),
+                                                        ct: ct);
+
+                                                    if (!__guardResult.ShouldMove)
                                                     {
-                                                        Logger.LogInformation("[联机] 距战斗点 {Dist:F1} > 4.0，先 MoveTo 粗接近", preDistance);
-                                                        // multiplayer-kazuha-pre-cast-positioning: 战后回点全员强制 Walk
-                                                        // （避免 fightWaypoint 录制 MoveMode 是 Dash/Run 时全员同时疾跑消耗体力）。
-                                                        // 注意：直接改 waypoint.MoveMode 会"污染"原 Waypoint 实例后续被其他调用点使用，
-                                                        // 但此场景下 fightWaypoint 是战斗节点，本次 MoveTo 后立即进 MoveCloseTo（其内部不读 MoveMode）
-                                                        // 再交给 WaitAtFightPointAsync，路线不会再次复用同一 fightWaypoint 实例做远距离移动，
-                                                        // 故对原对象的污染影响可控。
-                                                        waypoint.MoveMode = MoveModeEnum.Walk.Code;
-                                                        // BC3 调用点③（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 3）：
-                                                        // isGetOut: true → false 关闭卡死脱困，避免脱困逻辑在战后聚物粗接近期间
-                                                        // 随机扭动/跳跃/复苏传送，与战斗主循环/聚物定位抢镜头抢移动。
-                                                        // 其余实参（retryDis:4 / isPoint:false / MoveMode=Walk）与二段式逻辑
-                                                        // （ShouldPreMoveTo 门控、后续 MoveCloseTo 精接近、聚物广播等待）保持不变。
-                                                        // Q7 兜底：关脱困后复苏残血卡住由后续 MoveCloseTo maxSteps 超时 + 上层 join 下一段重新汇合接管。
-                                                        await MoveTo(waypoint, isGetOut: false, task: null, nextWaypoint: null,
-                                                            nextDistance: null, retryDis: 4, isPoint: false);
+                                                        // N 次重播种+重识别仍异常 → 放弃本轮移动（绝不以 garbage 坐标 MoveTo/MoveCloseTo），
+                                                        // 跳过两段 MoveCloseTo + 广播二段，仅进 WaitAtFightPointAsync 参与全队同步兜底。
+                                                        Logger.LogWarning("[联机] 战后聚物回点坐标持续异常，放弃本轮移动，交聚物同步兜底");
+                                                        __coordTrusted = false;
+                                                    }
+                                                    else
+                                                    {
+                                                        currentPos = __guardResult.TrustedPos;
+                                                        var preDistance = Navigation.GetDistance(waypoint, currentPos);
+                                                        if (PathExecutorDecisions.ShouldPreMoveTo(preDistance, 4.0))
+                                                        {
+                                                            Logger.LogInformation("[联机] 距战斗点 {Dist:F1} > 4.0，先 MoveTo 粗接近", preDistance);
+                                                            // multiplayer-kazuha-pre-cast-positioning: 战后回点全员强制 Walk
+                                                            // （避免 fightWaypoint 录制 MoveMode 是 Dash/Run 时全员同时疾跑消耗体力）。
+                                                            // 注意：直接改 waypoint.MoveMode 会"污染"原 Waypoint 实例后续被其他调用点使用，
+                                                            // 但此场景下 fightWaypoint 是战斗节点，本次 MoveTo 后立即进 MoveCloseTo（其内部不读 MoveMode）
+                                                            // 再交给 WaitAtFightPointAsync，路线不会再次复用同一 fightWaypoint 实例做远距离移动，
+                                                            // 故对原对象的污染影响可控。
+                                                            waypoint.MoveMode = MoveModeEnum.Walk.Code;
+                                                            // BC3 调用点③（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 3）：
+                                                            // isGetOut: true → false 关闭卡死脱困，避免脱困逻辑在战后聚物粗接近期间
+                                                            // 随机扭动/跳跃/复苏传送，与战斗主循环/聚物定位抢镜头抢移动。
+                                                            await MoveTo(waypoint, isGetOut: false, task: null, nextWaypoint: null,
+                                                                nextDistance: null, retryDis: 4, isPoint: false);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -928,80 +959,81 @@ public class PathExecutor
                                             //   未收到广播（退化）→ 仅第一段，停在距战斗点 ≤ 2.0 单位（与原版 closeDistance:2.0 默认行为等价）
 
                                             // multiplayer-kazuha-collect-point-broadcast: 非万叶玩家"等聚物点广播"与第一段并行。
-                                            // 在第一段 MoveCloseTo 之前 kick off 后台 wait task（不 await，让它和第一段并行跑）；
-                                            // 第一段走完后再 await 看是否拿到广播 → 拿到则二段精接近，否则跳过。
-                                            // 守卫四重：MultiplayerCoordinator != null（外层）+ KazuhaCollectSync != null（外层）+
-                                            //          !IsCurrentPlayerKazuha（万叶就在原地放 E，不二段）+ 等待 task 返回 true。
-                                            // 等待超时固定 5 秒（用户实测决议：太长会拖慢主流程，5 秒足够覆盖 SignalR 往返 + 万叶 CD 等待 + 视觉确认）。
-                                            var ks = MultiplayerCoordinator.KazuhaCollectSync;
-                                            var collectPointSyncKey = waypoint == null
-                                                ? $"{MultiplayerCoordinator.CurrentRouteIndex}:0:0"
-                                                : $"{MultiplayerCoordinator.CurrentRouteIndex}:{waypoint.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}:{waypoint.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}";
-                                            Task<bool>? collectPointWaitTask = null;
-                                            if (ks != null && !ks.IsCurrentPlayerKazuha)
+                                            // ...（守卫四重 + 5s 超时见原注释）
+                                            // hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix 路径 B：
+                                            // 坐标可信才做两段接近；放弃移动（__coordTrusted=false）时整块跳过，
+                                            // 绝不以 garbage 坐标 MoveCloseTo，直接进 WaitAtFightPointAsync 兜底。
+                                            if (__coordTrusted)
                                             {
-                                                collectPointWaitTask = ks.TryWaitForCollectPointAsync(collectPointSyncKey, timeoutMs: 5000, ct);
-                                            }
-
-                                            await MoveCloseTo(waypoint, closeDistance: 2.0, tailDelayMs: 0, maxSteps: 5);
-
-                                            // 第一段走完，await 后台 wait task 看是否拿到广播 → 拿到则二段精接近聚物点。
-                                            // 超时未到 → 退化到第二段精接近"战斗点"（与原 spec closeDistance:1.0 单段路径等价的体验）。
-                                            // 任意失败：catch + LogWarning，不让二段失败传播到主流程，继续 WaitAtFightPointAsync 兜底。
-                                            try
-                                            {
-                                                if (ks != null && !ks.IsCurrentPlayerKazuha && collectPointWaitTask != null)
+                                                var ks = MultiplayerCoordinator.KazuhaCollectSync;
+                                                var collectPointSyncKey = waypoint == null
+                                                    ? $"{MultiplayerCoordinator.CurrentRouteIndex}:0:0"
+                                                    : $"{MultiplayerCoordinator.CurrentRouteIndex}:{waypoint.X.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}:{waypoint.Y.ToString("R", System.Globalization.CultureInfo.InvariantCulture)}";
+                                                Task<bool>? collectPointWaitTask = null;
+                                                if (ks != null && !ks.IsCurrentPlayerKazuha)
                                                 {
-                                                    var got = await collectPointWaitTask;
-                                                    double tx, ty;
-                                                    if (got && ks.TryGetCollectPointForCurrent(collectPointSyncKey, out var cx, out var cy))
-                                                    {
-                                                        tx = cx; ty = cy;
-                                                        Logger.LogInformation("[联机] 非万叶玩家：收到聚物点广播 ({CX:F1},{CY:F1})，二段精接近", tx, ty);
-                                                    }
-                                                    else
-                                                    {
-                                                        // 退化：等聚物点超时 / 未到 → 二段改为精接近"战斗点"，
-                                                        // 把停点从距战斗点 < 2.0 缩到 < 0.5，体验等价于原 spec closeDistance:1.0 单段。
-                                                        tx = waypoint.X; ty = waypoint.Y;
-                                                        Logger.LogDebug("[联机] 非万叶玩家：等聚物点广播超时，退化为精接近战斗点 ({TX:F1},{TY:F1})", tx, ty);
-                                                    }
-
-                                                    // 构造临时 WaypointForTrack：MapName / MapMatchMethod 沿用 fightWaypoint，
-                                                    // 但 X/Y/MatX/MatY 直接覆盖为 (tx, ty)（已经是小地图坐标系，
-                                                    // 与 Navigation.GetPosition 返回值同坐标系，绕过基类构造的坐标系转换）。
-                                                    // GameX/GameY 不参与 MoveCloseTo（其内部仅读 X/Y），写 0 即可。
-                                                    // 不修改原 waypoint 实例任何字段。
-                                                    var tmp = new WaypointForTrack(
-                                                        new Waypoint
-                                                        {
-                                                            X = 0, Y = 0,
-                                                            Type = waypoint.Type,
-                                                            Action = string.Empty,
-                                                            MoveMode = MoveModeEnum.Walk.Code,
-                                                        },
-                                                        waypoint.MapName,
-                                                        waypoint.MapMatchMethod)
-                                                    {
-                                                        X = tx, Y = ty,
-                                                        MatX = tx, MatY = ty,
-                                                        GameX = 0, GameY = 0,
-                                                    };
-                                                    // multiplayer-kazuha-collect-point-broadcast: 二段 maxSteps 改为可配置（KazuhaSecondApproachMaxSteps），
-                                                    //   优先读 KazuhaCollectSyncCoordinator 持有的 _config（配置组覆盖后的实例），
-                                                    //   兜底读全局 AutoHoeingConfig。范围已由 ClampSecondApproachMaxSteps 守卫。
-                                                    var cfgMaxSteps = TaskContext.Instance().Config.AutoHoeingConfig.KazuhaSecondApproachMaxSteps;
-                                                    var maxSteps = cfgMaxSteps >= 1 && cfgMaxSteps <= 30 ? cfgMaxSteps : 6;
-                                                    await MoveCloseTo(tmp, closeDistance: 0.5, tailDelayMs: 0, maxSteps: maxSteps);
+                                                    collectPointWaitTask = ks.TryWaitForCollectPointAsync(collectPointSyncKey, timeoutMs: 5000, ct);
                                                 }
-                                            }
-                                            catch (OperationCanceledException) { throw; }
-                                            catch (Exception ex)
-                                            {
-                                                Logger.LogWarning(ex, "[联机] 非万叶玩家：二段精接近异常，跳过并进 WaitAtFightPointAsync 兜底");
+
+                                                await MoveCloseTo(waypoint, closeDistance: 2.0, tailDelayMs: 0, maxSteps: 5);
+
+                                                // 第一段走完，await 后台 wait task 看是否拿到广播 → 拿到则二段精接近聚物点。
+                                                // 超时未到 → 退化到第二段精接近"战斗点"（与原 spec closeDistance:1.0 单段路径等价的体验）。
+                                                // 任意失败：catch + LogWarning，不让二段失败传播到主流程，继续 WaitAtFightPointAsync 兜底。
+                                                try
+                                                {
+                                                    if (ks != null && !ks.IsCurrentPlayerKazuha && collectPointWaitTask != null)
+                                                    {
+                                                        var got = await collectPointWaitTask;
+                                                        double tx, ty;
+                                                        if (got && ks.TryGetCollectPointForCurrent(collectPointSyncKey, out var cx, out var cy))
+                                                        {
+                                                            tx = cx; ty = cy;
+                                                            Logger.LogInformation("[联机] 非万叶玩家：收到聚物点广播 ({CX:F1},{CY:F1})，二段精接近", tx, ty);
+                                                        }
+                                                        else
+                                                        {
+                                                            // 退化：等聚物点超时 / 未到 → 二段改为精接近"战斗点"，
+                                                            // 把停点从距战斗点 < 2.0 缩到 < 0.5，体验等价于原 spec closeDistance:1.0 单段。
+                                                            tx = waypoint.X; ty = waypoint.Y;
+                                                            Logger.LogDebug("[联机] 非万叶玩家：等聚物点广播超时，退化为精接近战斗点 ({TX:F1},{TY:F1})", tx, ty);
+                                                        }
+
+                                                        // 构造临时 WaypointForTrack：MapName / MapMatchMethod 沿用 fightWaypoint，
+                                                        // 但 X/Y/MatX/MatY 直接覆盖为 (tx, ty)（已经是小地图坐标系，
+                                                        // 与 Navigation.GetPosition 返回值同坐标系，绕过基类构造的坐标系转换）。
+                                                        // GameX/GameY 不参与 MoveCloseTo（其内部仅读 X/Y），写 0 即可。
+                                                        // 不修改原 waypoint 实例任何字段。
+                                                        var tmp = new WaypointForTrack(
+                                                            new Waypoint
+                                                            {
+                                                                X = 0, Y = 0,
+                                                                Type = waypoint.Type,
+                                                                Action = string.Empty,
+                                                                MoveMode = MoveModeEnum.Walk.Code,
+                                                            },
+                                                            waypoint.MapName,
+                                                            waypoint.MapMatchMethod)
+                                                        {
+                                                            X = tx, Y = ty,
+                                                            MatX = tx, MatY = ty,
+                                                            GameX = 0, GameY = 0,
+                                                        };
+                                                        // multiplayer-kazuha-collect-point-broadcast: 二段 maxSteps 改为可配置（KazuhaSecondApproachMaxSteps）。
+                                                        var cfgMaxSteps = TaskContext.Instance().Config.AutoHoeingConfig.KazuhaSecondApproachMaxSteps;
+                                                        var maxSteps = cfgMaxSteps >= 1 && cfgMaxSteps <= 30 ? cfgMaxSteps : 6;
+                                                        await MoveCloseTo(tmp, closeDistance: 0.5, tailDelayMs: 0, maxSteps: maxSteps);
+                                                    }
+                                                }
+                                                catch (OperationCanceledException) { throw; }
+                                                catch (Exception ex)
+                                                {
+                                                    Logger.LogWarning(ex, "[联机] 非万叶玩家：二段精接近异常，跳过并进 WaitAtFightPointAsync 兜底");
+                                                }
                                             }
 
                                             // multiplayer-kazuha-collect-sync: 走"万叶分支 / 普通成员分支"的同步流程
+                                            // 始终执行（放弃移动也要 join 全队同步，由其内部兜底接管恢复）。
                                             Logger.LogInformation("[联机] 到达战斗点，进入聚物同步流程");
                                             await MultiplayerCoordinator.KazuhaCollectSync.WaitAtFightPointAsync(waypoint, prepTask, ct);
                                         }

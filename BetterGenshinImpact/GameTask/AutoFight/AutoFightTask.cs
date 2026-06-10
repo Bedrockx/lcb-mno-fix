@@ -3091,22 +3091,34 @@ public class AutoFightTask : ISoloTask
 
                 if (currentPos is { X: 0, Y: 0 }) continue;
 
-                // BC1 护栏复核（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 1a）：
-                // (0,0) 过滤只挡识别失败，挡不住"数值合法但距战斗点两万单位"的 garbage 远点。
-                // 循环体内重算 seed（ComputeSeedAnchor 恒等返回战斗点，无副作用，绝不 SetPrevPosition 覆写——
-                // 遵守 return-to-point-stale-prev-position-drift-fix 的"循环体不覆写"约束），
-                // 用 IsRecognizedPositionTrustworthy 复核；garbage 远点本轮拒绝 continue（Q3 单帧即拒）。
-                var __guardSeed = KazuhaCollectPositionGuardDecisions.ComputeSeedAnchor(fightWaypoint.X, fightWaypoint.Y);
-                if (!KazuhaCollectPositionGuardDecisions.IsRecognizedPositionTrustworthy(
-                        currentPos, __guardSeed.X, __guardSeed.Y,
-                        KazuhaCollectPositionGuardDecisions.RecognizedPositionGuardThreshold))
+                // hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix 路径 A：
+                // 旧护栏命中只 continue、不重播种 → 漂移的陈旧锚点残留、帧帧误匹配无法恢复。
+                // 改为调用与路径 B 同一的 KazuhaReturnReseedGuard：异常时重播种(SetPrevPosition 战斗点)
+                // + 重识别重试（每次间隔 100ms），阈值/次数读 AutoHoeingConfig（替代硬编码 180）。
+                // 仍异常则放弃本轮 continue（已尝试重播种恢复）；可信则用修正坐标继续后续分流。
+                var __hoeingCfg = TaskContext.Instance().Config.AutoHoeingConfig;
+                var __guardResult = await KazuhaReturnReseedGuard.EvaluateAndReseedAsync(
+                    currentPos, fightWaypoint.X, fightWaypoint.Y,
+                    __hoeingCfg.KazuhaReturnAbnormalCoordThreshold,
+                    __hoeingCfg.KazuhaReturnReseedRetryCount,
+                    reseedAnchor: () => Navigation.SetPrevPosition((float)fightWaypoint.X, (float)fightWaypoint.Y),
+                    reSample: () =>
+                    {
+                        using var img = CaptureToRectArea();
+                        return Navigation.GetPosition(img, fightWaypoint.MapName, fightWaypoint.MapMatchMethod);
+                    },
+                    delay: t => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, t),
+                    log: m => TaskControl.Logger.LogInformation("[联机][万叶] 持续回点{Msg}", m),
+                    ct: token);
+
+                if (!__guardResult.ShouldMove)
                 {
-                    var __guardDist = Navigation.GetDistance(fightWaypoint, currentPos);
                     TaskControl.Logger.LogDebug(
-                        "[联机][万叶] 持续回点：识别坐标距战斗点 {Dist:F1} > {Threshold:F1}，疑似异常远点，本轮拒绝",
-                        __guardDist, KazuhaCollectPositionGuardDecisions.RecognizedPositionGuardThreshold);
+                        "[联机][万叶] 持续回点：重播种+重识别 {Retry} 次仍异常，本轮放弃",
+                        __guardResult.RetryUsed);
                     continue;
                 }
+                currentPos = __guardResult.TrustedPos;
 
                 var realtimeDistance = Navigation.GetDistance(fightWaypoint, currentPos);
                 if (!AutoFightSeekDecisions.ShouldTriggerContinuousReturn(

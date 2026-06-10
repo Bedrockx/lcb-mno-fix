@@ -428,6 +428,27 @@ public partial class AutoHoeingConfig : ObservableObject
     private int _kazuhaSecondApproachMaxSteps = 6;
 
     /// <summary>
+    /// 万叶回点异常坐标判定阈值（小地图坐标单位）。
+    /// 战后回点 / 持续回点读到的坐标距战斗点超过此值，视为识别漂移 garbage 远点，
+    /// 触发"重新播种战斗点锚点 + 重识别"重试，而不是直接朝该点移动。
+    /// 默认 50（替代旧硬编码 180）。纯本地调试参数，不同步房主→成员、不进 RoomConfig 协议。
+    /// 仅联机万叶两条回点路径（持续回点后台循环 / 战后聚物分支）读取，单机零回归。
+    /// 详见 .kiro/specs/hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix。
+    /// </summary>
+    [ObservableProperty]
+    private double _kazuhaReturnAbnormalCoordThreshold = 50.0;
+
+    /// <summary>
+    /// 万叶回点异常坐标的重新播种 + 重识别最大重试次数。
+    /// 命中异常阈值后，重播种战斗点锚点并重识别（每次间隔约 100ms），最多重试此次数；
+    /// 仍异常则放弃本轮移动（绝不以异常坐标 MoveTo / MoveCloseTo）。
+    /// 默认 3。纯本地调试参数，不同步、不进 RoomConfig 协议。
+    /// 详见 .kiro/specs/hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix。
+    /// </summary>
+    [ObservableProperty]
+    private int _kazuhaReturnReseedRetryCount = 3;
+
+    /// <summary>
     /// 房间白名单，逗号分隔的玩家名称
     /// </summary>
     [ObservableProperty]

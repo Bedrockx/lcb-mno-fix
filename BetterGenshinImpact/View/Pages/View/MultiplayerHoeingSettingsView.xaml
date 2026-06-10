@@ -294,6 +294,19 @@
                                                 IsEnabled="{Binding KazuhaParamsEnabled}"
                                                 PlaceholderText="步，1-30，默认6"
                                                 Text="{Binding KazuhaSecondApproachMaxSteps, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <ui:TextBlock Margin="0,4,0,2" Text="回点异常坐标阈值" />
+                                    <ui:TextBox Width="70"
+                                                Margin="0,0,0,2"
+                                                HorizontalAlignment="Left"
+                                                IsEnabled="{Binding KazuhaParamsEnabled}"
+                                                PlaceholderText="单位，默认50"
+                                                Text="{Binding KazuhaReturnAbnormalCoordThreshold, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <ui:TextBlock Margin="0,4,0,2" Text="回点重识别重试次数" />
+                                    <ui:TextBox Width="70"
+                                                HorizontalAlignment="Left"
+                                                IsEnabled="{Binding KazuhaParamsEnabled}"
+                                                PlaceholderText="次，默认3"
+                                                Text="{Binding KazuhaReturnReseedRetryCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </StackPanel>
                             </StackPanel>
                         </ui:CardExpander>

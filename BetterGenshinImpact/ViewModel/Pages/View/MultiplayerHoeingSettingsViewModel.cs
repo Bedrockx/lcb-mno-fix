@@ -73,6 +73,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     [ObservableProperty] private string _kazuhaSyncTimeoutSeconds = "";
     [ObservableProperty] private string _kazuhaWaitSkillCdSeconds = "";
     [ObservableProperty] private string _kazuhaSecondApproachMaxSteps = "";
+    // 万叶回点异常坐标重播种重识别修复：两个纯本地调试参数（string 形态绑 ui:TextBox）
+    [ObservableProperty] private string _kazuhaReturnAbnormalCoordThreshold = "";
+    [ObservableProperty] private string _kazuhaReturnReseedRetryCount = "";
 
     // ===== D 成员区 =====
     [ObservableProperty]
@@ -177,6 +180,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         _kazuhaSyncTimeoutSeconds = GetInt("kazuhaSyncTimeoutSeconds", g.KazuhaSyncTimeoutSeconds).ToString();
         _kazuhaWaitSkillCdSeconds = GetInt("kazuhaWaitSkillCdSeconds", g.KazuhaWaitSkillCdSeconds).ToString();
         _kazuhaSecondApproachMaxSteps = GetInt("kazuhaSecondApproachMaxSteps", g.KazuhaSecondApproachMaxSteps).ToString();
+        // 阈值是 double，沿用本 VM 读 double 的惯例（GetStr + g.Xxx.ToString()，见 syncPointMinDistance），不新增 GetDouble
+        _kazuhaReturnAbnormalCoordThreshold = GetStr("kazuhaReturnAbnormalCoordThreshold", g.KazuhaReturnAbnormalCoordThreshold.ToString());
+        _kazuhaReturnReseedRetryCount = GetInt("kazuhaReturnReseedRetryCount", g.KazuhaReturnReseedRetryCount).ToString();
 
         _joinModeSelection = GetStr("memberJoinMode", "byHostName") == "random" ? "随机加入现有房间" : "指定房主名称";
         _targetHostName = GetStr("targetHostName", g.TargetHostName);
@@ -220,6 +226,8 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         if (int.TryParse(KazuhaSyncTimeoutSeconds, out var kst)) settings["kazuhaSyncTimeoutSeconds"] = kst;
         if (int.TryParse(KazuhaWaitSkillCdSeconds, out var kwc)) settings["kazuhaWaitSkillCdSeconds"] = kwc;
         if (int.TryParse(KazuhaSecondApproachMaxSteps, out var ksam)) settings["kazuhaSecondApproachMaxSteps"] = ksam;
+        if (double.TryParse(KazuhaReturnAbnormalCoordThreshold, out var krt)) settings["kazuhaReturnAbnormalCoordThreshold"] = krt;
+        if (int.TryParse(KazuhaReturnReseedRetryCount, out var krc)) settings["kazuhaReturnReseedRetryCount"] = krc;
         if (int.TryParse(FightTimeoutSeconds, out var fts)) settings["fightTimeoutSeconds"] = fts;
 
         settings["fastSyncPointEnabled"] = FastSyncPointEnabled;
