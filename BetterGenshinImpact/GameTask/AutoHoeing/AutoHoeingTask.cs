@@ -3475,6 +3475,9 @@ public class AutoHoeingTask : ISoloTask
             // 万叶回点异常坐标重播种重识别修复：纯本地调试参数回读（阈值 double，次数 int；Get 泛型推断同 SyncPointMinDistance 的 double 用法）
             _config.KazuhaReturnAbnormalCoordThreshold = Get("kazuhaReturnAbnormalCoordThreshold", _config.KazuhaReturnAbnormalCoordThreshold);
             _config.KazuhaReturnReseedRetryCount = Get("kazuhaReturnReseedRetryCount", _config.KazuhaReturnReseedRetryCount);
+            // hoeing-multiplayer-lagging-member-catchup：落后追赶调试参数回读（纯本地，配置组场景必须经此 override 才能传到运行时 EffectiveConfig）
+            _config.EnableLaggingCatchUp = Get("enableLaggingCatchUp", _config.EnableLaggingCatchUp);
+            _config.LagSegmentThreshold = Get("lagSegmentThreshold", _config.LagSegmentThreshold);
             NormalizeKazuhaTimeoutOrder(_config);
             _config.FightTimeoutSeconds = Get("fightTimeoutSeconds", _config.FightTimeoutSeconds);
             // === 集体卡死监测（multiplayer-mutual-wait-collective-skip §8.8 / OQ-1~OQ-5 默认值）===
