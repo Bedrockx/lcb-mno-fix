@@ -1831,9 +1831,22 @@ public class CoordinatorHub : Hub
         // 则对晚到的本调用方单独补发 AllArrived 解锁——它错过了 Clients.Group 广播，
         // 删短路后会订阅一个不会再触发的事件而死等到 120s（bugfix.md 组合 7）。
         bool alreadyBroadcasted;
+        bool releaseLaggingCaller;
         lock (room)
         {
             alreadyBroadcasted = room.BroadcastedSyncIds.Contains(syncId);
+
+            // falling-behind-fix 方案 B：判定 caller 是否为孤立落后者。
+            // 取除 caller 外、所有在线（心跳<2min）正常玩家的 CurrentProgress；
+            // 若 syncProgress 严格小于它们全部，则 caller 落后于所有人、其它人不会再以此 syncId 到达。
+            // 异常玩家（IsAbnormal）不纳入比较，保持其分支现状不受影响。
+            var others = room.Players
+                .Where(p => p.ConnectionId != Context.ConnectionId
+                            && !p.IsAbnormal
+                            && DateTime.UtcNow - p.LastHeartbeat < TimeSpan.FromMinutes(2))
+                .Select(p => p.CurrentProgress)
+                .ToList();
+            releaseLaggingCaller = LaggingMemberReleaseDecisions.ShouldReleaseLaggingCaller(syncProgress, others);
         }
         if (SyncReplayDecisions.ShouldReplayAllArrived(alreadyBroadcasted))
         {
@@ -1842,6 +1855,17 @@ public class CoordinatorHub : Hub
             await Clients.Caller.SendAsync("AllArrived", syncId);
             // 补发后仍继续走全量重评估（幂等：不改 BroadcastedSyncIds 状态），
             // 保证其他历史 syncId 的放行不被跳过。
+        }
+        else if (releaseLaggingCaller)
+        {
+            // 孤立落后者补发（方案 B）：该 syncId 未被全员广播过（alreadyBroadcasted=false），
+            // 但 caller 已严格落后所有其他在线玩家，它们不会再以此 syncId 到达 → ArrivalSet 永不齐。
+            // 直接对 caller 补发 AllArrived（等价"你落后了，别等了，放你走"），避免死等满 120s。
+            // 严格小于(<)防误放：进度相等的正常碰头玩家不会触发本分支（ShouldReleaseLaggingCaller 返回 false）。
+            // 仅对 caller 补发，不改 BroadcastedSyncIds、不动其他玩家、不清 ArrivalSet（幂等、不影响后续到齐路径）。
+            _logger.LogInformation("[WaitForAllPlayers] caller 为孤立落后者，补发 AllArrived 放行: 房间={RoomCode}, 同步点={SyncId}, 进度={Progress}, 连接={ConnId}",
+                roomCode, syncId, syncProgress, Context.ConnectionId);
+            await Clients.Caller.SendAsync("AllArrived", syncId);
         }
 
         // 全量重评估：当前 syncId 与所有历史 ArrivalSets 一并判定
@@ -1964,6 +1988,16 @@ public class CoordinatorHub : Hub
                 p.PlayerUid, p.ConnectionId, p.IsAbnormal, p.TargetProgress, p.CurrentProgress, arrivals.Contains(p.ConnectionId));
         }
 
+        // 落后者豁免诊断（falling-behind-fix / 方案 A）：
+        // 若 caller 的 syncProgress 严格小于所有其他在线正常玩家的 CurrentProgress，
+        // 则它是孤立落后者——这些已走过此点的玩家会被下方现状豁免 CurrentProgress>syncProgress 天然剔除，
+        // requiredPlayers 仅剩已到达者 → 立即放行。此处仅记录诊断谓词，不改变 requiredPlayers 集合（零行为变更）。
+        // 真正解锁孤立落后者死等的是 WaitForAllPlayers 的方案 B 补发分支。
+        bool releaseLaggingCaller = LaggingMemberReleaseDecisions.ShouldReleaseLaggingCaller(
+            syncProgress,
+            onlinePlayers.Where(p => !p.IsAbnormal && p.CurrentProgress > syncProgress)
+                         .Select(p => p.CurrentProgress).ToList());
+
         // 计算需要等待的玩家
         // 异常玩家分支：保持原逻辑（syncProgress<0 必须等；TargetProgress==syncProgress 必须等；否则豁免）
         // 正常玩家分支（multiplayer-sync-skip-by-progress §2.1 / §2.2）：
@@ -1984,6 +2018,7 @@ public class CoordinatorHub : Hub
 
         _logger.LogInformation("[ShouldBroadcast] 需要等待的玩家: {List}",
             string.Join(",", requiredPlayers.Select(p => $"{p.PlayerUid}(Abn={p.IsAbnormal},T={p.TargetProgress},C={p.CurrentProgress})")));
+        _logger.LogInformation("[ShouldBroadcast] releaseLaggingCaller={Release}（孤立落后者豁免谓词）", releaseLaggingCaller);
 
         if (requiredPlayers.Count == 0)
         {

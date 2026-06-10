@@ -11,6 +11,16 @@
 # 首次运行会自动生成 docker-compose.override.yml（默认 8080:80），
 # 如需修改宿主机端口，编辑该文件后重新运行即可。
 
+# CRLF 自愈：本脚本若在 Windows 上编辑过，行尾可能是 CRLF（\r\n），
+# 直接在 Linux 上跑会报 $'\r': command not found / set: invalid option name。
+# 这里检测自身是否含 \r，若有则就地转成 LF 并用干净副本重新执行一次（仅自愈一次，避免递归）。
+if [ -z "${__DEPLOY_LF_FIXED:-}" ] && grep -q $'\r' "$0" 2>/dev/null; then
+  tmp="$(mktemp)"
+  sed 's/\r$//' "$0" > "$tmp"
+  export __DEPLOY_LF_FIXED=1
+  exec bash "$tmp" "$@"
+fi
+
 set -euo pipefail
 
 # 切到脚本所在目录，确保 docker compose 能找到 yml 文件
