@@ -61,4 +61,10 @@ public class RoomConfig
     public bool SharedFightEndQuorumEnabled { get; set; } = false;
     /// <summary>配额比例 [0.0,1.0]，默认 0.5。达成条件 doneCount ≥ ⌈participants × ratio⌉</summary>
     public double SharedFightEndQuorumRatio { get; set; } = 0.5;
+
+    // === 落后成员逐段追赶（hoeing-lagging-catchup-host-synced-setting spec, 与服务端 RoomConfig 严格对称）===
+    /// <summary>启用落后成员逐段追赶（房主设置，同步成员）。默认 false。房主与成员都参与追赶判定（D2）。</summary>
+    public bool EnableLaggingCatchUp { get; set; } = false;
+    /// <summary>落后触发段数阈值，范围 [1,3]，默认 1。落后 ≥ N 段触发逐段跳进追赶。</summary>
+    public int LagSegmentThreshold { get; set; } = 1;
 }

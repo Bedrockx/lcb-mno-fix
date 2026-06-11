@@ -482,26 +482,27 @@
             <ContentControl x:Name="VariantPanelHost" />
         </ui:CardExpander>
 
-        <!--  H 调试（最末，房主成员都可见；通用调试参数卡片，后续其他待调参数也往这里加）  -->
+        <!--  H 调试（房主可见；落后追赶为房主下发设置，成员隐藏整张卡，D4 方案 C）  -->
         <ui:CardExpander Margin="0,12,0,0"
                          ContentPadding="12"
                          Icon="{ui:SymbolIcon Bug24}"
-                         IsExpanded="False">
+                         IsExpanded="False"
+                         Visibility="{Binding ShowHostArea}">
             <ui:CardExpander.Header>
                 <ui:TextBlock FontTypography="Body" Text="调试" />
             </ui:CardExpander.Header>
             <StackPanel>
                 <ui:ToggleSwitch Margin="0,0,0,4"
-                                 Content="启用落后成员逐段追赶（成员侧，实验性）"
+                                 Content="启用落后成员逐段追赶（房主设置，同步成员，实验性）"
                                  IsChecked="{Binding EnableLaggingCatchUp, Mode=TwoWay}" />
-                <ui:TextBlock Margin="0,0,0,2" Text="落后触发阈值（落后多少段触发追赶）" />
+                <ui:TextBlock Margin="0,0,0,2" Text="落后触发阈值（落后多少段触发追赶，范围 1-3）" />
                 <ui:TextBox Width="70"
                             Margin="0,0,0,8"
                             HorizontalAlignment="Left"
-                            PlaceholderText="默认1"
+                            PlaceholderText="1-3，默认1"
                             Text="{Binding LagSegmentThreshold, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                 <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                              Text="落后成员会逐段快速跳进对齐大部队。仅成员模式生效，单机不受影响。骨架阶段默认关闭。"
+                              Text="房主统一配置并同步给所有成员；房主与成员都参与追赶。落后玩家逐段快速跳进对齐大部队，单机不受影响。"
                               TextWrapping="Wrap" />
             </StackPanel>
         </ui:CardExpander>

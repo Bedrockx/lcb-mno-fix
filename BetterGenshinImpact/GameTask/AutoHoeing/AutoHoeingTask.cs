@@ -426,6 +426,10 @@ public class AutoHoeingTask : ISoloTask
             _config.SharedFightEndQuorumEnabled = false;
             _config.SharedFightEndQuorumRatio = 0.5;
 
+            // === 落后追赶重置（hoeing-lagging-catchup-host-synced-setting spec，对称房主下发字段）===
+            _config.EnableLaggingCatchUp = false;
+            _config.LagSegmentThreshold = 1;
+
             ApplySettingsOverride();
         }
 
@@ -762,6 +766,9 @@ public class AutoHoeingTask : ISoloTask
                     // === 共享战斗配额结束同步上传（multiplayer-shared-fight-end-quorum-sync spec）===
                     SharedFightEndQuorumEnabled = _config.SharedFightEndQuorumEnabled,
                     SharedFightEndQuorumRatio = _config.SharedFightEndQuorumRatio,
+                    // === 落后追赶上传（hoeing-lagging-catchup-host-synced-setting spec）===
+                    EnableLaggingCatchUp = _config.EnableLaggingCatchUp,
+                    LagSegmentThreshold = Math.Clamp(_config.LagSegmentThreshold, 1, 3),
                 };
                 
                 // 房主上传配置，带重试机制（最多3次）
@@ -835,6 +842,8 @@ public class AutoHoeingTask : ISoloTask
                 _config.FastSyncPointEnabled, _config.FastSyncPathingDistance, _config.FastSyncTeleportLoadingDelayMs);
             _logger.LogInformation("[联机] 共享战斗配额结束同步：启用={E}, 配额比例={R:F2}",
                 _config.SharedFightEndQuorumEnabled, _config.SharedFightEndQuorumRatio);
+            _logger.LogInformation("[联机] 落后追赶：启用={E}, 触发阈值={T}段（房主同步，房主与成员都参与）",
+                _config.EnableLaggingCatchUp, _config.LagSegmentThreshold);
             _logger.LogInformation("[联机] =====================================");
 
             _multiplayerCoordinator.OnDegraded += reason =>
@@ -1147,6 +1156,9 @@ public class AutoHoeingTask : ISoloTask
                         // === 共享战斗配额结束同步同步（multiplayer-shared-fight-end-quorum-sync spec）===
                         _config.SharedFightEndQuorumEnabled = hostConfig.SharedFightEndQuorumEnabled;
                         _config.SharedFightEndQuorumRatio = SharedFightEndQuorumDecisions.ClampRatio(hostConfig.SharedFightEndQuorumRatio);
+                        // === 落后追赶同步（hoeing-lagging-catchup-host-synced-setting spec，成员回填房主下发值）===
+                        _config.EnableLaggingCatchUp = hostConfig.EnableLaggingCatchUp;
+                        _config.LagSegmentThreshold = Math.Clamp(hostConfig.LagSegmentThreshold, 1, 3);
 
                         // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                         PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -1948,6 +1960,9 @@ public class AutoHoeingTask : ISoloTask
                     // === 共享战斗配额结束同步同步（multiplayer-shared-fight-end-quorum-sync spec，多世界轮换块）===
                     _config.SharedFightEndQuorumEnabled = hostConfig.SharedFightEndQuorumEnabled;
                     _config.SharedFightEndQuorumRatio = Multiplayer.SharedFightEndQuorumDecisions.ClampRatio(hostConfig.SharedFightEndQuorumRatio);
+                    // === 落后追赶同步（hoeing-lagging-catchup-host-synced-setting spec，多世界轮换块）===
+                    _config.EnableLaggingCatchUp = hostConfig.EnableLaggingCatchUp;
+                    _config.LagSegmentThreshold = Math.Clamp(hostConfig.LagSegmentThreshold, 1, 3);
 
                     // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                     PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -3521,6 +3536,9 @@ public class AutoHoeingTask : ISoloTask
             // === 共享战斗配额结束同步（单机重置为默认值）===
             _config.SharedFightEndQuorumEnabled = false;
             _config.SharedFightEndQuorumRatio = 0.5;
+            // === 落后追赶（单机重置为默认值，hoeing-lagging-catchup-host-synced-setting spec）===
+            _config.EnableLaggingCatchUp = false;
+            _config.LagSegmentThreshold = 1;
 
             // 单机模式：重置固定调试线路字段，避免联机全局配置残留影响
             // 如果 settings 显式包含这些键，后续 ContainsKey 逻辑会覆盖回来
@@ -3713,6 +3731,10 @@ public class AutoHoeingTask : ISoloTask
             // ===== 共享战斗配额结束同步（multiplayer-shared-fight-end-quorum-sync spec, host-controlled）=====
             new() { Name = "sharedFightEndQuorumEnabled", Label = "启用共享战斗配额结束同步（房主设置，同步成员）\n开启后联机共享战斗中本地判定结束改为投票，参与者中 done 数 ≥ ⌈人数×比例⌉ 时全队一起结束，避免无仇恨玩家提前离队", Type = "bool", DefaultValue = config.SharedFightEndQuorumEnabled },
             new() { Name = "sharedFightEndQuorumRatio", Label = "配额比例（0-1，默认 0.5 过半）\n达成条件 doneCount ≥ ⌈participants × ratio⌉", Type = "number", DefaultValue = config.SharedFightEndQuorumRatio },
+
+            // ===== 落后成员逐段追赶（hoeing-lagging-catchup-host-synced-setting spec, host-controlled）=====
+            new() { Name = "enableLaggingCatchUp", Label = "启用落后成员逐段追赶（房主设置，同步成员）\n开启后段级落后大部队达阈值的玩家逐段快速跳进对齐，房主与成员都参与追赶", Type = "bool", DefaultValue = config.EnableLaggingCatchUp },
+            new() { Name = "lagSegmentThreshold", Label = "落后触发阈值（落后多少段触发，范围 1-3，默认 1）", Type = "number", DefaultValue = config.LagSegmentThreshold },
 
             // ===== 第七部分：多世界连续锄地配置 =====
             new() { Name = "multiWorldEnabled", Label = "启用多世界连续锄地\n房主设定，完成一个世界后轮换到下一个玩家的世界", Type = "bool", DefaultValue = config.MultiWorldEnabled },

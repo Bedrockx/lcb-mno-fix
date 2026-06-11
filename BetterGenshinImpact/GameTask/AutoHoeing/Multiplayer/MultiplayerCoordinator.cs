@@ -408,14 +408,16 @@ public class MultiplayerCoordinator : IAsyncDisposable
     /// 段级落后追赶判定（hoeing-multiplayer-lagging-member-catchup spec / 关键问题 1）。
     /// PathExecutor 在段起点传送点正常同步块（WaitForAllPlayers 之前）调用：传入本地实时 mySegProgress，
     /// 本方法读客户端缓存 CurrentPlayerList 归约大部队段级进度（房主优先 / 在线最大），调纯函数判定。
-    /// 纯同步读内存、无 await、无网络往返。守卫：开关关闭 / 单机 / 房主 / 进度不可得 → false。
+    /// 纯同步读内存、无 await、无网络往返。守卫：开关关闭 / 单机 / 进度不可得 → false。
+    /// 房主也参与（D2，hoeing-lagging-catchup-host-synced-setting spec）：房主以在线成员最靠前进度为追赶基准。
     /// </summary>
     public bool TryGetLaggingCatchUpDecision(long mySegProgress)
     {
         if (!EffectiveConfig.MultiplayerEnabled) return false;
         if (!EffectiveConfig.EnableLaggingCatchUp) return false;
-        bool isMember = !_client.IsHost;
-        if (!isMember) return false;
+        // D2 行为变更（hoeing-lagging-catchup-host-synced-setting spec）：移除 !_client.IsHost 守卫，房主也参与落后追赶判定。
+        // 房主自调用时 myUid 跳过自己 → hostSeg=null → ResolveSquadSegmentProgress fallback 到 peerSegs（在线成员）最大值；
+        // 房间仅房主一人时 peerSegs 空 → squadSeg=Unavailable(-1) → ShouldCatchUp 返回 false（房主独自不追）。
 
         var myUid = _client.MyPlayerUid;
         long? hostSeg = null;
