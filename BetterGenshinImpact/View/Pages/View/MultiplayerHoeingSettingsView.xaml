@@ -480,18 +480,26 @@
                 <ui:TextBlock FontTypography="Body" Text="调试" />
             </ui:CardExpander.Header>
             <StackPanel>
-                <ui:ToggleSwitch Margin="0,0,0,4"
-                                 Content="启用落后逐段追赶"
-                                 IsChecked="{Binding EnableLaggingCatchUp, Mode=TwoWay}" />
-                <ui:TextBlock Margin="0,0,0,2" Text="落后触发阈值（落后多少段触发追赶，范围 1-3）" />
-                <ui:TextBox Width="70"
-                            Margin="0,0,0,8"
-                            HorizontalAlignment="Left"
-                            PlaceholderText="1-3，默认1"
-                            Text="{Binding LagSegmentThreshold, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                              Text="房主统一配置并同步给所有成员；房主与成员都参与追赶。落后玩家逐段快速跳进对齐大部队，单机不受影响。"
-                              TextWrapping="Wrap" />
+                <!--  子卡片：落后成员逐段追赶（每个调试功能单独一张子卡片，后续功能在此并列追加）  -->
+                <ui:Card Padding="12">
+                    <StackPanel>
+                        <ui:TextBlock Margin="0,0,0,8"
+                                      FontTypography="BodyStrong"
+                                      Text="落后成员逐段追赶" />
+                        <ui:ToggleSwitch Margin="0,0,0,4"
+                                         Content="启用落后逐段追赶"
+                                         IsChecked="{Binding EnableLaggingCatchUp, Mode=TwoWay}" />
+                        <ui:TextBlock Margin="0,0,0,2" Text="落后触发阈值（落后多少段触发追赶，范围 1-3）" />
+                        <ui:TextBox Width="70"
+                                    Margin="0,0,0,8"
+                                    HorizontalAlignment="Left"
+                                    PlaceholderText="1-3，默认1"
+                                    Text="{Binding LagSegmentThreshold, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="房主统一配置并同步给所有成员；房主与成员都参与追赶。落后玩家逐段快速跳进对齐大部队，单机不受影响。"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:Card>
             </StackPanel>
         </ui:CardExpander>
     </StackPanel>
