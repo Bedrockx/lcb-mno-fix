@@ -41,8 +41,10 @@ public static class KazuhaReturnReseedGuard
     /// <param name="fightPointY">本段战斗点 Y。</param>
     /// <param name="threshold">异常判定阈值（= AutoHoeingConfig.KazuhaReturnAbnormalCoordThreshold，默认 50）。</param>
     /// <param name="maxRetry">最大重试次数（= AutoHoeingConfig.KazuhaReturnReseedRetryCount，默认 3）。</param>
+    /// <param name="zeroCoordStableRetry">(0,0) 识别失败时 GetPositionStable 全局匹配重试上限（= AutoHoeingConfig.KazuhaReturnZeroCoordStableRetryCount，默认 3）。</param>
     /// <param name="reseedAnchor">重播种委托：Navigation.SetPrevPosition(战斗点)。绝不 Reset。</param>
     /// <param name="reSample">重识别委托：CaptureToRectArea + Navigation.GetPosition，返回新坐标。</param>
+    /// <param name="reSampleStable">(0,0) 失败时的全局匹配重识别委托：CaptureToRectArea + Navigation.GetPositionStable。不重播种（Q4）。</param>
     /// <param name="delay">延时委托：Task.Delay(ReseedReSampleDelayMs, ct)。</param>
     /// <param name="log">日志委托。</param>
     /// <param name="ct">取消令牌。</param>
@@ -51,8 +53,10 @@ public static class KazuhaReturnReseedGuard
         double fightPointX, double fightPointY,
         double threshold,
         int maxRetry,
+        int zeroCoordStableRetry,
         Action reseedAnchor,
         Func<Point2f> reSample,
+        Func<Point2f> reSampleStable,
         Func<CancellationToken, Task> delay,
         Action<string> log,
         CancellationToken ct)
@@ -74,10 +78,46 @@ public static class KazuhaReturnReseedGuard
             await delay(ct);             // 极短延时让小地图重绘稳定 / 角色位置变化
             pos = reSample();            // 重新截图 + GetPosition
 
-            // 重识别失败（(0,0)）：本次跳过，但仍计入 attempt，避免死循环。
+            // 重识别失败（(0,0)）：改走 GetPositionStable 全局匹配内层重试（见下）。
             if (pos is { X: 0, Y: 0 })
             {
-                log($"[重识别] 第{attempt}次识别失败(0,0)，继续重试");
+                // (0,0)：识别失败（图像层面匹配不上）。局部匹配 + 重播种无法恢复，
+                // 改走更鲁棒的 GetPositionStable（全局匹配）内层重试。
+                // 注意：内层不调用 reseedAnchor()——全局匹配不需要局部锚点，重播种反干扰（Q4）。
+                log($"[重识别] 第{attempt}次识别失败(0,0)，改走 GetPositionStable 全局匹配重试");
+                for (int s = 1; s <= zeroCoordStableRetry; s++)
+                {
+                    await delay(ct);                 // 复用现有 100ms 延时，让小地图重绘稳定（Q3）
+                    var stablePos = reSampleStable();  // CaptureToRectArea + GetPositionStable（全局匹配）
+
+                    if (stablePos is { X: 0, Y: 0 })
+                    {
+                        log($"[重识别] GetPositionStable 第{s}次仍识别失败(0,0)，继续重试");
+                        continue;
+                    }
+
+                    if (KazuhaCollectPositionGuardDecisions.IsRecognizedPositionTrustworthy(stablePos, seedX, seedY, threshold))
+                    {
+                        log($"[重识别] GetPositionStable 第{s}次恢复并落入阈值，采纳坐标");
+                        return ReseedGuardResult.Move(stablePos, attempt);
+                    }
+
+                    // 全局匹配恢复出"非 (0,0) 但 > 阈值"的漂移远点：脱离 (0,0) 失败语义，
+                    // 把它当作本轮外层 attempt 的结果，跳出内层、回到外层继续漂移远点重试逻辑。
+                    log($"[重识别] GetPositionStable 第{s}次恢复但仍超阈值，转交外层漂移重试");
+                    pos = stablePos;
+                    break;
+                }
+
+                // 内层 stable 重试若全部 (0,0)（pos 仍为 (0,0)）→ 小地图持续识别不出，
+                // 全局匹配也救不回 → 直接放弃本轮移动。
+                if (pos is { X: 0, Y: 0 })
+                {
+                    log($"[重识别] GetPositionStable 连续{zeroCoordStableRetry}次仍识别失败(0,0)，放弃本轮移动");
+                    return ReseedGuardResult.Abandon(attempt);
+                }
+
+                // pos 已被内层置为漂移远点：回到外层循环顶继续 reseedAnchor + reSample 重试。
                 continue;
             }
 

@@ -1,15 +1,11 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
-using BetterGenshinImpact.Core.Recognition.OCR;
-using BetterGenshinImpact.Core.Recognition.OpenCv;
 using BetterGenshinImpact.Core.Simulator;
 using BetterGenshinImpact.GameTask.AutoFight;
-using BetterGenshinImpact.GameTask.AutoFight.Assets;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.Common.BgiVision;
 using Microsoft.Extensions.Logging;
-using OpenCvSharp;
 using static BetterGenshinImpact.GameTask.Common.TaskControl;
 
 namespace BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
@@ -151,21 +147,22 @@ public static class KazuhaCollectExecutor
             await SimulateHoldElementalSkillAsync(1000, ct);
             await Delay(200, ct);
 
-            // OCR + 视觉双重确认：长 E 是否真的释放
+            // 色块连通性检测 + 视觉双重确认：长 E 是否真的释放
+            // 主判据 connectivityInCd：AvatarSkillAsync 连通性检测（与 CD 等待阶段、原版万叶拾取样板
+            //   AutoFightTask.cs L1829 同一套），返回 true = E 图标区有纯白连通块（倒计时数字）= E 在 CD = 已释放。
+            //   替代原 OCR 识别倒计时数字（OcrFactory.Paddle.OcrWithoutDetector），后者读纯白小数字不稳、偶发误读。
+            // 二次确认 isVisualReady：Bv.IsSkillReady，仅当连通性判"不在 CD"时配合判定，避免连通性假阴性引发不必要重试。
+            // ShouldRetryRelease(connectivityInCd, isVisualReady) 真值表不变（!arg1 && arg2）：
+            //   仅当"连通性判未释放 AND 视觉也判就绪"才重试。
             bool firstReleaseFailed = false;
+            var connectivityInCd = await AutoFightSkill.AvatarSkillAsync(
+                Logger, kazuha!, skills: false, retryCount: 1, ct: ct,
+                image: null, needLog: true, isResetCd: false);
             using (var region = CaptureToRectArea())
             {
-                using var eRa = region.DeriveCrop(AutoFightAssets.Instance.ECooldownRect);
-                using var eRaWhite = OpenCvCommonHelper.InRangeHsv(
-                    eRa.SrcMat,
-                    new Scalar(0, 0, 235),
-                    new Scalar(0, 25, 255));
-                var text = OcrFactory.Paddle.OcrWithoutDetector(eRaWhite);
-
-                var hasOcrCd = double.TryParse(text, out var ocrCd) && ocrCd > 0;
                 var isVisualReady = Bv.IsSkillReady(region, kazuha!.Index, false);
 
-                if (ShouldRetryRelease(hasOcrCd, isVisualReady))
+                if (ShouldRetryRelease(connectivityInCd, isVisualReady))
                 {
                     firstReleaseFailed = true;
                 }
@@ -187,18 +184,13 @@ public static class KazuhaCollectExecutor
                 await SimulateHoldElementalSkillAsync(800, ct);
                 await Delay(200, ct);
 
+                var connectivityInCd2 = await AutoFightSkill.AvatarSkillAsync(
+                    Logger, kazuha, skills: false, retryCount: 1, ct: ct,
+                    image: null, needLog: true, isResetCd: false);
                 using var region2 = CaptureToRectArea();
-                using var eRa2 = region2.DeriveCrop(AutoFightAssets.Instance.ECooldownRect);
-                using var eRaWhite2 = OpenCvCommonHelper.InRangeHsv(
-                    eRa2.SrcMat,
-                    new Scalar(0, 0, 235),
-                    new Scalar(0, 25, 255));
-                var text2 = OcrFactory.Paddle.OcrWithoutDetector(eRaWhite2);
-
-                var hasOcrCd2 = double.TryParse(text2, out var ocrCd2) && ocrCd2 > 0;
                 var isVisualReady2 = Bv.IsSkillReady(region2, kazuha.Index, false);
 
-                if (ShouldRetryRelease(hasOcrCd2, isVisualReady2))
+                if (ShouldRetryRelease(connectivityInCd2, isVisualReady2))
                 {
                     // 重试仍失败 → 保持原 reason 码语义不变
                     return new Outcome(false, "e_skill_not_released");

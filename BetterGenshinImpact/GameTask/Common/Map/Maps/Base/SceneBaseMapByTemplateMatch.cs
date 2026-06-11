@@ -113,7 +113,20 @@ public abstract class SceneBaseMapByTemplateMatch : SceneBaseMap
     
     private Point2f UpdateResult(in MatchResult result, int rank)
     {
-        if (!result.IsSuccess(rank)) return default;
+        if (!result.IsSuccess(rank))
+        {
+            // [小地图诊断] 模板匹配置信度未达阈值 → 返回 default(0,0)。
+            // 打出实际置信度与所需阈值，判断是"完全没匹配上(置信度≈0)"还是"在临界值附近抖动"。
+            if (AutoPathing.MiniMapPositionDiagnostics.Enabled)
+            {
+                var idx = Math.Clamp(rank, 0, ConfidenceThresholds.Length - 1);
+                TaskControl.Logger.LogInformation(
+                    "[小地图诊断] 模板匹配未达阈值：置信度={Conf:F4} 需≥{Need:F2}(rank={Rank}) Layer={Layer} → 返回(0,0)",
+                    result.Confidence, ConfidenceThresholds[idx], rank,
+                    result.Layer?.Floor.ToString() ?? "null");
+            }
+            return default;
+        }
         PrevSuccessResult = result;
         return ConvertGenshinMapCoordinatesToImageCoordinates(PrevSuccessResult.MapPos);
     }

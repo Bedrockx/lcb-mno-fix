@@ -3101,11 +3101,19 @@ public class AutoFightTask : ISoloTask
                     currentPos, fightWaypoint.X, fightWaypoint.Y,
                     __hoeingCfg.KazuhaReturnAbnormalCoordThreshold,
                     __hoeingCfg.KazuhaReturnReseedRetryCount,
+                    __hoeingCfg.KazuhaReturnZeroCoordStableRetryCount,
                     reseedAnchor: () => Navigation.SetPrevPosition((float)fightWaypoint.X, (float)fightWaypoint.Y),
                     reSample: () =>
                     {
                         using var img = CaptureToRectArea();
                         return Navigation.GetPosition(img, fightWaypoint.MapName, fightWaypoint.MapMatchMethod);
+                    },
+                    // hoeing-kazuha-return-minimap-recognition-fail-getpositionstable-retry-fix：
+                    // (0,0) 识别失败时改走 GetPositionStable 全局匹配重试。
+                    reSampleStable: () =>
+                    {
+                        using var img = CaptureToRectArea();
+                        return Navigation.GetPositionStable(img, fightWaypoint.MapName, fightWaypoint.MapMatchMethod);
                     },
                     delay: t => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, t),
                     log: m => TaskControl.Logger.LogInformation("[联机][万叶] 持续回点{Msg}", m),

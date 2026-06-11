@@ -926,11 +926,19 @@ public class PathExecutor
                                                         currentPos, waypoint.X, waypoint.Y,
                                                         __hoeingCfg.KazuhaReturnAbnormalCoordThreshold,
                                                         __hoeingCfg.KazuhaReturnReseedRetryCount,
+                                                        __hoeingCfg.KazuhaReturnZeroCoordStableRetryCount,
                                                         reseedAnchor: () => Navigation.SetPrevPosition((float)waypoint.X, (float)waypoint.Y),
                                                         reSample: () =>
                                                         {
                                                             using var s = CaptureToRectArea();
                                                             return Navigation.GetPosition(s, waypoint.MapName, waypoint.MapMatchMethod);
+                                                        },
+                                                        // hoeing-kazuha-return-minimap-recognition-fail-getpositionstable-retry-fix：
+                                                        // (0,0) 识别失败时改走 GetPositionStable 全局匹配（其内部局部失败/跳跃>150 自动 Reset 全局匹配）。
+                                                        reSampleStable: () =>
+                                                        {
+                                                            using var s = CaptureToRectArea();
+                                                            return Navigation.GetPositionStable(s, waypoint.MapName, waypoint.MapMatchMethod);
                                                         },
                                                         delay: token => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, token),
                                                         log: m => Logger.LogInformation("[联机] 战后聚物回点{Msg}", m),

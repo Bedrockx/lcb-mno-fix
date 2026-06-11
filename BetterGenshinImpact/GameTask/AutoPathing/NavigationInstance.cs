@@ -1,6 +1,8 @@
 using System;
+using BetterGenshinImpact.GameTask.Common;
 using BetterGenshinImpact.GameTask.Common.Element.Assets;
 using BetterGenshinImpact.GameTask.Common.Map.Maps;
+using Microsoft.Extensions.Logging;
 using BetterGenshinImpact.GameTask.Common.Map.Maps.Base;
 using BetterGenshinImpact.GameTask.Model.Area;
 using CommunityToolkit.Mvvm.Messaging;
@@ -39,8 +41,12 @@ public class NavigationInstance
             {
                 var colorMat = new Mat(imageRegion.SrcMat, MapAssets.Instance.MimiMapRect);
                 var captureTime = DateTime.UtcNow;
+                // [小地图诊断] 记录进入时的锚点（局部匹配的搜索中心）
+                var diagPrevX = _prevX;
+                var diagPrevY = _prevY;
+                var diagBranch = "局部匹配命中";
                 var p = MapManager.GetMap(mapName, mapMatchMethod).GetMiniMapPosition(colorMat, _prevX, _prevY);
-                
+
                 // 局部匹配失败且有prevPos时，尝试全局匹配回退
                 if (p == default && _prevX > 0 && _prevY > 0)
                 {
@@ -54,24 +60,35 @@ public class NavigationInstance
                         if (p == default)
                         {
                             (_prevX, _prevY) = (savedPrevX, savedPrevY);
+                            diagBranch = $"局部失败(连续{_consecutiveFailCount})→全局匹配也失败";
                         }
                         else
                         {
                             _consecutiveFailCount = 0;
+                            diagBranch = "局部失败→全局匹配命中";
                         }
                     }
                     else
                     {
                         // 局部匹配失败，等待累积到阈值后触发全局匹配
+                        diagBranch = $"局部失败(连续{_consecutiveFailCount}，未达全局回退阈值{GlobalMatchFallbackThreshold})";
                     }
                 }
-                
+                else if (p == default)
+                {
+                    // 无有效锚点（首帧或刚 Reset），直接走的全图匹配但仍失败
+                    diagBranch = "无锚点全图匹配失败";
+                }
+
                 if (p != default && captureTime > _captureTime)
                 {
                     (_prevX, _prevY) = (p.X, p.Y);
                     _captureTime = captureTime;
                     _consecutiveFailCount = 0;
                 }
+
+                MiniMapPositionDiagnostics.LogPosition(
+                    "GetPosition", colorMat, diagPrevX, diagPrevY, p, diagBranch, _consecutiveFailCount);
 
                 WeakReferenceMessenger.Default.Send(new PropertyChangedMessage<object>(typeof(Navigation),
                     "SendCurrentPosition", new object(), p));
@@ -80,6 +97,7 @@ public class NavigationInstance
             catch (Exception ex)
             {
                 // 获取位置失败，返回上次的位置（仅当上次位置有效时）
+                TaskControl.Logger.LogWarning(ex, "[小地图诊断] GetPosition 抛异常，回退到上次位置 ({Px:F1},{Py:F1})", _prevX, _prevY);
                 if (_prevX > 0 && _prevY > 0)
                 {
                     return new Point2f(_prevX, _prevY);
@@ -91,8 +109,13 @@ public class NavigationInstance
                 Monitor.Exit(GetPositionLock);
             }
         }
-        
+
         // 锁获取超时，返回上次的位置（仅当上次位置有效时）
+        if (MiniMapPositionDiagnostics.Enabled)
+        {
+            TaskControl.Logger.LogWarning(
+                "[小地图诊断] GetPosition 获取锁超时(100ms)，回退到上次位置 ({Px:F1},{Py:F1})", _prevX, _prevY);
+        }
         if (_prevX > 0 && _prevY > 0)
         {
             return new Point2f(_prevX, _prevY);
@@ -112,24 +135,33 @@ public class NavigationInstance
     {
         var colorMat = new Mat(imageRegion.SrcMat, MapAssets.Instance.MimiMapRect);
         var captureTime = DateTime.UtcNow;
+        var diagPrevX = _prevX;
+        var diagPrevY = _prevY;
 
         // 先尝试使用局部匹配
         var sceneMap = MapManager.GetMap(mapName, mapMatchMethod);
         //提高局部匹配的阈值，以解决在沙漠录制点位时，移动过远不会触发全局匹配的情况
         var p = (sceneMap as SceneBaseMapByTemplateMatch)?.GetMiniMapPosition(colorMat, _prevX, _prevY, 0)
                 ?? sceneMap.GetMiniMapPosition(colorMat, _prevX, _prevY);
+        var diagBranch = "局部匹配命中";
 
         // 如果局部匹配失败或者点位跳跃过大，再尝试全地图匹配
-        if (p == default || (_prevX > 0 && _prevY >0 && p.DistanceTo(new Point2f(_prevX,_prevY)) > 150))
+        bool localFailedOrJumped = p == default || (_prevX > 0 && _prevY > 0 && p.DistanceTo(new Point2f(_prevX, _prevY)) > 150);
+        if (localFailedOrJumped)
         {
+            var localReason = p == default ? "局部失败" : "跳跃>150";
             Reset();
             p = MapManager.GetMap(mapName, mapMatchMethod).GetMiniMapPosition(colorMat, _prevX, _prevY);
+            diagBranch = p == default ? $"{localReason}→全局匹配也失败" : $"{localReason}→全局匹配命中";
         }
         if (p != default && captureTime > _captureTime)
         {
             (_prevX, _prevY) = (p.X, p.Y);
             _captureTime = captureTime;
         }
+
+        MiniMapPositionDiagnostics.LogPosition(
+            "GetPositionStable", colorMat, diagPrevX, diagPrevY, p, diagBranch, -1);
 
         WeakReferenceMessenger.Default.Send(new PropertyChangedMessage<object>(typeof(Navigation),
             "SendCurrentPosition", new object(), p));

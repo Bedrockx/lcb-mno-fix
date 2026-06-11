@@ -449,6 +449,18 @@ public partial class AutoHoeingConfig : ObservableObject
     private int _kazuhaReturnReseedRetryCount = 3;
 
     /// <summary>
+    /// 万叶回点 (0,0) 识别失败时 GetPositionStable 全局匹配重试上限。
+    /// 当回点重识别（GetPosition 局部匹配）返回 (0,0)（小地图图像层面识别不出）时，
+    /// 改走更鲁棒的 GetPositionStable（全局匹配）重试，最多此次数；任一次返回非 (0,0)
+    /// 且落入异常阈值内即采纳，仍全部 (0,0) 则放弃本轮移动。
+    /// 与 KazuhaReturnReseedRetryCount（漂移远点重试）分开，便于分别调优。
+    /// 默认 3。纯本地调试参数，不进 RoomConfig 协议、不碰 SignalR。
+    /// 详见 .kiro/specs/hoeing-kazuha-return-minimap-recognition-fail-getpositionstable-retry-fix。
+    /// </summary>
+    [ObservableProperty]
+    private int _kazuhaReturnZeroCoordStableRetryCount = 3;
+
+    /// <summary>
     /// 联机调试：启用落后成员逐段追赶。默认 false（骨架阶段手动开启，实测稳定后再考虑默认开）。
     /// 仅联机模式 + 成员侧生效，单机零感知。
     /// </summary>
