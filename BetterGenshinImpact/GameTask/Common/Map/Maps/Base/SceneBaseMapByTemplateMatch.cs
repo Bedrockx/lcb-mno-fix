@@ -120,7 +120,7 @@ public abstract class SceneBaseMapByTemplateMatch : SceneBaseMap
             if (AutoPathing.MiniMapPositionDiagnostics.Enabled)
             {
                 var idx = Math.Clamp(rank, 0, ConfidenceThresholds.Length - 1);
-                TaskControl.Logger.LogInformation(
+                TaskControl.Logger.LogDebug(
                     "[小地图诊断] 模板匹配未达阈值：置信度={Conf:F4} 需≥{Need:F2}(rank={Rank}) Layer={Layer} → 返回(0,0)",
                     result.Confidence, ConfidenceThresholds[idx], rank,
                     result.Layer?.Floor.ToString() ?? "null");

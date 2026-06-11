@@ -32,7 +32,7 @@ public class MiniMapPreprocessor : IDisposable
         // 会连带拖垮后续模板匹配（匹配方向错位）。只在偏低时打，避免刷屏。
         if (AutoPathing.MiniMapPositionDiagnostics.Enabled && confidence < 0.5)
         {
-            TaskControl.Logger.LogInformation(
+            TaskControl.Logger.LogDebug(
                 "[小地图诊断] 朝向角度置信度偏低：角度={Angle:F1} 置信度={Conf:F3}（疑似小地图被遮挡/未稳定）",
                 angle, confidence);
         }

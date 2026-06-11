@@ -20,7 +20,7 @@ namespace BetterGenshinImpact.GameTask.AutoPathing;
 ///   4) 模板/SIFT 匹配：匹配置信度数值，走粗匹配还是精匹配，是否达阈值
 ///   5) Navigation 兜底：局部失败 → 全局匹配是否触发、是否仍失败
 ///
-/// 用法：默认按开关 <see cref="Enabled"/> 输出结构化日志（INFO 级，带 [小地图诊断] 前缀，便于 grep）。
+/// 用法：默认按开关 <see cref="Enabled"/> 输出结构化日志（DEBUG 级，带 [小地图诊断] 前缀，便于 grep）。
 /// 识别失败（(0,0)）时，按节流间隔把当时的小地图截图 dump 到 log/minimap_diag/ 供肉眼看遮挡。
 ///
 /// 该类为纯临时诊断设施，问题定位后可整体删除，不影响生产逻辑。
@@ -76,7 +76,7 @@ public static class MiniMapPositionDiagnostics
             bool failed = resultPos is { X: 0, Y: 0 };
             var (meanBrightness, blackRatio) = ComputeBrightness(miniMap);
 
-            Logger.LogInformation(
+            Logger.LogDebug(
                 "[小地图诊断] {Entry} 结果=({Rx:F1},{Ry:F1}) {FailTag} | 分支={Branch} | 锚点=({Px:F1},{Py:F1}) 连续失败={Fail} | 截图={W}x{H} 均亮度={Mean:F1} 近黑占比={Black:P0} | 区域={RectW}x{RectH}@({RectX},{RectY})",
                 entry,
                 resultPos.X, resultPos.Y,
@@ -96,8 +96,8 @@ public static class MiniMapPositionDiagnostics
         }
         catch (Exception ex)
         {
-            // 诊断埋点绝不能影响主流程：吞掉任何异常，仅记一条 warning。
-            Logger.LogWarning(ex, "[小地图诊断] 记录诊断信息时异常（已忽略，不影响识别）");
+            // 诊断埋点绝不能影响主流程：吞掉任何异常，仅记一条 debug 日志（含 ex）。
+            Logger.LogDebug(ex, "[小地图诊断] 记录诊断信息时异常（已忽略，不影响识别）");
         }
     }
 
@@ -147,11 +147,11 @@ public static class MiniMapPositionDiagnostics
             var seq = Interlocked.Increment(ref _dumpSeq);
             var file = Path.Combine(dir, $"{DateTime.Now:yyyyMMdd_HHmmss}_{entry}_{seq:D4}.png");
             Cv2.ImWrite(file, miniMap);
-            Logger.LogInformation("[小地图诊断] 识别失败帧已保存：{File}", file);
+            Logger.LogDebug("[小地图诊断] 识别失败帧已保存：{File}", file);
         }
         catch (Exception ex)
         {
-            Logger.LogWarning(ex, "[小地图诊断] 保存失败帧截图异常（已忽略）");
+            Logger.LogDebug(ex, "[小地图诊断] 保存失败帧截图异常（已忽略）");
         }
     }
 }

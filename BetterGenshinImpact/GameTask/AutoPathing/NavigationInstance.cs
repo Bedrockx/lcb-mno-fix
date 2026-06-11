@@ -97,7 +97,7 @@ public class NavigationInstance
             catch (Exception ex)
             {
                 // 获取位置失败，返回上次的位置（仅当上次位置有效时）
-                TaskControl.Logger.LogWarning(ex, "[小地图诊断] GetPosition 抛异常，回退到上次位置 ({Px:F1},{Py:F1})", _prevX, _prevY);
+                TaskControl.Logger.LogDebug(ex, "[小地图诊断] GetPosition 抛异常，回退到上次位置 ({Px:F1},{Py:F1})", _prevX, _prevY);
                 if (_prevX > 0 && _prevY > 0)
                 {
                     return new Point2f(_prevX, _prevY);
@@ -113,7 +113,7 @@ public class NavigationInstance
         // 锁获取超时，返回上次的位置（仅当上次位置有效时）
         if (MiniMapPositionDiagnostics.Enabled)
         {
-            TaskControl.Logger.LogWarning(
+            TaskControl.Logger.LogDebug(
                 "[小地图诊断] GetPosition 获取锁超时(100ms)，回退到上次位置 ({Px:F1},{Py:F1})", _prevX, _prevY);
         }
         if (_prevX > 0 && _prevY > 0)
