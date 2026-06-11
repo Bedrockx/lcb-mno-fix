@@ -213,6 +213,11 @@ public class RouteExecutionEngine
             finally
             {
                 _running = false;
+                // 补打线路结束日志，使 LogParse 能将每条独立任务版锄地线路闭合为 ConfigTask。
+                // 复用解析器已识别的格式 → 脚本执行结束: "xxx"（LogParse.cs:161 现有判定）。
+                // name 必须与开始日志的 route.FileName 完全一致，否则无法配对。
+                // 放在最外层 finally：正常完成 / 异常 / 取消 / BuildFromFilePath 返回 null 都能闭合。
+                Logger.LogInformation("→ 脚本执行结束: {Name}", route.FileName);
             }
         }, linkedCt);
 

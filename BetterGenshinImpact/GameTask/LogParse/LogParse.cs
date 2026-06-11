@@ -111,6 +111,19 @@ namespace BetterGenshinImpact.GameTask.LogParse
                         configGroupEntity.ConfigTaskList.Add(configTask);
                     }
 
+                    // 独立任务版锄地（RouteExecutionEngine）线路开始日志：开始执行路线: "xxx"
+                    // 该格式不带 → 前缀、不带"开始执行JS脚本/地图追踪任务"措辞，需单独识别。
+                    // Serilog 对 string 属性默认带引号渲染，故按带引号匹配。
+                    // 用 ^ 锚定，仅匹配以"开始执行路线: \""开头的行，绝不影响上面 JS/地图追踪分支（零回归）。
+                    result = ParseBgiLine(@"^开始执行路线: ""(.+?)""", logstr);
+                    if (result.Item1)
+                    {
+                        configTask = new();
+                        configTask.Name = result.Item2[1];
+                        configTask.StartDate = ParsePreDataTime(logLines, i - 1, logrq);
+                        configGroupEntity.ConfigTaskList.Add(configTask);
+                    }
+
                     if (configTask != null)
                     {
                         
