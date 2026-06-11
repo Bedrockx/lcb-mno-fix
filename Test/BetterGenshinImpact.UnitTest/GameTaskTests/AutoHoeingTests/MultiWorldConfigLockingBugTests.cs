@@ -57,8 +57,6 @@ public class MultiWorldConfigLockingBugTests
     {
         var validConfig = new RoomConfig
         {
-            SyncTimeoutSeconds = 30,
-            MinPlayersToSync = 2,
             SyncPointMinDistance = 10,
             StartRouteIndex = 0,
             MultiWorldEnabled = true,
@@ -173,8 +171,6 @@ public class MultiWorldConfigLockingBugTests
             FirstHostConfig = null,
             ReceivedConfig = new RoomConfig
             {
-                SyncTimeoutSeconds = 30,
-                MinPlayersToSync = 2,
                 MultiWorldEnabled = true,
                 MultiWorldCount = 3
             }
@@ -206,8 +202,6 @@ public class MultiWorldConfigLockingBugTests
             FirstHostConfig = null,
             ReceivedConfig = new RoomConfig
             {
-                SyncTimeoutSeconds = 30,
-                MinPlayersToSync = 2,
                 MultiWorldEnabled = true,
                 MultiWorldCount = 3
             }
@@ -243,8 +237,6 @@ public class MultiWorldConfigLockingBugTests
             FirstHostConfig = null,
             ReceivedConfig = new RoomConfig
             {
-                SyncTimeoutSeconds = 30,
-                MinPlayersToSync = 2,
                 MultiWorldEnabled = false,
                 MultiWorldCount = 1
             }
@@ -276,8 +268,6 @@ public class MultiWorldConfigLockingBugTests
             FirstHostConfig = null,
             ReceivedConfig = new RoomConfig
             {
-                SyncTimeoutSeconds = 30,
-                MinPlayersToSync = 2,
                 MultiWorldEnabled = true,
                 MultiWorldCount = 3
             }
@@ -305,8 +295,6 @@ public class MultiWorldConfigLockingBugTests
         var round = Math.Max(2, roundNum.Get % 5 + 2);
         var validConfig = new RoomConfig
         {
-            SyncTimeoutSeconds = 30,
-            MinPlayersToSync = 2,
             MultiWorldEnabled = true,
             MultiWorldCount = 3
         };

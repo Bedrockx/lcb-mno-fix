@@ -3,8 +3,6 @@ namespace BgiCoordinatorServer.Models;
 /// <summary>房主锄地配置，同步给所有成员</summary>
 public class RoomConfig
 {
-    public int SyncTimeoutSeconds { get; set; } = 60;
-    public int MinPlayersToSync { get; set; } = 0;
     public double SyncPointMinDistance { get; set; } = 30;
     public int StartRouteIndex { get; set; } = 0;
     public bool UseFixedDebugRoutes { get; set; } = false;

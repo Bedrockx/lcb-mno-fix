@@ -233,18 +233,6 @@ public partial class AutoHoeingConfig : ObservableObject
     public string CurrentRoomCode { get; set; } = "";
 
     /// <summary>
-    /// 集合点等待超时（秒），默认 60
-    /// </summary>
-    [ObservableProperty]
-    private int _syncTimeoutSeconds = 60;
-
-    /// <summary>
-    /// 最低开始人数，低于此人数时集合点直接放行（不等待），默认0自动等齐所有人，设为1可单人调试
-    /// </summary>
-    [ObservableProperty]
-    private int _minPlayersToSync = 0;
-
-    /// <summary>
     /// 从第几条路线开始执行（1-based，0表示从头开始），用于调试续点
     /// </summary>
     [ObservableProperty]

@@ -23,10 +23,7 @@ public class MultiplayerCoordinator : IAsyncDisposable
     private readonly ILogger<MultiplayerCoordinator> _logger = App.GetLogger<MultiplayerCoordinator>();
     private readonly CoordinatorClient _client;
     private readonly AutoHoeingConfig _config;
-    private readonly SyncBarrier _barrier;
     private readonly SyncPointResolver _resolver;
-    private readonly int _minPlayersToSync;
-    private readonly int _syncTimeoutSeconds;
 
     // === 子协调器 ===
     public RouteSyncCoordinator? RouteSyncCoordinator { get; private set; }
@@ -113,10 +110,7 @@ public class MultiplayerCoordinator : IAsyncDisposable
 
     public MultiplayerCoordinator(
         CoordinatorClient client,
-        SyncBarrier barrier,
         SyncPointResolver resolver,
-        int minPlayersToSync,
-        int syncTimeoutSeconds,
         AutoHoeingConfig? config = null)
     {
         _client = client;
@@ -126,10 +120,7 @@ public class MultiplayerCoordinator : IAsyncDisposable
         // 此时全局未被覆盖，必须由调用方显式传入覆盖后的 _config，否则 KazuhaCollectSync 的
         // EnableKazuhaSync 永远是全局值（多半为 false）→ PathExecutor 跳过聚物分支。
         _config = config ?? TaskContext.Instance().Config.AutoHoeingConfig;
-        _barrier = barrier;
         _resolver = resolver;
-        _minPlayersToSync = minPlayersToSync;
-        _syncTimeoutSeconds = syncTimeoutSeconds;
         IsHost = client.IsHost;
 
         // 初始化子协调器

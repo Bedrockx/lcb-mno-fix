@@ -725,7 +725,7 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             "targetHostName", "coordinatorServerUrl",
             "playerName", "playerUid", "multiplayerPartyName", "multiplayerStartAvatarName",
             "expectedPlayerCount", "roomWhitelist",
-            "partyTimeoutSeconds", "partyTimeoutAction", "syncTimeoutSeconds", "minPlayersToSync",
+            "partyTimeoutSeconds", "partyTimeoutAction",
             "syncPointMinDistance", "startRouteIndex", "enableKazuhaSync", "multiplayerUseFixedFightStrategy",
             "kazuhaSyncWaitSeconds", "kazuhaSyncTimeoutSeconds", "kazuhaWaitSkillCdSeconds",
             "fightTimeoutSeconds",

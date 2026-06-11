@@ -199,18 +199,6 @@
                                 <ui:TextBlock FontTypography="Body" Text="集合点与战斗" />
                             </ui:CardExpander.Header>
                             <StackPanel>
-                                <ui:TextBlock Margin="0,0,0,2" Text="集合点超时(秒)" />
-                                <ui:TextBox Width="70"
-                                            Margin="0,0,0,8"
-                                            HorizontalAlignment="Left"
-                                            PlaceholderText="秒"
-                                            Text="{Binding SyncTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <ui:TextBlock Margin="0,0,0,2" Text="最低同步人数，0=等齐所有人" />
-                                <ui:TextBox Width="70"
-                                            Margin="0,0,0,8"
-                                            HorizontalAlignment="Left"
-                                            PlaceholderText="0=等齐"
-                                            Text="{Binding MinPlayersToSync, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <ui:TextBlock Margin="0,0,0,2" Text="集合点最小距离，根据线路生成的同步点最小距离" />
                                 <ui:TextBox Width="70"
                                             Margin="0,0,0,8"
@@ -493,7 +481,7 @@
             </ui:CardExpander.Header>
             <StackPanel>
                 <ui:ToggleSwitch Margin="0,0,0,4"
-                                 Content="启用落后成员逐段追赶（房主设置，同步成员，实验性）"
+                                 Content="启用落后逐段追赶"
                                  IsChecked="{Binding EnableLaggingCatchUp, Mode=TwoWay}" />
                 <ui:TextBlock Margin="0,0,0,2" Text="落后触发阈值（落后多少段触发追赶，范围 1-3）" />
                 <ui:TextBox Width="70"

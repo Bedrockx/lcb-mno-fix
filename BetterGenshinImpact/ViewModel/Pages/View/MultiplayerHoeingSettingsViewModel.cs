@@ -47,8 +47,6 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     [ObservableProperty] private string _multiWorldCount = "";
 
     // ===== C 同步给成员区 =====
-    [ObservableProperty] private string _syncTimeoutSeconds = "";
-    [ObservableProperty] private string _minPlayersToSync = "";
     [ObservableProperty] private string _syncPointMinDistance = "";
     [ObservableProperty] private string _startRouteIndex = "";
     [ObservableProperty] private string _fightTimeoutSeconds = "";
@@ -165,8 +163,6 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         _multiWorldEnabled = GetBool("multiWorldEnabled", g.MultiWorldEnabled);
         _multiWorldCount = GetInt("multiWorldCount", g.MultiWorldCount).ToString();
 
-        _syncTimeoutSeconds = GetInt("syncTimeoutSeconds", g.SyncTimeoutSeconds).ToString();
-        _minPlayersToSync = GetInt("minPlayersToSync", g.MinPlayersToSync).ToString();
         // 字符串形态读入 double（等价现状 GetStr(key, double.ToString())），不得改成 GetDouble
         _syncPointMinDistance = GetStr("syncPointMinDistance", g.SyncPointMinDistance.ToString());
         _startRouteIndex = GetInt("startRouteIndex", g.StartRouteIndex).ToString();
@@ -224,8 +220,6 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         if (int.TryParse(ExpectedPlayerCount, out var ec)) settings["expectedPlayerCount"] = ec;
         settings["roomWhitelist"] = RoomWhitelist;
 
-        if (int.TryParse(SyncTimeoutSeconds, out var st)) settings["syncTimeoutSeconds"] = st;
-        if (int.TryParse(MinPlayersToSync, out var mp)) settings["minPlayersToSync"] = mp;
         if (double.TryParse(SyncPointMinDistance, out var spd)) settings["syncPointMinDistance"] = spd;
         if (int.TryParse(StartRouteIndex, out var sri)) settings["startRouteIndex"] = sri;
         settings["enableKazuhaSync"] = EnableKazuhaSync;

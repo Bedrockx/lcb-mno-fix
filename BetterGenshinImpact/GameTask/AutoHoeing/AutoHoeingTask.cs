@@ -397,8 +397,6 @@ public class AutoHoeingTask : ISoloTask
             _config.MultiplayerEnabled = false;
             _config.DebugMode = false;
             _config.StartRouteIndex = 0;
-            _config.SyncTimeoutSeconds = 60;
-            _config.MinPlayersToSync = 0;
             _config.SyncPointMinDistance = 30.0;
             _config.EnableKazuhaSync = false;
             _config.MultiplayerUseFixedFightStrategy = true;  // 默认 ON（保持现有固定策略行为）
@@ -735,8 +733,6 @@ public class AutoHoeingTask : ISoloTask
             {
                 var roomConfig = new Multiplayer.Models.RoomConfig
                 {
-                    SyncTimeoutSeconds = _config.SyncTimeoutSeconds,
-                    MinPlayersToSync = _config.MinPlayersToSync,
                     SyncPointMinDistance = _config.SyncPointMinDistance,
                     StartRouteIndex = _config.StartRouteIndex,
                     UseFixedDebugRoutes = _config.UseFixedDebugRoutes,
@@ -813,11 +809,10 @@ public class AutoHoeingTask : ISoloTask
                 }
             }
 
-            var barrier = new SyncBarrier(client, _config.SyncTimeoutSeconds);
             var resolver = new SyncPointResolver();
-            _multiplayerCoordinator = new MultiplayerCoordinator(client, barrier, resolver, _config.MinPlayersToSync, _config.SyncTimeoutSeconds, _config);
+            _multiplayerCoordinator = new MultiplayerCoordinator(client, resolver, _config);
 
-            _logger.LogInformation("[联机] MultiplayerCoordinator 初始化完成，超时={Timeout}s，最低人数={Min}", _config.SyncTimeoutSeconds, _config.MinPlayersToSync);
+            _logger.LogInformation("[联机] MultiplayerCoordinator 初始化完成");
 
             // 联机模式：设置战斗超时覆盖值（不修改原始配置，通过 PathingConditionConfig 传递给 AutoFightHandler）
             PathingConditionConfig.MultiplayerFightTimeoutOverride = _config.FightTimeoutSeconds;
@@ -826,8 +821,7 @@ public class AutoHoeingTask : ISoloTask
 
             // 打印所有房主同步的参数
             _logger.LogInformation("[联机] ===== 当前联机参数（房主同步）=====");
-            _logger.LogInformation("[联机] 集合点超时={SyncTimeout}s，最低同步人数={MinPlayers}，集合点最小距离={MinDist}",
-                _config.SyncTimeoutSeconds, _config.MinPlayersToSync, _config.SyncPointMinDistance);
+            _logger.LogInformation("[联机] 集合点最小距离={MinDist}", _config.SyncPointMinDistance);
             _logger.LogInformation("[联机] 战斗超时={FightTimeout}s，启用万叶聚物同步={Sync}，从第{Start}条路线开始",
                 _config.FightTimeoutSeconds, _config.EnableKazuhaSync, _config.StartRouteIndex);
             _logger.LogInformation("[联机] 调试模式={Debug}", _config.DebugMode);
@@ -970,7 +964,6 @@ public class AutoHoeingTask : ISoloTask
                         var currentCount = client.CurrentRoomPlayerCount;
                         _logger.LogWarning("[联机] 组队超时，以当前 {N} 人开始锄地", currentCount);
                         _config.ExpectedPlayerCount = currentCount > 0 ? currentCount : 1;
-                        _config.MinPlayersToSync = _config.ExpectedPlayerCount;
                     }
                     else
                     {
@@ -986,7 +979,6 @@ public class AutoHoeingTask : ISoloTask
                     // 房主手动跳过（ESC），以实际人数开始
                     _logger.LogInformation("[联机] 房主跳过等待，以实际 {N} 人开始锄地", actualCount);
                     _config.ExpectedPlayerCount = actualCount;
-                    _config.MinPlayersToSync = actualCount;
                 }
                 else
                 {
@@ -1126,8 +1118,6 @@ public class AutoHoeingTask : ISoloTask
 
                     if (hostConfig != null)
                     {
-                        _config.SyncTimeoutSeconds = hostConfig.SyncTimeoutSeconds;
-                        _config.MinPlayersToSync = hostConfig.MinPlayersToSync;
                         _config.SyncPointMinDistance = hostConfig.SyncPointMinDistance;
                         _config.StartRouteIndex = hostConfig.StartRouteIndex;
                         _config.UseFixedDebugRoutes = hostConfig.UseFixedDebugRoutes;
@@ -1173,8 +1163,8 @@ public class AutoHoeingTask : ISoloTask
                         }
 
                         _logger.LogInformation(
-                            "[联机] 已同步房主配置：超时={Timeout}s，最低人数={Min}，最小距离={Dist}，快速同步点抢报启用={FastEn}，路径距离阈值={FastDist:F1}米，传送延迟={FastDelay}ms",
-                            hostConfig.SyncTimeoutSeconds, hostConfig.MinPlayersToSync, hostConfig.SyncPointMinDistance,
+                            "[联机] 已同步房主配置：最小距离={Dist}，快速同步点抢报启用={FastEn}，路径距离阈值={FastDist:F1}米，传送延迟={FastDelay}ms",
+                            hostConfig.SyncPointMinDistance,
                             _config.FastSyncPointEnabled, _config.FastSyncPathingDistance, _config.FastSyncTeleportLoadingDelayMs);
                     }
                     else
@@ -1930,8 +1920,6 @@ public class AutoHoeingTask : ISoloTask
                 
                 if (hostConfig != null)
                 {
-                    _config.SyncTimeoutSeconds = hostConfig.SyncTimeoutSeconds;
-                    _config.MinPlayersToSync = hostConfig.MinPlayersToSync;
                     _config.SyncPointMinDistance = hostConfig.SyncPointMinDistance;
                     _config.StartRouteIndex = hostConfig.StartRouteIndex;
                     _config.UseFixedDebugRoutes = hostConfig.UseFixedDebugRoutes;
@@ -1970,8 +1958,8 @@ public class AutoHoeingTask : ISoloTask
                     PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride = _config.MultiplayerUseFixedFightStrategy;
 
                     _logger.LogInformation(
-                        "[多世界] 第 {Round} 轮成员已同步房主配置：超时={Timeout}s，最低人数={Min}，最小距离={Dist}，快速同步点抢报启用={FastEn}，路径距离阈值={FastDist:F1}米，传送延迟={FastDelay}ms",
-                        round + 1, hostConfig.SyncTimeoutSeconds, hostConfig.MinPlayersToSync, hostConfig.SyncPointMinDistance,
+                        "[多世界] 第 {Round} 轮成员已同步房主配置：最小距离={Dist}，快速同步点抢报启用={FastEn}，路径距离阈值={FastDist:F1}米，传送延迟={FastDelay}ms",
+                        round + 1, hostConfig.SyncPointMinDistance,
                         _config.FastSyncPointEnabled, _config.FastSyncPathingDistance, _config.FastSyncTeleportLoadingDelayMs);
                 }
                 else
@@ -2008,10 +1996,8 @@ public class AutoHoeingTask : ISoloTask
             }
 
             // 重建 coordinator
-            var barrier = new SyncBarrier(client, _config.SyncTimeoutSeconds);
             var resolver = new SyncPointResolver();
-            _multiplayerCoordinator = new MultiplayerCoordinator(client, barrier, resolver,
-                _config.MinPlayersToSync, _config.SyncTimeoutSeconds, _config);
+            _multiplayerCoordinator = new MultiplayerCoordinator(client, resolver, _config);
 
             _multiplayerCoordinator.OnDegraded += reason =>
                 _logger.LogWarning("[联机] 已降级为单机模式，原因：{Reason}", reason);
@@ -3478,8 +3464,6 @@ public class AutoHoeingTask : ISoloTask
         if (_config.MultiplayerEnabled)
         {
             // 联机模式：应用联机专属字段
-            _config.SyncTimeoutSeconds = Get("syncTimeoutSeconds", _config.SyncTimeoutSeconds);
-            _config.MinPlayersToSync = Get("minPlayersToSync", _config.MinPlayersToSync);
             _config.SyncPointMinDistance = Get("syncPointMinDistance", _config.SyncPointMinDistance);
             _config.EnableKazuhaSync = Get("enableKazuhaSync", _config.EnableKazuhaSync);
             _config.MultiplayerUseFixedFightStrategy = Get("multiplayerUseFixedFightStrategy", _config.MultiplayerUseFixedFightStrategy);
@@ -3514,8 +3498,6 @@ public class AutoHoeingTask : ISoloTask
         else
         {
             // 单机模式：重置真正的联机专属字段为安全默认值，避免全局配置残留影响
-            _config.SyncTimeoutSeconds = 60;
-            _config.MinPlayersToSync = 0;
             _config.SyncPointMinDistance = 30.0;
             _config.EnableKazuhaSync = false;
             _config.MultiplayerUseFixedFightStrategy = true;  // 单机模式重置为默认，避免全局残留影响
@@ -3702,8 +3684,6 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "partyTimeoutSeconds", Label = "组队等待超时（秒）\n超时后根据超时动作处理", Type = "number", DefaultValue = config.PartyTimeoutSeconds },
             new() { Name = "partyTimeoutAction", Label = "组队超时动作", Type = "select", DefaultValue = config.PartyTimeoutAction.ToString(),
                 Options = new() { "0", "1" } },
-            new() { Name = "syncTimeoutSeconds", Label = "集合点等待超时（秒）", Type = "number", DefaultValue = config.SyncTimeoutSeconds },
-            new() { Name = "minPlayersToSync", Label = "最低开始人数\n低于此人数时集合点直接放行，0=自动等齐所有人", Type = "number", DefaultValue = config.MinPlayersToSync },
             new() { Name = "enableKazuhaSync", Label = "启用万叶聚物同步\n勾选后战后回点时由声明顺序首位含万叶的玩家自动放 E 聚物", Type = "bool", DefaultValue = config.EnableKazuhaSync },
             new() { Name = "multiplayerUseFixedFightStrategy", Label = "固定使用联机战斗策略\n联机战斗策略为针对联机优化过的，大部分角色的普通战斗策略和联机可能不一样，建议使用联机战斗策略", Type = "bool", DefaultValue = config.MultiplayerUseFixedFightStrategy },
             new() { Name = "kazuhaSyncWaitSeconds", Label = "万叶聚物完成后非万叶玩家停留（秒）\n0-30，默认1，仅在指定万叶玩家+启用走回战斗点时生效", Type = "number", DefaultValue = config.KazuhaSyncWaitSeconds },
