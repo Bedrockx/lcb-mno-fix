@@ -74,6 +74,7 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     // 万叶回点异常坐标重播种重识别修复：两个纯本地调试参数（string 形态绑 ui:TextBox）
     [ObservableProperty] private string _kazuhaReturnAbnormalCoordThreshold = "";
     [ObservableProperty] private string _kazuhaReturnReseedRetryCount = "";
+    [ObservableProperty] private string _kazuhaReturnPreDistanceZeroRetryTimeoutMs = "";
 
     // ===== 调试（hoeing-multiplayer-lagging-member-catchup）：落后成员逐段追赶，纯本地、成员侧 =====
     [ObservableProperty] private bool _enableLaggingCatchUp;
@@ -183,6 +184,7 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         // 阈值是 double，沿用本 VM 读 double 的惯例（GetStr + g.Xxx.ToString()，见 syncPointMinDistance），不新增 GetDouble
         _kazuhaReturnAbnormalCoordThreshold = GetStr("kazuhaReturnAbnormalCoordThreshold", g.KazuhaReturnAbnormalCoordThreshold.ToString());
         _kazuhaReturnReseedRetryCount = GetInt("kazuhaReturnReseedRetryCount", g.KazuhaReturnReseedRetryCount).ToString();
+        _kazuhaReturnPreDistanceZeroRetryTimeoutMs = GetInt("kazuhaReturnPreDistanceZeroRetryTimeoutMs", g.KazuhaReturnPreDistanceZeroRetryTimeoutMs).ToString();
 
         // hoeing-multiplayer-lagging-member-catchup：落后追赶调试参数（纯本地）
         _enableLaggingCatchUp = GetBool("enableLaggingCatchUp", g.EnableLaggingCatchUp);
@@ -230,6 +232,7 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         if (int.TryParse(KazuhaSecondApproachMaxSteps, out var ksam)) settings["kazuhaSecondApproachMaxSteps"] = ksam;
         if (double.TryParse(KazuhaReturnAbnormalCoordThreshold, out var krt)) settings["kazuhaReturnAbnormalCoordThreshold"] = krt;
         if (int.TryParse(KazuhaReturnReseedRetryCount, out var krc)) settings["kazuhaReturnReseedRetryCount"] = krc;
+        if (int.TryParse(KazuhaReturnPreDistanceZeroRetryTimeoutMs, out var kpz)) settings["kazuhaReturnPreDistanceZeroRetryTimeoutMs"] = kpz;
 
         // hoeing-multiplayer-lagging-member-catchup：落后追赶调试参数（纯本地）
         settings["enableLaggingCatchUp"] = EnableLaggingCatchUp;

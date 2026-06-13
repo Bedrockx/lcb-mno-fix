@@ -295,6 +295,12 @@
                                                 IsEnabled="{Binding KazuhaParamsEnabled}"
                                                 PlaceholderText="次，默认3"
                                                 Text="{Binding KazuhaReturnReseedRetryCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <ui:TextBlock Margin="0,4,0,2" Text="回点距离预判(0,0)重试窗口(ms)" />
+                                    <ui:TextBox Width="70"
+                                                HorizontalAlignment="Left"
+                                                IsEnabled="{Binding KazuhaParamsEnabled}"
+                                                PlaceholderText="ms，默认2000"
+                                                Text="{Binding KazuhaReturnPreDistanceZeroRetryTimeoutMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </StackPanel>
                             </StackPanel>
                         </ui:CardExpander>

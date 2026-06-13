@@ -449,6 +449,18 @@ public partial class AutoHoeingConfig : ObservableObject
     private int _kazuhaReturnZeroCoordStableRetryCount = 3;
 
     /// <summary>
+    /// 万叶战后回点"距离预判帧" GetPosition 返回 (0,0) 时，进入 GetPositionStable（全局匹配）
+    /// 有限重试的总时长窗口上限（毫秒）。窗口内按 ReseedReSampleDelayMs（约 100ms）分多次重试，
+    /// 任一次拿到非 (0,0) 有效坐标即采纳并走既有 MoveTo 二段式接近；窗口耗尽仍 (0,0) 则退化到
+    /// 现状等价行为（跳过 MoveTo、第一段 MoveCloseTo、进 WaitAtFightPointAsync），不崩溃、不死循环。
+    /// 默认 2000（约 2 秒）。纯本地调试参数，不进 RoomConfig 协议、不碰 SignalR。
+    /// 仅联机 PathExecutor 战后聚物回点分支（路径 B）读取，单机零回归。
+    /// 详见 .kiro/specs/hoeing-kazuha-return-predistance-zero-coord-skip-moveto-fix。
+    /// </summary>
+    [ObservableProperty]
+    private int _kazuhaReturnPreDistanceZeroRetryTimeoutMs = 2000;
+
+    /// <summary>
     /// 联机调试：启用落后成员逐段追赶。默认 false（骨架阶段手动开启，实测稳定后再考虑默认开）。
     /// 仅联机模式 + 成员侧生效，单机零感知。
     /// </summary>

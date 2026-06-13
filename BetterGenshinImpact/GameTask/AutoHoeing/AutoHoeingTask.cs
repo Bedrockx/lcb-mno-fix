@@ -3477,6 +3477,7 @@ public class AutoHoeingTask : ISoloTask
             // 万叶回点异常坐标重播种重识别修复：纯本地调试参数回读（阈值 double，次数 int；Get 泛型推断同 SyncPointMinDistance 的 double 用法）
             _config.KazuhaReturnAbnormalCoordThreshold = Get("kazuhaReturnAbnormalCoordThreshold", _config.KazuhaReturnAbnormalCoordThreshold);
             _config.KazuhaReturnReseedRetryCount = Get("kazuhaReturnReseedRetryCount", _config.KazuhaReturnReseedRetryCount);
+            _config.KazuhaReturnPreDistanceZeroRetryTimeoutMs = Get("kazuhaReturnPreDistanceZeroRetryTimeoutMs", _config.KazuhaReturnPreDistanceZeroRetryTimeoutMs);
             // hoeing-multiplayer-lagging-member-catchup：落后追赶调试参数回读（纯本地，配置组场景必须经此 override 才能传到运行时 EffectiveConfig）
             _config.EnableLaggingCatchUp = Get("enableLaggingCatchUp", _config.EnableLaggingCatchUp);
             _config.LagSegmentThreshold = Get("lagSegmentThreshold", _config.LagSegmentThreshold);
@@ -3695,6 +3696,7 @@ public class AutoHoeingTask : ISoloTask
             new() { Name = "kazuhaSecondApproachMaxSteps", Label = "拾取前精接近步数（联机万叶聚物）\n1-30，默认6（约0.5s上限），战后回点完成第一段后再做二段精接近的最大步数", Type = "number", DefaultValue = config.KazuhaSecondApproachMaxSteps },
             new() { Name = "kazuhaReturnAbnormalCoordThreshold", Label = "回点异常坐标阈值\n默认50，战后回点/持续回点读到的坐标距战斗点超过此值视为识别漂移，触发重播种+重识别", Type = "number", DefaultValue = config.KazuhaReturnAbnormalCoordThreshold },
             new() { Name = "kazuhaReturnReseedRetryCount", Label = "回点重识别重试次数\n默认3，命中异常阈值后重播种战斗点锚点并重识别的最大重试次数", Type = "number", DefaultValue = config.KazuhaReturnReseedRetryCount },
+            new() { Name = "kazuhaReturnPreDistanceZeroRetryTimeoutMs", Label = "回点距离预判(0,0)重试窗口(ms)\n默认2000，战后回点距离预判帧识别失败(0,0)时 GetPositionStable 全局匹配重试的总时长上限", Type = "number", DefaultValue = config.KazuhaReturnPreDistanceZeroRetryTimeoutMs },
             new() { Name = "syncPointMinDistance", Label = "集合点与战斗点的最小距离阈值\n小于此距离的点不作为集合点", Type = "number", DefaultValue = config.SyncPointMinDistance },
 
             // ===== 联机战斗配置 =====

@@ -915,6 +915,32 @@ public class PathExecutor
                                                     Logger.LogDebug(ex, "[联机] 战后聚物分支距离预判位置识别失败，跳过 MoveTo 走 MoveCloseTo 兜底");
                                                     currentPos = new Point2f(0, 0);
                                                 }
+                                                // hoeing-kazuha-return-predistance-zero-coord-skip-moveto-fix：
+                                                // 距离预判帧 (0,0)（识别失败）不再直接跳过 MoveTo——先在约 2s 时间窗内用
+                                                // GetPositionStable（全局匹配）有限重试拿有效坐标。恢复成功则改写 currentPos，
+                                                // 自然落入下方既有 if 真分支（守卫 + ShouldPreMoveTo + MoveTo），复用既有逻辑；
+                                                // 仍 (0,0) 则 currentPos 不变，落入现状退化路径（__coordTrusted 保持 true，Q3）。
+                                                if (currentPos is { X: 0, Y: 0 })
+                                                {
+                                                    var __preCfg = TaskContext.Instance().Config.AutoHoeingConfig;
+                                                    var __preResolve = await KazuhaReturnPreDistanceResolver.ResolveZeroCoordAsync(
+                                                        __preCfg.KazuhaReturnPreDistanceZeroRetryTimeoutMs,
+                                                        reSampleStable: () =>
+                                                        {
+                                                            using var s = CaptureToRectArea();
+                                                            return Navigation.GetPositionStable(s, waypoint.MapName, waypoint.MapMatchMethod);
+                                                        },
+                                                        delay: token => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, token),
+                                                        nowMs: () => Environment.TickCount64,
+                                                        log: m => Logger.LogInformation("[联机] 战后聚物回点{Msg}", m),
+                                                        ct: ct);
+                                                    if (__preResolve.Recovered)
+                                                    {
+                                                        // 恢复出有效坐标（可能仍是远点，交既有守卫块判定）→ 改写 currentPos 落入既有真分支。
+                                                        currentPos = __preResolve.Pos;
+                                                    }
+                                                    // 未恢复：currentPos 仍为 (0,0)，下方 if 为假，退化到现状跳过 MoveTo（行为等价 F）。
+                                                }
                                                 if (currentPos is not { X: 0, Y: 0 })
                                                 {
                                                     // hoeing-kazuha-return-abnormal-coord-reseed-moveto-fix 路径 B：
