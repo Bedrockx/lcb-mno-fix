@@ -1,4 +1,6 @@
 using System;
+using BetterGenshinImpact.Core.Config;
+using BetterGenshinImpact.Service;
 using BetterGenshinImpact.GameTask.Common;
 using BetterGenshinImpact.GameTask.Common.Element.Assets;
 using BetterGenshinImpact.GameTask.Common.Map.Maps;
@@ -18,7 +20,32 @@ public class NavigationInstance
     private float _prevY = -1;
     private DateTime _captureTime = DateTime.MinValue;
     private int _consecutiveFailCount = 0;
-    private const int GlobalMatchFallbackThreshold = 2; // 连续失败2次后触发全局匹配
+
+    // 全局回退阈值：每次读配置单例并校验兜底（<1 回落默认 2 + 告警）。UI 实时生效（Requirement 2）。
+    private static int GlobalMatchFallbackThreshold
+    {
+        get
+        {
+            var cfg = ConfigService.Config?.MiniMapMatchTuningConfig;
+            if (cfg == null) return MiniMapMatchTuningConfig.DefaultGlobalMatchFallbackThreshold;
+            var (value, fellBack) = MiniMapMatchTuningValidator.ValidateFallbackThreshold(cfg.GlobalMatchFallbackThreshold);
+            if (fellBack) MiniMapTuningWarn.OnceFallbackThreshold(cfg.GlobalMatchFallbackThreshold);
+            return value;
+        }
+    }
+
+    // GetPosition 锁等待超时（ms）：每次读配置并校验兜底（<0 回落默认 100 + 告警）。UI 实时生效（Requirement 3）。
+    private static int GetPositionLockTimeoutMs
+    {
+        get
+        {
+            var cfg = ConfigService.Config?.MiniMapMatchTuningConfig;
+            if (cfg == null) return MiniMapMatchTuningConfig.DefaultGetPositionLockTimeoutMs;
+            var (value, fellBack) = MiniMapMatchTuningValidator.ValidateLockTimeoutMs(cfg.GetPositionLockTimeoutMs);
+            if (fellBack) MiniMapTuningWarn.OnceLockTimeout(cfg.GetPositionLockTimeoutMs);
+            return value;
+        }
+    }
     
     public void Reset()
     {
@@ -35,7 +62,8 @@ public class NavigationInstance
     private static readonly object GetPositionLock = new object(); 
     public Point2f GetPosition(ImageRegion imageRegion, string mapName, string mapMatchMethod)
     {
-        if (Monitor.TryEnter(GetPositionLock, 100))
+        var lockTimeoutMs = GetPositionLockTimeoutMs;
+        if (Monitor.TryEnter(GetPositionLock, lockTimeoutMs))
         {
             try
             {
@@ -114,7 +142,7 @@ public class NavigationInstance
         if (MiniMapPositionDiagnostics.Enabled)
         {
             TaskControl.Logger.LogDebug(
-                "[小地图诊断] GetPosition 获取锁超时(100ms)，回退到上次位置 ({Px:F1},{Py:F1})", _prevX, _prevY);
+                "[小地图诊断] GetPosition 获取锁超时({Timeout}ms)，回退到上次位置 ({Px:F1},{Py:F1})", lockTimeoutMs, _prevX, _prevY);
         }
         if (_prevX > 0 && _prevY > 0)
         {

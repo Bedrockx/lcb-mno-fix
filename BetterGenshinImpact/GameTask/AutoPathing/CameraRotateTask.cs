@@ -124,20 +124,14 @@ public class CameraRotateTask(CancellationToken ct)
 
             if (count > maxTryTimes)
             {
-                // 超时兜底（bugfix.md 3.8 不变）：用本轮测到的误差方向；未测到时按 0 处理（bb=-1），仅决定甩动方向
-                var diffForDirection = measuredDiff ?? 0f;
-                //aa为正bb=1，aa为负数bb=-1
-                var bb = diffForDirection > 0 ? 1 : -1;
-                Simulation.SendInput.Mouse.MoveMouseBy((int)Math.Round(bb * _dpi * 1000), 0);
-                //按鼠标中键
-                Simulation.SendInput.Mouse.MiddleButtonClick();
-                TaskControl.Logger.LogWarning("视角转动到目标角度超时，停止转动- {t}", bb);
+                // 超时只停止转动，不再朝固定方向甩视角（对齐公版行为，避免误甩到错误方向）
+                TaskControl.Logger.LogWarning("视角转动到目标角度超时，停止转动");
                 break;
             }
 
             // 未到位且未超时（含本轮未测量）：跳过本轮，等下一轮再尝试（Q2=a：不累加成功判定、不提前 break）
             // TaskControl.Logger.LogWarning("转动视角到目标角度中，当前角度误差-{aa}，尝试次数-{count}", measuredDiff, count);
-            await Delay(50-count/2, ct);
+            await Delay(50, ct);
             count++;
         }
 

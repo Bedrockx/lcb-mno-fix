@@ -280,6 +280,11 @@ public partial class AllConfig : ObservableObject
     /// 地图追踪配置
     /// </summary>
     public PathingConditionConfig PathingConditionConfig { get; set; } = PathingConditionConfig.Default;
+
+    /// <summary>
+    /// 小地图匹配调参配置（纯本地调试用）
+    /// </summary>
+    public MiniMapMatchTuningConfig MiniMapMatchTuningConfig { get; set; } = new();
     
     /// <summary>
     ///     快捷键配置
@@ -356,6 +361,7 @@ public partial class AllConfig : ObservableObject
         OtherConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoHoeingConfig.PropertyChanged += OnAnyPropertyChanged;
         SkillCdConfig.PropertyChanged += OnAnyPropertyChanged;
+        MiniMapMatchTuningConfig.PropertyChanged += OnAnyPropertyChanged;
     }
 
     public void OnAnyPropertyChanged(object? sender, EventArgs args)

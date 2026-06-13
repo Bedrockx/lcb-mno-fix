@@ -2267,7 +2267,19 @@ public class PathExecutor
     {
         var screen = CaptureToRectArea();
         var position = await GetPosition(screen, waypoint);
-        var targetOrientation = Navigation.GetTargetOrientation(waypoint, position);
+
+        // 零坐标防呆（Requirement 4）：开启且本帧 (0,0)（识别失败）时，用上一帧有效坐标算朝向，
+        // 避免把 (0,0) 当真实坐标算出"从地图原点指向目标"的错误朝向。默认关闭 = 现状行为。
+        var guardEnabled = TaskContext.Instance().Config.MiniMapMatchTuningConfig?.ZeroCoordGuardEnabled
+                           ?? MiniMapMatchTuningConfig.DefaultZeroCoordGuardEnabled;
+        var (effectivePosition, skip) = ZeroCoordGuard.ResolveOrientationPosition(position, prePosition, guardEnabled);
+        if (skip)
+        {
+            Logger.LogInformation("[零坐标防呆] 本帧坐标(0,0)且无有效上一帧，跳过朝向更新");
+            return;
+        }
+
+        var targetOrientation = Navigation.GetTargetOrientation(waypoint, effectivePosition);
         Logger.LogDebug("朝向点，位置({x2},{y2})", $"{waypoint.GameX:F1}", $"{waypoint.GameY:F1}");
         await WaitUntilRotatedTo(targetOrientation, 2);
         await Delay(500, ct);

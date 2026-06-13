@@ -305,6 +305,61 @@
                         Margin="0,0,36,0"
                         IsChecked="{Binding Config.PathingConditionConfig.OnlyInTeleportRecover, Mode=TwoWay}" />
                 </ui:CardControl>
+
+                <ui:Card Margin="0,0,0,10">
+                    <StackPanel>
+                        <ui:TextBlock Margin="0,0,0,8"
+                                      FontTypography="BodyStrong"
+                                      Text="小地图匹配调参（纯本地调试，实时生效）" />
+                        <ui:TextBlock Margin="0,0,0,8"
+                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="默认值等于改代码前行为。置信度非法(不在0~1)整组回落默认；阈值/超时/节流非法各自回落默认。"
+                                      TextWrapping="Wrap" />
+
+                        <!--  置信度阈值 rank0/1/2（Requirement 1）  -->
+                        <WrapPanel Margin="0,0,0,8">
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="置信度 rank0" />
+                            <ui:TextBox MinWidth="80" Margin="0,0,16,0"
+                                        Text="{Binding Config.MiniMapMatchTuningConfig.Rank0ConfidenceThreshold, Mode=TwoWay}" />
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="rank1" />
+                            <ui:TextBox MinWidth="80" Margin="0,0,16,0"
+                                        Text="{Binding Config.MiniMapMatchTuningConfig.Rank1ConfidenceThreshold, Mode=TwoWay}" />
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="rank2" />
+                            <ui:TextBox MinWidth="80"
+                                        Text="{Binding Config.MiniMapMatchTuningConfig.Rank2ConfidenceThreshold, Mode=TwoWay}" />
+                        </WrapPanel>
+
+                        <!--  全局回退阈值（Requirement 2）/ 锁超时（Requirement 3）  -->
+                        <WrapPanel Margin="0,0,0,8">
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="全局回退连续失败阈值" />
+                            <ui:TextBox MinWidth="80" Margin="0,0,16,0"
+                                        Text="{Binding Config.MiniMapMatchTuningConfig.GlobalMatchFallbackThreshold, Mode=TwoWay}" />
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="GetPosition锁超时(ms)" />
+                            <ui:TextBox MinWidth="80"
+                                        Text="{Binding Config.MiniMapMatchTuningConfig.GetPositionLockTimeoutMs, Mode=TwoWay}" />
+                        </WrapPanel>
+
+                        <!--  零坐标防呆（Requirement 4）  -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <ui:ToggleSwitch Margin="0,0,8,0"
+                                             IsChecked="{Binding Config.MiniMapMatchTuningConfig.ZeroCoordGuardEnabled, Mode=TwoWay}" />
+                            <ui:TextBlock VerticalAlignment="Center" Text="零坐标防呆（(0,0)失败帧沿用上一帧朝向）" />
+                        </StackPanel>
+
+                        <!--  诊断开关（Requirement 5）  -->
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <ui:ToggleSwitch Margin="0,0,8,0"
+                                             IsChecked="{Binding Config.MiniMapMatchTuningConfig.DiagnosticsEnabled, Mode=TwoWay}" />
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,16,0" Text="诊断总开关" />
+                            <ui:ToggleSwitch Margin="0,0,8,0"
+                                             IsChecked="{Binding Config.MiniMapMatchTuningConfig.DumpFailedFrame, Mode=TwoWay}" />
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,16,0" Text="失败帧存图" />
+                            <ui:TextBlock VerticalAlignment="Center" Margin="0,0,8,0" Text="存图节流(ms)" />
+                            <ui:TextBox MinWidth="80"
+                                        Text="{Binding Config.MiniMapMatchTuningConfig.DumpThrottleMs, Mode=TwoWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                </ui:Card>
             </StackPanel>
         </ScrollViewer>
 

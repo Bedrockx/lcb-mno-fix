@@ -3,6 +3,7 @@ using System;
 using System.IO;
 using System.Threading;
 using BetterGenshinImpact.Core.Config;
+using BetterGenshinImpact.Service;
 using BetterGenshinImpact.GameTask.Common;
 using BetterGenshinImpact.GameTask.Common.Element.Assets;
 using Microsoft.Extensions.Logging;
@@ -27,21 +28,28 @@ namespace BetterGenshinImpact.GameTask.AutoPathing;
 /// </summary>
 public static class MiniMapPositionDiagnostics
 {
-    /// <summary>
-    /// 诊断总开关。默认 true（本次就是为了跑一天收集日志）。
-    /// 若要彻底静默，改成 false 重新编译即可。
-    /// </summary>
-    public static bool Enabled = true;
+    /// <summary>诊断总开关。读配置单例，UI 实时生效；配置为 null 回落默认 true（Requirement 5.1/7.4）。</summary>
+    public static bool Enabled
+        => ConfigService.Config?.MiniMapMatchTuningConfig?.DiagnosticsEnabled
+           ?? MiniMapMatchTuningConfig.DefaultDiagnosticsEnabled;
 
-    /// <summary>
-    /// 是否在识别失败时 dump 小地图截图。默认 true。
-    /// </summary>
-    public static bool DumpFailedFrame = true;
+    /// <summary>失败帧存图开关。配置为 null 回落默认 true（Requirement 5.2/7.4）。</summary>
+    public static bool DumpFailedFrame
+        => ConfigService.Config?.MiniMapMatchTuningConfig?.DumpFailedFrame
+           ?? MiniMapMatchTuningConfig.DefaultDumpFailedFrame;
 
-    /// <summary>
-    /// 失败帧 dump 的最小间隔（毫秒），避免一秒几十帧把磁盘写爆。
-    /// </summary>
-    public static int DumpThrottleMs = 2000;
+    /// <summary>失败帧存图节流（ms）。&lt;0 回落默认 2000 + 告警；配置为 null 回落默认（Requirement 5.3/5.5/7.4）。</summary>
+    public static int DumpThrottleMs
+    {
+        get
+        {
+            var cfg = ConfigService.Config?.MiniMapMatchTuningConfig;
+            if (cfg == null) return MiniMapMatchTuningConfig.DefaultDumpThrottleMs;
+            var (value, fellBack) = MiniMapMatchTuningValidator.ValidateDumpThrottleMs(cfg.DumpThrottleMs);
+            if (fellBack) MiniMapTuningWarn.OnceDumpThrottle(cfg.DumpThrottleMs);
+            return value;
+        }
+    }
 
     private static long _lastDumpTicks;
     private static int _dumpSeq;
