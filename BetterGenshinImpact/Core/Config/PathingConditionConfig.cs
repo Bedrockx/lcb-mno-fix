@@ -122,7 +122,21 @@ public partial class PathingConditionConfig : ObservableObject
         get => _multiplayerUseFixedFightStrategyOverride;
         set => _multiplayerUseFixedFightStrategyOverride = value;
     }
-        
+
+    /// <summary>
+    /// 联机锄地世界人数交叉校验：返回协调器权威 (Available, PlayerCount, IsHost) 快照的委托。
+    /// 由 RouteExecutionEngine 注入"读实时协调器值的 lambda"、AutoHoeingTask finally 清空。
+    /// 为 null（单机/非锄地/未注入）时 DetectedMultiGameStatus 完全走纯视觉逻辑，零感知。
+    /// 委托每次调用时实时读取协调器，绝非启动快照。
+    /// 类型仅用 BCL（值元组 + Func），不引用任何 Coordinator 类型，避免 AutoFight→AutoHoeing 编译依赖。
+    /// </summary>
+    private static Func<(bool Available, int PlayerCount, bool IsHost)>? _authoritativePlayerCountProvider;
+    public static Func<(bool Available, int PlayerCount, bool IsHost)>? AuthoritativePlayerCountProvider
+    {
+        get => _authoritativePlayerCountProvider;
+        set => _authoritativePlayerCountProvider = value;
+    }
+
     public static PathingConditionConfig Default => new()
     {
         AvatarConditions =

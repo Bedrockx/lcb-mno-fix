@@ -484,6 +484,9 @@ public class AutoHoeingTask : ISoloTask
             PathingConditionConfig.MultiplayerUseFixedFightStrategyOverride = true;
             PathExecutor.CurrentWorldStateMonitor = null;
             PathExecutor.CurrentMultiplayerCoordinator = null;
+            // 第2层（hoeing-multiplayer-otherworld-teammate-avatar-misrecognition-fix）：
+            // 成对清空 provider，确保单机/下次任务零残留。
+            PathingConditionConfig.AuthoritativePlayerCountProvider = null;
 
             // 房主兜底：确保关闭房间通知已发送
             if (_multiplayerCoordinator != null && _multiplayerCoordinator.IsHost)

@@ -29,6 +29,13 @@ public class MultiGameStatus
     /// 玩家数量，最少1人（我自己）
     /// </summary>
     public int PlayerCount { get; set; } = 1;
+
+    /// <summary>
+    /// 本次世界人数/IsHost 是否被协调器权威值覆盖（交叉校验命中不一致）。
+    /// true 时调用层（CombatScenes.InitializeTeam）应重抓一帧重走识别。
+    /// 单机/未覆盖时恒为 false，调用层零感知。
+    /// </summary>
+    public bool PlayerCountOverridden { get; set; } = false;
     
     /// <summary>
     /// 我能控制的最大角色数量

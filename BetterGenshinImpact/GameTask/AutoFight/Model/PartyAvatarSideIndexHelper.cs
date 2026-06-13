@@ -80,6 +80,34 @@ public class PartyAvatarSideIndexHelper
             }
         }
 
+        // 第2层（hoeing-multiplayer-otherworld-teammate-avatar-misrecognition-fix）：
+        // 联机锄地运行时（provider 非 null）以协调器权威在线人数/IsHost 交叉校验视觉计数，
+        // 不一致以权威为准覆盖并置 PlayerCountOverridden=true（调用层据此重抓帧重识别）。
+        // provider 为 null（单机/非锄地/未注入）→ 完全跳过，纯视觉零感知。
+        var provider = Core.Config.PathingConditionConfig.AuthoritativePlayerCountProvider;
+        if (provider != null)
+        {
+            (bool available, int authCount, bool authIsHost) = provider();
+            var resolved = MultiGamePlayerCountCrossValidator.Resolve(
+                visualPlayerCount: status.PlayerCount, visualIsHost: status.IsHost,
+                coordinatorAvailable: available,
+                authoritativePlayerCount: authCount, authoritativeIsHost: authIsHost);
+            if (resolved.Overridden)
+            {
+                logger.LogWarning(
+                    "[联机][人数校验] 视觉人数={VC}(IsHost={VH}) 与协调器权威人数={AC}(IsHost={AH}) 不一致，以协调器为准覆盖并重识别",
+                    status.PlayerCount, status.IsHost, resolved.PlayerCount, resolved.IsHost);
+                status.PlayerCount = resolved.PlayerCount;
+                status.IsHost = resolved.IsHost;
+                status.IsInMultiGame = true;
+                status.PlayerCountOverridden = true;
+            }
+            else if (available)
+            {
+                logger.LogDebug("[联机][人数校验] 视觉人数={VC} 与协调器一致，无需覆盖", status.PlayerCount);
+            }
+        }
+
         return status;
     }
 
@@ -186,8 +214,47 @@ public class PartyAvatarSideIndexHelper
                 {
                     // 没有已知的编号位置，这种情况下可能是单人队
                     // 直接用出战角色标识来反推
-                    var oneIndexRect = GetIndexRectFromKnownCurrentAvatarFlag(curr.ToRect());
                     logger.LogInformation("当前编队中可能只存在一个角色（且角色编号未正确识别）");
+
+                    // 默认沿用 else 分支开头识别到的单个出战标识（自己世界/单机/房主行为不变，F=F'）。
+                    // 注意：不改写上面的 curr 变量本身——路径3(knownRect!=default 分支)仍用原始 curr 做 IsIntersecting。
+                    var arrowRect = curr.ToRect();
+
+                    var isOtherWorldGuest = multiGameStatus.IsInMultiGame && !multiGameStatus.IsHost;
+                    var s = systemInfo.AssetScale;
+                    if (isOtherWorldGuest)
+                    {
+                        // 第1层（治本）：真出战箭头恒在最底部本机行，二值化可能在上方队友行误检出"假箭头"。
+                        // 改用 FindMulti 取所有箭头候选，选 Y 最大(最靠下)者作为本机出战箭头候选。
+                        var arrowCandidates = imageRegion.FindMulti(elementAssets.CurrentAvatarThreshold);
+                        if (arrowCandidates.Count == 0)
+                        {
+                            // 第4层：无任何箭头候选 → 抛异常走 GetAllIndexRectsOld 兜底
+                            logger.LogWarning(
+                                "[联机][选区归属] 别人世界单角色反推：FindMulti 未找到任何出战箭头候选，走写死位置兜底。playerCount={PC} assetScale={Scale}",
+                                multiGameStatus.PlayerCount, s);
+                            throw new Exception("别人世界选区归属校验失败：未找到出战箭头候选");
+                        }
+
+                        var bottomArrow = arrowCandidates.OrderByDescending(r => r.Y).First();
+                        arrowRect = bottomArrow.ToRect();
+
+                        // 第3层（硬防御）：对最底部箭头做分人数 Y 阈值检查（playerCount 已经第2层交叉校验/重识别）。
+                        if (!OtherWorldArrowGuard.IsArrowAtSelfRow(arrowRect.Y, multiGameStatus.PlayerCount, s))
+                        {
+                            // 第4层：取最底部箭头后 Y 仍偏上 → 仍是上方假箭头 → 抛异常走兜底
+                            int min1080p = multiGameStatus.PlayerCount >= 4
+                                ? OtherWorldArrowGuard.ArrowMinY1080p_4Player
+                                : OtherWorldArrowGuard.ArrowMinY1080p_2or3Player;
+                            logger.LogWarning(
+                                "[联机][选区归属] 别人世界最底部箭头 Y 偏上，未过阈值（疑似命中上方队友行假箭头），拒绝采纳走写死位置兜底。" +
+                                "arrowY={Y} playerCount={PC} threshold1080p={T} assetScale={Scale}",
+                                arrowRect.Y, multiGameStatus.PlayerCount, min1080p, s);
+                            throw new Exception("别人世界选区归属校验失败：最底部箭头 Y 未过分人数阈值");
+                        }
+                    }
+
+                    var oneIndexRect = GetIndexRectFromKnownCurrentAvatarFlag(arrowRect);
                     return ([oneIndexRect], [GetAvatarSideIconRectFromIndexRect(oneIndexRect, systemInfo)]);
                 }
                 else

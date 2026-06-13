@@ -161,6 +161,15 @@ public class RouteExecutionEngine
                         executor.WorldStateMonitor = _worldStateMonitor;
                         PathExecutor.CurrentWorldStateMonitor = _worldStateMonitor;
                         PathExecutor.CurrentMultiplayerCoordinator = _coordinator;
+                        // 第2层（hoeing-multiplayer-otherworld-teammate-avatar-misrecognition-fix）：
+                        // 注入"读实时协调器权威人数"的委托，供 DetectedMultiGameStatus 交叉校验。
+                        // 委托每次调用实时读 _coordinator，连接断开自动返回 Available=false 退回纯视觉。
+                        PathingConditionConfig.AuthoritativePlayerCountProvider = () =>
+                        {
+                            var c = _coordinator;
+                            if (c == null || !c.IsConnected) return (false, 0, false);
+                            return (true, c.Client.CurrentRoomPlayerCount, c.Client.IsHost);
+                        };
                         executor.PartyConfig.DisableAutoFetchDispatch = true;
                         Logger.LogInformation("[联机] 已注入 MultiplayerCoordinator 到 PathExecutor，路线: {Name}", route.FileName);
                     }

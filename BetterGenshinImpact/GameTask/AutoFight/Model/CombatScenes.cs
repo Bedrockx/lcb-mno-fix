@@ -159,42 +159,61 @@ public class CombatScenes : IDisposable
 
         // 判断联机状态
         CurrentMultiGameStatus = PartyAvatarSideIndexHelper.DetectedMultiGameStatus(imageRegion, _autoFightAssets, _logger);
-        // 队伍角色编号和侧面头像位置
-        var (avatarIndexRectList, avatarSideIconRectList) = PartyAvatarSideIndexHelper.GetAllIndexRects(imageRegion, CurrentMultiGameStatus, _logger, _elementAssets, _systemInfo);
-        ExpectedTeamAvatarNum = avatarIndexRectList.Count;
 
-        // 识别队伍
-        var names = new string[avatarSideIconRectList.Count];
-        var displayNames = new string[avatarSideIconRectList.Count];
+        // 第2层（hoeing-multiplayer-otherworld-teammate-avatar-misrecognition-fix）：
+        // 人数被协调器权威值覆盖 → 引发误判的脏帧头像识别同样不可信，重抓一帧用纠正后的人数重走识别。
+        // imageRegion 形参由调用方持有不可在此 Dispose；重抓的 refreshedRegion 本方法负责释放。
+        ImageRegion regionForRecognition = imageRegion;
+        ImageRegion? refreshedRegion = null;
+        if (CurrentMultiGameStatus.PlayerCountOverridden)
+        {
+            refreshedRegion = CaptureToRectArea();
+            regionForRecognition = refreshedRegion;
+            _logger.LogInformation("[联机][人数校验] 人数已被协调器覆盖，重新抓帧重识别队伍");
+        }
         try
         {
-            for (var i = 0; i < avatarSideIconRectList.Count; i++)
+            // 队伍角色编号和侧面头像位置（用纠正后的 CurrentMultiGameStatus + 同源帧）
+            var (avatarIndexRectList, avatarSideIconRectList) = PartyAvatarSideIndexHelper.GetAllIndexRects(regionForRecognition, CurrentMultiGameStatus, _logger, _elementAssets, _systemInfo);
+            ExpectedTeamAvatarNum = avatarIndexRectList.Count;
+
+            // 识别队伍
+            var names = new string[avatarSideIconRectList.Count];
+            var displayNames = new string[avatarSideIconRectList.Count];
+            try
             {
-                using var ra = imageRegion.DeriveCrop(avatarSideIconRectList[i]);
-                var pair = ClassifyAvatarCnName(ra.CacheImage, i + 1);
-                names[i] = pair.Item1;
-                if (!string.IsNullOrEmpty(pair.Item2))
+                for (var i = 0; i < avatarSideIconRectList.Count; i++)
                 {
-                    var costumeName = pair.Item2;
-                    if (_autoFightAssets.AvatarCostumeMap.TryGetValue(costumeName, out string? name))
+                    using var ra = regionForRecognition.DeriveCrop(avatarSideIconRectList[i]);
+                    var pair = ClassifyAvatarCnName(ra.CacheImage, i + 1);
+                    names[i] = pair.Item1;
+                    if (!string.IsNullOrEmpty(pair.Item2))
                     {
-                        costumeName = name;
+                        var costumeName = pair.Item2;
+                        if (_autoFightAssets.AvatarCostumeMap.TryGetValue(costumeName, out string? name))
+                        {
+                            costumeName = name;
+                        }
+
+                        displayNames[i] = $"{pair.Item1}({costumeName})";
                     }
+                    else
+                    {
+                        displayNames[i] = pair.Item1;
+                    }
+                }
 
-                    displayNames[i] = $"{pair.Item1}({costumeName})";
-                }
-                else
-                {
-                    displayNames[i] = pair.Item1;
-                }
+                _logger.LogInformation("识别到的队伍角色:{Text}", string.Join(",", displayNames));
+                Avatars = BuildAvatars([.. names], null, avatarIndexRectList, autoFightConfig);
             }
-
-            _logger.LogInformation("识别到的队伍角色:{Text}", string.Join(",", displayNames));
-            Avatars = BuildAvatars([.. names], null, avatarIndexRectList, autoFightConfig);
+            catch (Exception e) // todo 此处catch把错误吞了不便排查
+            {
+                _logger.LogWarning(e.Message);
+            }
         }
-        catch (Exception e) // todo 此处catch把错误吞了不便排查
+        finally
         {
-            _logger.LogWarning(e.Message);
+            refreshedRegion?.Dispose();
         }
 
         return this;
