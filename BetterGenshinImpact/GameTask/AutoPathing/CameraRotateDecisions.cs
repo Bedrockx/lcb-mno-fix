@@ -18,6 +18,6 @@ public static class CameraRotateDecisions
         {
             return false;
         }
-        return System.Math.Abs(measuredDiff.Value) < maxDiff + count / 2;
+        return System.Math.Abs(measuredDiff.Value) < maxDiff;
     }
 }

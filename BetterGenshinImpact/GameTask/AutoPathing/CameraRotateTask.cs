@@ -55,8 +55,9 @@ public class CameraRotateTask(CancellationToken ct)
                     controlRatio = 2;
                 }
 
-                // TaskControl.Logger.LogWarning("转动视角，当前角度-{cao}，目标角度-{targetOrientation}，误差-{diff}，控制比例-{controlRatio}",cao,targetOrientation,diff,controlRatio);
-                Simulation.SendInput.Mouse.MoveMouseBy((int)Math.Round(-controlRatio * diff * _dpi), 0);
+                var moveX = (int)Math.Round(-controlRatio * diff * _dpi);
+                TaskControl.Logger.LogInformation("[转向诊断] RotateToApproach: 当前角度={Cao:F1} 目标角度={Target:F1} 误差={Diff:F1} 控制比例={Ratio} 转动量MoveX={MoveX}", cao, targetOrientation, diff, controlRatio, moveX);
+                Simulation.SendInput.Mouse.MoveMouseBy(moveX, 0);
                 return diff; 
             }
             catch (Exception e)
@@ -71,7 +72,7 @@ public class CameraRotateTask(CancellationToken ct)
                 Monitor.Exit(_rLock);
             }
         }
-        TaskControl.Logger.LogWarning("转动视角发生异常，停止转动-2222");
+        TaskControl.Logger.LogWarning("[转向诊断] RotateToApproach 抢 _rLock 失败 → 本轮不转鼠标、返回 null（目标角度={Target:F1}）", targetOrientation);
         // 抢 _rLock 失败 = 本轮未真实测量到角度，返回 null（而非 0），避免调用方误判为"已到位"
         return null;
     }
@@ -86,8 +87,8 @@ public class CameraRotateTask(CancellationToken ct)
     /// <returns></returns>
     public async Task<bool> WaitUntilRotatedTo(int targetOrientation, int maxDiff, int maxTryTimes = 50)
     {
-        // TaskControl.Logger.LogWarning("开始转动视角到目标角度-{targetOrientation}，最大误差-{maxDiff}，最大尝试次数-{maxTryTimes}",
-            // targetOrientation, maxDiff, maxTryTimes);
+        TaskControl.Logger.LogInformation("[转向诊断] WaitUntilRotatedTo 开始: 目标角度={Target} 最大误差={MaxDiff} 最大尝试={MaxTry}",
+            targetOrientation, maxDiff, maxTryTimes);
         bool isSuccessful = false;
         int count = 0;
         while (!ct.IsCancellationRequested)
@@ -95,8 +96,10 @@ public class CameraRotateTask(CancellationToken ct)
             var screen = CaptureToRectArea();
             // null = 本轮未真实测量到角度（_zLock 抢锁失败 或 RotateToApproach 抢 _rLock 失败/异常返回 null）
             float? measuredDiff = null;
+            bool gotZLock = false;
             if (Monitor.TryEnter(_zLock))
             {
+                gotZLock = true;
                 try
                 {
                     var raw = RotateToApproach(targetOrientation, screen);
@@ -112,6 +115,15 @@ public class CameraRotateTask(CancellationToken ct)
                     Monitor.Exit(_zLock);
                 }
             }
+            if (!gotZLock)
+            {
+                TaskControl.Logger.LogWarning("[转向诊断] WaitUntilRotatedTo 抢 _zLock 失败（第{Count}轮）→ 本轮不转动、measuredDiff=null", count);
+            }
+            else
+            {
+                TaskControl.Logger.LogInformation("[转向诊断] 第{Count}轮: measuredDiff={Diff}", count,
+                    measuredDiff.HasValue ? measuredDiff.Value.ToString("F1") : "null(未测量)");
+            }
             // 注意：_zLock TryEnter 失败时 measuredDiff 保持 null —— 这是 ② 的核心 bug 点修复，
             // 原代码此处无 else，aa 保持 0 会被下面误判为"已到位"。
 
@@ -119,6 +131,8 @@ public class CameraRotateTask(CancellationToken ct)
             if (CameraRotateDecisions.IsRotationArrived(measuredDiff, maxDiff, count))
             {
                 isSuccessful = true;
+                TaskControl.Logger.LogInformation("[转向诊断] 判定到位: measuredDiff={Diff} maxDiff={MaxDiff} count={Count}",
+                    measuredDiff.HasValue ? measuredDiff.Value.ToString("F1") : "null", maxDiff, count);
                 break;
             }
 
