@@ -140,10 +140,15 @@ public class PartyAvatarSideIndexHelper
         return new Rect(knownRect.X, y, knownRect.Width, knownRect.Height);
     }
 
-    public static Rect GetIndexRectFromKnownCurrentAvatarFlag(Rect currRect)
+    public static Rect GetIndexRectFromKnownCurrentAvatarFlag(Rect currRect, bool arrowOnSameRow = false)
     {
         var s = TaskContext.Instance().SystemInfo.AssetScale;
-        return new Rect(currRect.X + (int)(126 * s), currRect.Y - (int)(194 * s), (int)(16 * s), (int)(17 * s));
+        // 单机/满编历史标定：编号块在出战箭头上方约 194px。
+        // 联机布局（房主/访客一致，实测）：出战箭头与编号块在同一行，Y 偏移为 0。
+        //   旧的 -194 会把单角色反推的头像区抬到上方队友行，导致把队友角色误识别进本队。
+        //   实测：联机 4 人，真箭头 Y≈557 与本机编号块 Y≈556 同行，修正偏移 0 后头像区与正常满编识别(A分支)像素级重合。
+        int yOffset = arrowOnSameRow ? 0 : (int)(194 * s);
+        return new Rect(currRect.X + (int)(126 * s), currRect.Y - yOffset, (int)(16 * s), (int)(17 * s));
     }
 
     public static (List<Rect>, List<Rect>) GetAllIndexRects(ImageRegion imageRegion, MultiGameStatus multiGameStatus, ILogger logger, ElementAssets elementAssets, ISystemInfo systemInfo)
@@ -228,54 +233,12 @@ public class PartyAvatarSideIndexHelper
                     // 直接用出战角色标识来反推
                     logger.LogInformation("当前编队中可能只存在一个角色（且角色编号未正确识别）");
 
-                    // 默认沿用 else 分支开头识别到的单个出战标识（自己世界/单机/房主行为不变，F=F'）。
-                    // 注意：不改写上面的 curr 变量本身——路径3(knownRect!=default 分支)仍用原始 curr 做 IsIntersecting。
-                    var arrowRect = curr.ToRect();
-
-                    var isOtherWorldGuest = multiGameStatus.IsInMultiGame && !multiGameStatus.IsHost;
-                    var s = systemInfo.AssetScale;
-                    if (isOtherWorldGuest)
-                    {
-                        // 第1层（治本）：真出战箭头恒在最底部本机行，二值化可能在上方队友行误检出"假箭头"。
-                        // 改用 FindMulti 取所有箭头候选，选 Y 最大(最靠下)者作为本机出战箭头候选。
-                        var arrowCandidates = imageRegion.FindMulti(elementAssets.CurrentAvatarThreshold);
-                        if (arrowCandidates.Count == 0)
-                        {
-                            // 第4层：无任何箭头候选 → 抛异常走 GetAllIndexRectsOld 兜底
-                            logger.LogWarning(
-                                "[联机][选区归属] 别人世界单角色反推：FindMulti 未找到任何出战箭头候选，走写死位置兜底。playerCount={PC} assetScale={Scale}",
-                                multiGameStatus.PlayerCount, s);
-                            throw new Exception("别人世界选区归属校验失败：未找到出战箭头候选");
-                        }
-
-                        var bottomArrow = arrowCandidates.OrderByDescending(r => r.Y).First();
-                        arrowRect = bottomArrow.ToRect();
-
-                        // 第3层（硬防御）：对最底部箭头做分人数 Y 阈值检查（playerCount 已经第2层交叉校验/重识别）。
-                        if (!OtherWorldArrowGuard.IsArrowAtSelfRow(arrowRect.Y, multiGameStatus.PlayerCount, s))
-                        {
-                            // 第4层：取最底部箭头后 Y 仍偏上 → 仍是上方假箭头 → 抛异常走兜底
-                            int min1080p = multiGameStatus.PlayerCount >= 4
-                                ? OtherWorldArrowGuard.ArrowMinY1080p_4Player
-                                : OtherWorldArrowGuard.ArrowMinY1080p_2or3Player;
-                            logger.LogWarning(
-                                "[联机][选区归属] 别人世界最底部箭头 Y 偏上，未过阈值（疑似命中上方队友行假箭头），拒绝采纳走写死位置兜底。" +
-                                "arrowY={Y} playerCount={PC} threshold1080p={T} assetScale={Scale}",
-                                arrowRect.Y, multiGameStatus.PlayerCount, min1080p, s);
-                            throw new Exception("别人世界选区归属校验失败：最底部箭头 Y 未过分人数阈值");
-                        }
-                    }
-
-                    var oneIndexRect = GetIndexRectFromKnownCurrentAvatarFlag(arrowRect);
+                    // 联机布局（房主/访客一致，实测）：出战箭头与编号块在同一行，反推 Y 偏移为 0。
+                    //   旧的 -194（单机/满编标定）在联机会把头像区抬到上方队友行，导致把队友角色误识别进本队。
+                    //   单机/非联机保持 -194 不变（arrowOnSameRow=false），零回归。
+                    var arrowOnSameRow = multiGameStatus.IsInMultiGame;
+                    var oneIndexRect = GetIndexRectFromKnownCurrentAvatarFlag(curr.ToRect(), arrowOnSameRow);
                     var oneSideIconRect = GetAvatarSideIconRectFromIndexRect(oneIndexRect, systemInfo);
-
-                    // ===== 诊断（临时）：把箭头候选 / 选中箭头 / 反推编号块 / 最终头像裁剪区 画出来并存图 =====
-                    // 仅别人世界访客场景记录，定位"识别成队友"的根因。只记录/绘制，不影响识别决策。
-                    if (isOtherWorldGuest)
-                    {
-                        TryDrawAndSaveSingleAvatarDebug(imageRegion, elementAssets, multiGameStatus, logger, arrowRect, oneIndexRect, oneSideIconRect);
-                    }
-
                     return ([oneIndexRect], [oneSideIconRect]);
                 }
                 else
@@ -312,67 +275,6 @@ public class PartyAvatarSideIndexHelper
                 // 没有出战角色标识的情况下，直接抛出错误走写死逻辑
                 throw new Exception("找不到出战角色编号块与当前出战角色标识！");
             }
-        }
-    }
-
-    /// <summary>
-    /// 【临时诊断】别人世界单角色反推（路径2）可视化：把箭头候选 / 选中箭头 / 反推编号块 / 最终头像裁剪区
-    /// 画到遮罩窗口（参考 DrawOnWindow）并存一张标注全图到 log\multi_avatar_debug，配合结构化 LOG 定位
-    /// "识别成队友"的根因。只记录/绘制，不影响识别决策。定位完成后整体移除。
-    /// 颜色约定（BGR，存图）：
-    ///   红=所有箭头候选；黄=选中的最底部箭头；青=反推出的编号块；绿=最终送 YOLO 分类的头像裁剪区。
-    /// </summary>
-    private static void TryDrawAndSaveSingleAvatarDebug(
-        ImageRegion imageRegion, ElementAssets elementAssets, MultiGameStatus multiGameStatus, ILogger logger,
-        Rect arrowRect, Rect oneIndexRect, Rect oneSideIconRect)
-    {
-        try
-        {
-            var s = TaskContext.Instance().SystemInfo.AssetScale;
-            var candidates = imageRegion.FindMulti(elementAssets.CurrentAvatarThreshold);
-
-            // 结构化 LOG：箭头候选数量 + 每个候选坐标 + 选中箭头 + 反推编号块 + 最终头像区
-            logger.LogDebug(
-                "[联机][选区诊断] playerCount={PC} isHost={Host} assetScale={Scale} 箭头候选数={N}",
-                multiGameStatus.PlayerCount, multiGameStatus.IsHost, s, candidates.Count);
-            for (var i = 0; i < candidates.Count; i++)
-            {
-                var c = candidates[i];
-                logger.LogDebug("[联机][选区诊断] 箭头候选[{I}] X={X} Y={Y} W={W} H={H}", i, c.X, c.Y, c.Width, c.Height);
-            }
-            logger.LogDebug("[联机][选区诊断] 选中箭头 X={X} Y={Y} W={W} H={H}", arrowRect.X, arrowRect.Y, arrowRect.Width, arrowRect.Height);
-            logger.LogDebug("[联机][选区诊断] 反推编号块 X={X} Y={Y} W={W} H={H}", oneIndexRect.X, oneIndexRect.Y, oneIndexRect.Width, oneIndexRect.Height);
-            logger.LogDebug("[联机][选区诊断] 最终头像裁剪区 X={X} Y={Y} W={W} H={H}", oneSideIconRect.X, oneSideIconRect.Y, oneSideIconRect.Width, oneSideIconRect.Height);
-
-            // 1) 叠加到遮罩窗口（实时可见）
-            foreach (var c in candidates)
-            {
-                imageRegion.DrawRect(c.ToRect(), "DbgArrowCand_" + c.Y, new System.Drawing.Pen(System.Drawing.Color.Red, 2));
-            }
-            imageRegion.DrawRect(arrowRect, "DbgArrowPicked", new System.Drawing.Pen(System.Drawing.Color.Yellow, 2));
-            imageRegion.DrawRect(oneIndexRect, "DbgIndexRect", new System.Drawing.Pen(System.Drawing.Color.Cyan, 2));
-            imageRegion.DrawRect(oneSideIconRect, "DbgSideIcon", new System.Drawing.Pen(System.Drawing.Color.Lime, 2));
-
-            // 2) 存一张标注全图（落盘证据）
-            using var vis = imageRegion.SrcMat.Clone();
-            foreach (var c in candidates)
-            {
-                Cv2.Rectangle(vis, c.ToRect(), new Scalar(0, 0, 255), 2); // 红=候选
-            }
-            Cv2.Rectangle(vis, arrowRect, new Scalar(0, 255, 255), 2);      // 黄=选中箭头
-            Cv2.Rectangle(vis, oneIndexRect, new Scalar(255, 255, 0), 2);   // 青=反推编号块
-            Cv2.Rectangle(vis, oneSideIconRect, new Scalar(0, 255, 0), 2);  // 绿=最终头像裁剪区
-
-            var dir = Core.Config.Global.Absolute(@"log\multi_avatar_debug");
-            System.IO.Directory.CreateDirectory(dir);
-            var path = System.IO.Path.Combine(dir, $"single_avatar_{DateTime.Now:yyyyMMdd_HHmmss_fff}.png");
-            vis.SaveImage(path);
-            logger.LogDebug("[联机][选区诊断] 已保存标注图: {Path}", path);
-        }
-        catch (Exception ex)
-        {
-            // 诊断代码不得影响主流程：吞掉异常但记录，便于发现诊断本身的问题
-            logger.LogWarning("[联机][选区诊断] 诊断绘制/存图失败（不影响识别）：{Msg}", ex.Message);
         }
     }
 
