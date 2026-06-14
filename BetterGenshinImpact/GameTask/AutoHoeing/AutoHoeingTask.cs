@@ -1306,6 +1306,7 @@ public class AutoHoeingTask : ISoloTask
         
         for (int retry = 1; retry <= 5; retry++)
         {
+            bool attemptFailed = false;
             try
             {
                 switchSuccess = await new SwitchPartyTask().Start(_config.MultiplayerPartyName, _ct);
@@ -1315,34 +1316,32 @@ public class AutoHoeingTask : ISoloTask
                     _teamAlreadySwitched = true; // 标记已切换
                     break;
                 }
-                
-                if (retry < 5)
-                {
-                    _logger.LogWarning("[联机] 切换队伍失败（第{N}次尝试），2秒后重试", retry);
-                    await Task.Delay(2000, _ct);
-                    
-                    // 第3次失败后尝试去七天神像
-                    if (retry == 3)
-                    {
-                        _logger.LogInformation("[联机] 尝试传送到七天神像后重试");
-                        try
-                        {
-                            await new TpTask(_ct).TpToStatueOfTheSeven(requireLoadingScreen: true);
-                            await Task.Delay(1000, _ct);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogWarning(ex, "[联机] 传送到七天神像失败，继续重试");
-                        }
-                    }
-                }
+
+                // Start() 返回 false 也算本次失败
+                attemptFailed = true;
             }
             catch (Exception ex)
             {
+                // 战斗中打不开队伍界面会抛 PartySetupFailedException，
+                // 与返回 false 统一当作"本次换队失败"处理，走同一兜底分支
+                attemptFailed = true;
                 _logger.LogWarning(ex, "[联机] 切换队伍异常（第{N}次尝试）", retry);
-                if (retry < 5)
+            }
+
+            // 本次失败（无论 false 还是抛异常）且仍有重试机会：
+            // 第 1 次失败起，每次失败都先传送七天神像再重试（传送时世界时停，战斗不阻挡传送）
+            if (SwitchPartyRetryDecisions.ShouldTeleportBeforeRetry(retry, attemptFailed))
+            {
+                _logger.LogWarning("[联机] 切换队伍失败/异常（第{N}次尝试），传送七天神像后重试", retry);
+                try
                 {
-                    await Task.Delay(2000, _ct);
+                    await new TpTask(_ct).TpToStatueOfTheSeven(requireLoadingScreen: true);
+                    await Task.Delay(1000, _ct);
+                }
+                catch (Exception ex)
+                {
+                    // 传送失败仅告警，不中断；靠后续重试 + 战斗自然结束兜底
+                    _logger.LogWarning(ex, "[联机] 传送到七天神像失败，继续重试");
                 }
             }
         }
