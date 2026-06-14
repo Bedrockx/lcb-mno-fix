@@ -267,7 +267,16 @@ public class PartyAvatarSideIndexHelper
                     }
 
                     var oneIndexRect = GetIndexRectFromKnownCurrentAvatarFlag(arrowRect);
-                    return ([oneIndexRect], [GetAvatarSideIconRectFromIndexRect(oneIndexRect, systemInfo)]);
+                    var oneSideIconRect = GetAvatarSideIconRectFromIndexRect(oneIndexRect, systemInfo);
+
+                    // ===== 诊断（临时）：把箭头候选 / 选中箭头 / 反推编号块 / 最终头像裁剪区 画出来并存图 =====
+                    // 仅别人世界访客场景记录，定位"识别成队友"的根因。只记录/绘制，不影响识别决策。
+                    if (isOtherWorldGuest)
+                    {
+                        TryDrawAndSaveSingleAvatarDebug(imageRegion, elementAssets, multiGameStatus, logger, arrowRect, oneIndexRect, oneSideIconRect);
+                    }
+
+                    return ([oneIndexRect], [oneSideIconRect]);
                 }
                 else
                 {
@@ -303,6 +312,67 @@ public class PartyAvatarSideIndexHelper
                 // 没有出战角色标识的情况下，直接抛出错误走写死逻辑
                 throw new Exception("找不到出战角色编号块与当前出战角色标识！");
             }
+        }
+    }
+
+    /// <summary>
+    /// 【临时诊断】别人世界单角色反推（路径2）可视化：把箭头候选 / 选中箭头 / 反推编号块 / 最终头像裁剪区
+    /// 画到遮罩窗口（参考 DrawOnWindow）并存一张标注全图到 log\multi_avatar_debug，配合结构化 LOG 定位
+    /// "识别成队友"的根因。只记录/绘制，不影响识别决策。定位完成后整体移除。
+    /// 颜色约定（BGR，存图）：
+    ///   红=所有箭头候选；黄=选中的最底部箭头；青=反推出的编号块；绿=最终送 YOLO 分类的头像裁剪区。
+    /// </summary>
+    private static void TryDrawAndSaveSingleAvatarDebug(
+        ImageRegion imageRegion, ElementAssets elementAssets, MultiGameStatus multiGameStatus, ILogger logger,
+        Rect arrowRect, Rect oneIndexRect, Rect oneSideIconRect)
+    {
+        try
+        {
+            var s = TaskContext.Instance().SystemInfo.AssetScale;
+            var candidates = imageRegion.FindMulti(elementAssets.CurrentAvatarThreshold);
+
+            // 结构化 LOG：箭头候选数量 + 每个候选坐标 + 选中箭头 + 反推编号块 + 最终头像区
+            logger.LogDebug(
+                "[联机][选区诊断] playerCount={PC} isHost={Host} assetScale={Scale} 箭头候选数={N}",
+                multiGameStatus.PlayerCount, multiGameStatus.IsHost, s, candidates.Count);
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                var c = candidates[i];
+                logger.LogDebug("[联机][选区诊断] 箭头候选[{I}] X={X} Y={Y} W={W} H={H}", i, c.X, c.Y, c.Width, c.Height);
+            }
+            logger.LogDebug("[联机][选区诊断] 选中箭头 X={X} Y={Y} W={W} H={H}", arrowRect.X, arrowRect.Y, arrowRect.Width, arrowRect.Height);
+            logger.LogDebug("[联机][选区诊断] 反推编号块 X={X} Y={Y} W={W} H={H}", oneIndexRect.X, oneIndexRect.Y, oneIndexRect.Width, oneIndexRect.Height);
+            logger.LogDebug("[联机][选区诊断] 最终头像裁剪区 X={X} Y={Y} W={W} H={H}", oneSideIconRect.X, oneSideIconRect.Y, oneSideIconRect.Width, oneSideIconRect.Height);
+
+            // 1) 叠加到遮罩窗口（实时可见）
+            foreach (var c in candidates)
+            {
+                imageRegion.DrawRect(c.ToRect(), "DbgArrowCand_" + c.Y, new System.Drawing.Pen(System.Drawing.Color.Red, 2));
+            }
+            imageRegion.DrawRect(arrowRect, "DbgArrowPicked", new System.Drawing.Pen(System.Drawing.Color.Yellow, 2));
+            imageRegion.DrawRect(oneIndexRect, "DbgIndexRect", new System.Drawing.Pen(System.Drawing.Color.Cyan, 2));
+            imageRegion.DrawRect(oneSideIconRect, "DbgSideIcon", new System.Drawing.Pen(System.Drawing.Color.Lime, 2));
+
+            // 2) 存一张标注全图（落盘证据）
+            using var vis = imageRegion.SrcMat.Clone();
+            foreach (var c in candidates)
+            {
+                Cv2.Rectangle(vis, c.ToRect(), new Scalar(0, 0, 255), 2); // 红=候选
+            }
+            Cv2.Rectangle(vis, arrowRect, new Scalar(0, 255, 255), 2);      // 黄=选中箭头
+            Cv2.Rectangle(vis, oneIndexRect, new Scalar(255, 255, 0), 2);   // 青=反推编号块
+            Cv2.Rectangle(vis, oneSideIconRect, new Scalar(0, 255, 0), 2);  // 绿=最终头像裁剪区
+
+            var dir = Core.Config.Global.Absolute(@"log\multi_avatar_debug");
+            System.IO.Directory.CreateDirectory(dir);
+            var path = System.IO.Path.Combine(dir, $"single_avatar_{DateTime.Now:yyyyMMdd_HHmmss_fff}.png");
+            vis.SaveImage(path);
+            logger.LogDebug("[联机][选区诊断] 已保存标注图: {Path}", path);
+        }
+        catch (Exception ex)
+        {
+            // 诊断代码不得影响主流程：吞掉异常但记录，便于发现诊断本身的问题
+            logger.LogWarning("[联机][选区诊断] 诊断绘制/存图失败（不影响识别）：{Msg}", ex.Message);
         }
     }
 
