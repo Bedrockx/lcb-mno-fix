@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
 using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.Models;
+using BetterGenshinImpact.GameTask.Common.Job;
 using Microsoft.Extensions.Logging;
 using static BetterGenshinImpact.GameTask.Common.TaskControl;
 
@@ -351,17 +352,29 @@ public class WorldStateMonitor : IAsyncDisposable
         {
             // IsInMultiGame=false + SignalR 正常 → 可能是瞬态干扰，也可能是被踢出
             _connectedButNotInGame++;
-            _isInRecoveryWindow = false; // 不进入恢复窗口
+            _isInRecoveryWindow = false; // 不进入恢复窗口（OQ-4：保持不变）
 
-            if (_connectedButNotInGame >= ConnectedNotInGameThreshold)
+            // 回主页自愈：计数命中 {3,5,7} 时先尝试回到主界面（决策器纯函数，design §Components 1）。
+            // 第 3/5 次给一次自愈机会；第 7 次为退出前最后一次自愈。
+            if (ReturnMainUiRecoveryDecisions.ShouldAttemptReturnMainUi(_connectedButNotInGame))
             {
-                // 连续 4 次 → 判定为被踢出（需求 1.5）
+                _logger.LogWarning("[WorldStateMonitor] IsInMultiGame=false 但 SignalR 正常（{Count}/{Threshold}），尝试回主页自愈",
+                    _connectedButNotInGame, ConnectedNotInGameThreshold);
+                // 取消异常向上传播（让 MonitorLoopAsync 结束）；其他异常仅 LogWarning 后继续。
+                await TryReturnMainUiForRecoveryAsync();
+            }
+
+            if (ReturnMainUiRecoveryDecisions.ShouldConfirmExit(_connectedButNotInGame))
+            {
+                // 连续达到阈值 → 判定为被踢出（需求 1.3 / 1.5）。
+                // count==7 时此处紧跟在上面的回主页之后执行：先回主页后退出。
                 _logger.LogError("[WorldStateMonitor] 连续 {Count} 次 IsInMultiGame=false 且 SignalR 正常，判定为被踢出",
                     _connectedButNotInGame);
                 await ConfirmExitAsync("被踢出联机世界（SignalR正常但截图连续失败）");
             }
-            else
+            else if (!ReturnMainUiRecoveryDecisions.ShouldAttemptReturnMainUi(_connectedButNotInGame))
             {
+                // count ∈ {1,2,4,6}：既不回主页也不退出，仅记录瞬态干扰（需求 1.4）
                 _logger.LogDebug("[WorldStateMonitor] IsInMultiGame=false 但 SignalR 正常（{Count}/{Threshold}），判定为瞬态干扰",
                     _connectedButNotInGame, ConnectedNotInGameThreshold);
             }
@@ -412,6 +425,34 @@ public class WorldStateMonitor : IAsyncDisposable
         {
             _logger.LogError("[WorldStateMonitor] 恢复窗口超时（{Elapsed:F0}s），确认退出", elapsed);
             await ConfirmExitAsync("恢复窗口超时（截图失败+SignalR断开持续30秒）");
+        }
+    }
+
+    /// <summary>
+    /// 回主页自愈尝试：调用 ReturnMainUiTask 尝试回到主界面（需求 3）。
+    /// - 传入 _cts.Token 作为取消令牌（需求 3.1）。
+    /// - OperationCanceledException：监测被取消，向上传播至 MonitorLoopAsync 的
+    ///   catch(OperationCanceledException) 结束循环——禁止吞掉（需求 3.3）。
+    /// - 其他 Exception：回主页尽力而为，失败不应让监测崩溃，记录 LogWarning 后继续，
+    ///   由调用点决定是否继续退出判定（需求 3.2 / 3.4）。
+    /// </summary>
+    private async Task TryReturnMainUiForRecoveryAsync()
+    {
+        try
+        {
+            await new ReturnMainUiTask().Start(_cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // 监测取消信号：不吞，向上传播让 MonitorLoopAsync 正常结束（需求 3.3）。
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 回主页失败（非取消）：尽力而为，记录后继续；不改计数（OQ-5），
+            // 计数清零交由后续轮次 IsInMultiGame==true（需求 4.1）。不静默吞异常（需求 3.4）。
+            _logger.LogWarning(ex, "[WorldStateMonitor] 回主页自愈尝试失败（{Count}/{Threshold}），继续后续判定",
+                _connectedButNotInGame, ConnectedNotInGameThreshold);
         }
     }
 
