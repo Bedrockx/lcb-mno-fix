@@ -129,6 +129,9 @@
 		<None Update="GameTask\AutoFight\Assets\combat_avatar.json">
 		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 		</None>
+		<None Update="GameTask\OcrSwitchWeapon\Assets\weaponName.json">
+		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+		</None>
 		<None Update="GameTask\AutoFishing\Assets\1920x1080\**">
 		  <CopyToOutputDirectory>Always</CopyToOutputDirectory>
 		</None>

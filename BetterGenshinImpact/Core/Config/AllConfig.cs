@@ -27,6 +27,7 @@ using BetterGenshinImpact.GameTask.AutoEat;
 using BetterGenshinImpact.GameTask.AutoLeyLineOutcrop;
 using BetterGenshinImpact.GameTask.AutoCook;
 using BetterGenshinImpact.GameTask.AutoFriendship;
+using BetterGenshinImpact.GameTask.OcrSwitchWeapon;
 using BetterGenshinImpact.GameTask.MapMask;
 using BetterGenshinImpact.GameTask.SkillCd;
 using BetterGenshinImpact.GameTask.UseRedeemCode;
@@ -238,6 +239,11 @@ public partial class AllConfig : ObservableObject
     /// 好感任务自动完成配置
     /// </summary>
     public AutoFriendshipConfig AutoFriendshipConfig { get; set; } = new();
+
+    /// <summary>
+    /// OCR切换武器配置
+    /// </summary>
+    public OcrSwitchWeaponConfig OcrSwitchWeaponConfig { get; set; } = new();
     
     /// <summary>
     ///   地图遮罩
@@ -351,6 +357,7 @@ public partial class AllConfig : ObservableObject
         AutoLeyLineOutcropConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoCookConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoFriendshipConfig.PropertyChanged += OnAnyPropertyChanged;
+        OcrSwitchWeaponConfig.PropertyChanged += OnAnyPropertyChanged;
         MapMaskConfig.PropertyChanged += OnAnyPropertyChanged;
         AutoMusicGameConfig.PropertyChanged += OnAnyPropertyChanged;
         TpConfig.PropertyChanged += OnAnyPropertyChanged;
