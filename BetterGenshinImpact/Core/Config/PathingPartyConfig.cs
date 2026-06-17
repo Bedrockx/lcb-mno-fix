@@ -191,4 +191,37 @@ public partial class PathingPartyConfig : ObservableObject
             RedBloodSwitchOnly = pathingConditionConfig.RedBloodSwitchOnly,
         };
     }
+
+    /// <summary>
+    /// 纯函数：给定任务入口类型，判定经由该入口构造的 PathExecutor 是否应豁免"配置组地图追踪切队"。
+    /// 地图追踪任务（Pathing）使用 PartyName 切队是正当用途，不豁免；
+    /// JS 脚本任务与各独立任务（SoloTask）有自己的切队逻辑，应豁免。
+    /// 无副作用、无外部依赖，便于属性测试。
+    /// </summary>
+    public static bool ShouldSkipPartySwitch(SoloTaskEntryKind entry)
+    {
+        return entry != SoloTaskEntryKind.Pathing;
+    }
+
+    /// <summary>
+    /// 浅拷贝当前配置并将 SkipPartySwitch 置为 true，用于 JS / SoloTask 入口，
+    /// 避免原地 mutate 被同一配置组多个分支共享的 PathingConfig 实例（防止污染后续 Pathing 任务）。
+    /// 除 SkipPartySwitch 外所有字段与原实例保持一致（引用类型字段沿用同一引用，行为不变）。
+    /// </summary>
+    public PathingPartyConfig CloneForSoloTask()
+    {
+        var clone = (PathingPartyConfig)MemberwiseClone();
+        clone.SkipPartySwitch = true;
+        return clone;
+    }
+}
+
+/// <summary>
+/// 任务入口类型，用于判定是否应豁免配置组地图追踪切队。
+/// </summary>
+public enum SoloTaskEntryKind
+{
+    Pathing,            // 地图追踪任务：正当切队，不豁免
+    Javascript,         // JS 脚本任务：豁免
+    SoloTask            // 独立任务（锄地/好感等）：豁免
 }

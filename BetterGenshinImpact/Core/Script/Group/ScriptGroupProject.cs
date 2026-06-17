@@ -229,7 +229,9 @@ public partial class ScriptGroupProject : ObservableObject
             // 清理配置中的无效值
             CleanInvalidSettingsValues();
 
-            var pathingPartyConfig = GroupInfo?.Config.PathingConfig;
+            // JS 脚本任务豁免"配置组地图追踪切队"：拷贝后置 SkipPartySwitch=true，
+            // 不原地 mutate 共享的 GroupInfo.Config.PathingConfig（防止污染同组后续 Pathing 任务）。
+            var pathingPartyConfig = GroupInfo?.Config.PathingConfig?.CloneForSoloTask();
             await Project.ExecuteAsync(JsScriptSettingsObject, pathingPartyConfig);
         }
         else if (Type == "KeyMouse")
@@ -325,7 +327,10 @@ public partial class ScriptGroupProject : ObservableObject
         }
         else if (Type == "SoloTask")
         {
-            var soloTask = SoloTaskRegistry.CreateTask(Name, GroupInfo?.Config.PathingConfig, SoloTaskSettingsObject, GroupInfo?.Name);
+            // 独立任务（锄地/好感等）有自己的切队逻辑，豁免"配置组地图追踪切队"：
+            // 拷贝后置 SkipPartySwitch=true，不原地 mutate 共享的 PathingConfig 实例。
+            var soloTaskPartyConfig = GroupInfo?.Config.PathingConfig?.CloneForSoloTask();
+            var soloTask = SoloTaskRegistry.CreateTask(Name, soloTaskPartyConfig, SoloTaskSettingsObject, GroupInfo?.Name);
             if (soloTask != null)
             {
                 await soloTask.Start(CancellationContext.Instance.Cts.Token);
