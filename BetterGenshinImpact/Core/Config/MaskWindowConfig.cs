@@ -121,6 +121,62 @@ public partial class MaskWindowConfig : ObservableObject
     [ObservableProperty]
     private double _textOpacity = 1.0;
 
+    /// <summary>
+    /// 遮罩日志字体缩放率 (0.5-3.0)，1.0 = 基准字号 12。
+    /// 变化时同步通知派生属性 LogFontSize，使绑定的遮罩日志框实时重算字号。
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(LogFontSize))]
+    private double _logFontScale = 1.0;
+
+    /// <summary>遮罩日志缩放率允许的最小值。</summary>
+    public const double MinLogFontScale = 0.5;
+
+    /// <summary>遮罩日志缩放率允许的最大值。</summary>
+    public const double MaxLogFontScale = 3.0;
+
+    /// <summary>遮罩日志基准字号（缩放率 1.0 时的字号），保持历史硬编码值 12。</summary>
+    public const double BaseLogFontSize = 12.0;
+
+    /// <summary>
+    /// 遮罩日志实际渲染字号（只读计算属性），= BaseLogFontSize × clamp(LogFontScale)。
+    /// XAML 中 LogTextBox.FontSize 绑定此属性。
+    /// </summary>
+    public double LogFontSize => ComputeLogFontSize(LogFontScale);
+
+    /// <summary>
+    /// 纯函数：把任意缩放率夹取到 [MinLogFontScale, MaxLogFontScale]。无副作用，供 PBT。
+    /// NaN 视为非法，回落到 1.0。
+    /// </summary>
+    public static double ComputeClampedScale(double scale)
+    {
+        if (double.IsNaN(scale))
+        {
+            return 1.0;
+        }
+        return Math.Clamp(scale, MinLogFontScale, MaxLogFontScale);
+    }
+
+    /// <summary>
+    /// 纯函数：把缩放率换算为实际字号 = BaseLogFontSize × clamp(scale)。无副作用，供 PBT。
+    /// </summary>
+    public static double ComputeLogFontSize(double scale)
+    {
+        return BaseLogFontSize * ComputeClampedScale(scale);
+    }
+
+    /// <summary>
+    /// 缩放率变更钩子：仅当传入值越界时回写夹取后的值（防 setter 递归）。
+    /// </summary>
+    partial void OnLogFontScaleChanged(double value)
+    {
+        var clamped = ComputeClampedScale(value);
+        if (Math.Abs(clamped - value) > 1e-9)
+        {
+            LogFontScale = clamped;
+        }
+    }
+
     [ObservableProperty]
     private bool _overlayLayoutEditEnabled = false;
 

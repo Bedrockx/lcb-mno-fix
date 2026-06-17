@@ -277,7 +277,7 @@
                                  Background="Transparent"
                                  BorderThickness="0"
                                  FontFamily="Cascadia Mono, Consolas, Courier New, monospace, /Resources/Fonts/MiSans-Regular.ttf#MiSans"
-                                 FontSize="12"
+                                 FontSize="{Binding Config.MaskWindowConfig.LogFontSize}"
                                  IsHitTestVisible="False"
                                  VerticalScrollBarVisibility="Hidden"
                                  Opacity="{Binding Config.MaskWindowConfig.TextOpacity}">
