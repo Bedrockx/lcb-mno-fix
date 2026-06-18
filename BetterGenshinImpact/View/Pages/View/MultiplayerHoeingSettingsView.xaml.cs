@@ -148,38 +148,75 @@ public partial class MultiplayerHoeingSettingsView : UserControl
     // 构建固定2行 UI：每行4列（角色名只读 / 武器名只读 / 配置按钮 / 启用复选框）
     private void BuildPreSwitchWeaponRows()
     {
-        var panel = new System.Windows.Controls.StackPanel();
         _preSwitchRowControls.Clear();
+        // host 现为 Grid（XAML 已改）。清空并按行数建 RowDefinition。
+        // Grid 会强制把子元素水平拉伸到自身完整宽度（StackPanel 不会），从而让行内 Star 列把「配置/启用」推到最右。
+        PreSwitchWeaponRowsHost.Children.Clear();
+        PreSwitchWeaponRowsHost.RowDefinitions.Clear();
         for (int i = 0; i < BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PreSwitchWeaponDecisions.RowCount; i++)
         {
             int idx = i;
             var row = _preSwitchRows[idx];
-            var grid = new System.Windows.Controls.Grid { Margin = new Thickness(0, 0, 0, 6) };
+            PreSwitchWeaponRowsHost.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            var grid = new System.Windows.Controls.Grid
+            {
+                Margin = new Thickness(0, 0, 0, 6)
+            };
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 角色
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // 武器
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                       // 配置按钮
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });                       // 启用复选框
 
             bool configured = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PreSwitchWeaponDecisions.IsRowConfigured(row);
-            var charCell = new TextBlock { Text = configured ? row.Character : "", VerticalAlignment = VerticalAlignment.Center };
-            var weaponCell = new TextBlock { Text = configured ? row.Weapon : "", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
-            var cfgBtn = new Button { Content = $"配置第{idx + 1}行", Margin = new Thickness(8, 0, 0, 0) };
-            var enableCheck = new System.Windows.Controls.CheckBox { IsChecked = row.Enabled, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
+            var charCell = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+            var weaponCell = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
+            ApplyCellDisplay(charCell, configured ? row.Character : null);
+            ApplyCellDisplay(weaponCell, configured ? row.Weapon : null);
+            // 各自包进浅色底色块；列1 用左边距维持与列0 的间隔
+            var charBackplate = WrapInBackplate(charCell, new Thickness(0, 0, 0, 0));
+            var weaponBackplate = WrapInBackplate(weaponCell, new Thickness(8, 0, 0, 0));
+            var cfgBtn = new Button { Content = "配置", Margin = new Thickness(8, 0, 0, 0) };
+            var enableCheck = new System.Windows.Controls.CheckBox { Content = "启用", IsChecked = row.Enabled, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 0, 0) };
 
-            System.Windows.Controls.Grid.SetColumn(charCell, 0);
-            System.Windows.Controls.Grid.SetColumn(weaponCell, 1);
+            System.Windows.Controls.Grid.SetColumn(charBackplate, 0);
+            System.Windows.Controls.Grid.SetColumn(weaponBackplate, 1);
             System.Windows.Controls.Grid.SetColumn(cfgBtn, 2);
             System.Windows.Controls.Grid.SetColumn(enableCheck, 3);
-            grid.Children.Add(charCell);
-            grid.Children.Add(weaponCell);
+            grid.Children.Add(charBackplate);
+            grid.Children.Add(weaponBackplate);
             grid.Children.Add(cfgBtn);
             grid.Children.Add(enableCheck);
 
             cfgBtn.Click += async (_, _) => await OnConfigurePreSwitchRow(idx);
-            panel.Children.Add(grid);
+            System.Windows.Controls.Grid.SetRow(grid, idx);
+            PreSwitchWeaponRowsHost.Children.Add(grid);
+            // 关键：登记的仍是 TextBlock 本体（charCell/weaponCell），不是 Border
             _preSwitchRowControls.Add((charCell, weaponCell, enableCheck));
         }
-        PreSwitchWeaponRowsHost.Content = panel;
+    }
+
+    // 统一角色/武器单元的「值 + 占位 + 前景色」呈现，供初次构建与配置后刷新共用
+    private static void ApplyCellDisplay(TextBlock cell, string? value)
+    {
+        bool hasValue = !string.IsNullOrWhiteSpace(value);
+        cell.Text = hasValue ? value! : "未配置";
+        cell.SetResourceReference(
+            TextBlock.ForegroundProperty,
+            hasValue ? "TextFillColorPrimaryBrush" : "TextFillColorTertiaryBrush");
+    }
+
+    // 将文字单元包进浅色底色块 Border（Cell_Backplate）
+    private static Border WrapInBackplate(TextBlock cell, Thickness margin)
+    {
+        var border = new Border
+        {
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(8, 4, 8, 4),
+            Margin = margin,
+            Child = cell,
+        };
+        border.SetResourceReference(Border.BackgroundProperty, "ControlFillColorSecondaryBrush");
+        return border;
     }
 
     // 配置某行：复用「OCR切换武器」设置项（GetSettingDefinitions）动态构建 6 参数子弹窗
@@ -240,10 +277,10 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             // 读回 6 个值写入该行（保持 Enabled 不变）
             ReadPreSwitchDialogInto(row, controls);
 
-            // 刷新该行只读展示
+            // 刷新该行只读展示（与初次构建共用 ApplyCellDisplay：值/占位「未配置」+ 前景色一致）
             bool configured = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PreSwitchWeaponDecisions.IsRowConfigured(row);
-            _preSwitchRowControls[idx].CharCell.Text = configured ? row.Character : "";
-            _preSwitchRowControls[idx].WeaponCell.Text = configured ? row.Weapon : "";
+            ApplyCellDisplay(_preSwitchRowControls[idx].CharCell, configured ? row.Character : null);
+            ApplyCellDisplay(_preSwitchRowControls[idx].WeaponCell, configured ? row.Weapon : null);
         }
         catch (Exception ex)
         {

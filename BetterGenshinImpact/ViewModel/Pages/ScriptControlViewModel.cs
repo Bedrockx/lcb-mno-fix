@@ -2070,17 +2070,19 @@ public partial class ScriptControlViewModel : ViewModel
         var vm = new MultiplayerHoeingSettingsViewModel(settings, globalCfg, groupOptions, groupDefault);
         var view = new MultiplayerHoeingSettingsView(item, vm);
 
+        var scroll = new ScrollViewer
+        {
+            Content = view,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            MaxHeight = 600,
+        };
+
         var dialog = new Wpf.Ui.Controls.MessageBox
         {
             Title = "修改独立任务配置 - 锄地一条龙",
             Width = 520,
-            Content = new ScrollViewer
-            {
-                Content = view,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                MaxHeight = 600,
-            },
+            Content = scroll,
             PrimaryButtonText = "保存",
             CloseButtonText = "取消",
             Owner = Application.Current.MainWindow,

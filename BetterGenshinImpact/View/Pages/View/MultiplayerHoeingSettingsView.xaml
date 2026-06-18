@@ -117,11 +117,14 @@
                         <ui:TextBlock Margin="0,0,0,2"
                                       FontTypography="BodyStrong"
                                       Text="开锄前换武器（最多2个角色）" />
-                        <ui:TextBlock Margin="0,0,0,6"
+                        <ui:TextBlock x:Name="PreSwitchWeaponDescText"
+                                      Margin="0,0,0,6"
                                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="首轮开锄前，切队切角色后依次为下列已启用行换武器，完成后切回起始角色"
+                                      Text="首轮开锄前，切队切角色后依次为下列已启用行换武器"
                                       TextWrapping="Wrap" />
-                        <ContentControl x:Name="PreSwitchWeaponRowsHost" />
+                        <Grid x:Name="PreSwitchWeaponRowsHost"
+                              HorizontalAlignment="Stretch"
+                              Width="{Binding (FrameworkElement.ActualWidth), RelativeSource={RelativeSource AncestorType=ScrollContentPresenter}}" />
                     </StackPanel>
                 </StackPanel>
             </ui:CardExpander>
