@@ -542,6 +542,15 @@ public partial class AutoHoeingConfig : ObservableObject
     [ObservableProperty]
     private int _multiWorldCount = 4;
 
+    /// <summary>
+    /// 多世界重开续跑：房主重开时把已完成房主 UID 上报服务端裁剪权威序列，全组跳过已完成世界。
+    /// 默认 true。房主侧配置（不进 RoomConfig、不下发成员）；效果通过裁剪序列全局生效。
+    /// 关闭 → 上报空集合 → 全量序列 → 逐轮试探（现状）。单机零感知。
+    /// hoeing-multiworld-host-restart-resume-round Req 5。
+    /// </summary>
+    [ObservableProperty]
+    private bool _multiWorldResumeEnabled = true;
+
     // === 反复复苏双层兜底（multi-revival-rapid-recurrence-fallback spec, OQ-1 / OQ-2 默认值）===
 
     /// <summary>

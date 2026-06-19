@@ -62,6 +62,8 @@ public class AutoHoeingTask : ISoloTask
     // 服务
     private readonly MonsterInfoRepository _monsterRepo = new();
     private readonly CdManager _cdManager = new();
+    private readonly MultiWorldProgressStore _multiWorldProgressStore = new();
+    private bool _isInitialHost; // round 0 落定：本机是否为本场发起房主（hoeing-multiworld-host-restart-resume-round）
     private readonly RouteSelector _routeSelector = new();
     private readonly TimeRestrictionChecker _timeChecker = new();
     private readonly TemplatePickupService _pickupService = new();
@@ -1254,7 +1256,9 @@ public class AutoHoeingTask : ISoloTask
             // 成员路径不调（成员无房主权限，调了服务端也会拒）
             if (client.IsHost)
             {
-                await client.MarkRoomStartedAsync();
+                // 重开续跑：算出已完成房主 UID 上报，服务端裁剪权威序列，全组跳过已完成世界。
+                var completed = ComputeCompletedHostUidsForReport(client);
+                await client.MarkRoomStartedAsync(completed);
             }
         }
         catch (Exception ex)
@@ -1634,6 +1638,11 @@ public class AutoHoeingTask : ISoloTask
         _logger.LogInformation("[多世界] 共 {Total} 轮，轮换顺序: {Players}",
             totalRounds, string.Join(" → ", playerOrder.Select(p => p.PlayerName)));
 
+        // 重开续跑：加载本地进度 + 计算当前轮换序列签名（hoeing-multiworld-host-restart-resume-round）
+        _multiWorldProgressStore.Load(_dataDir, accountName);
+        var resumeOrderSignature = MultiWorldResumeDecisions.ComputeOrderSignature(
+            playerOrder.Select(p => p.PlayerUid));
+
         bool lastRoundAmIHost = false;
         for (int round = 0; round < totalRounds; round++)
         {
@@ -1660,6 +1669,7 @@ public class AutoHoeingTask : ISoloTask
                 _logger.LogWarning("[多世界] 玩家 UID 和名称均未填写，身份判断可能不准确，建议填写 UID");
             }
             lastRoundAmIHost = amIHost;
+            if (round == 0) _isInitialHost = amIHost; // 本场发起房主身份（续跑进度只由发起房主维护）
 
             _logger.LogInformation("[多世界] 第 {Round}/{Total} 轮，房主: {Host}，我是{Role}",
                 round + 1, totalRounds, roundHostPlayer.PlayerName, amIHost ? "房主" : "成员");
@@ -1727,6 +1737,11 @@ public class AutoHoeingTask : ISoloTask
             };
             await RunSingleWorldCoreAsync(accountName, groupTags, roundContext);
 
+            // 重开续跑：本轮锄地核心已完成，发起房主记录该轮房主 UID 并落盘（绝不预写）。
+            // 放在 if (round < totalRounds-1) 之前，确保最后一轮也被标记。
+            if (_isInitialHost && roundHostPlayer.PlayerUid is { Length: > 0 } completedHostUid)
+                _multiWorldProgressStore.MarkHostCompleted(completedHostUid, resumeOrderSignature);
+
             // 本轮结束：全员同步后离开世界（最后一轮不需要离开）
             if (round < totalRounds - 1)
             {
@@ -1754,10 +1769,43 @@ public class AutoHoeingTask : ISoloTask
 
         _logger.LogInformation("[多世界] 全部 {Total} 轮锄地完成", totalRounds);
 
+        // 重开续跑：整场全部完成，清空本地进度，避免下一整场首启被旧进度污染误跳。
+        if (_isInitialHost) _multiWorldProgressStore.Clear();
+
         // 任务结束：所有人退回自己的世界
         _logger.LogInformation("[多世界] 任务结束，退回自己的世界");
         try { await LeaveCurrentWorldAsync(lastRoundAmIHost, client); }
         catch (Exception ex) { _logger.LogWarning(ex, "[多世界] 任务结束退出世界失败，忽略"); }
+    }
+
+    /// <summary>
+    /// 房主重开上报前算出 Completed_Host_Uids：读本地进度 + 开关 + 签名，委托纯函数决策。
+    /// 开关关 / 数据不可信 / 无进度 → 空集合（全量序列，回退现状）。
+    /// hoeing-multiworld-host-restart-resume-round Req 1.4 / 2.4 / 5.1。
+    /// </summary>
+    private IReadOnlySet<string> ComputeCompletedHostUidsForReport(CoordinatorClient client)
+    {
+        try
+        {
+            // 上报点 A 早于 RunMultiWorldAsync，playerOrder 尚未构造，用 CurrentPlayerList 快照算签名。
+            // ComputeOrderSignature 对集合无序签名，只要全员集合一致即与写入时签名一致。
+            var hostUids = client.CurrentPlayerList.Select(p => p.PlayerUid);
+            var signature = MultiWorldResumeDecisions.ComputeOrderSignature(hostUids);
+            var completed = MultiWorldResumeDecisions.ComputeCompletedHostUids(
+                _multiWorldProgressStore.Current, _config.MultiWorldResumeEnabled, signature);
+            _logger.LogInformation(
+                "[多世界续跑] 上报已完成房主：{N} 个 [{Uids}]（开关={On}，签名匹配={Match}）",
+                completed.Count, string.Join(",", completed),
+                _config.MultiWorldResumeEnabled,
+                _multiWorldProgressStore.Current.OrderSignature == signature);
+            return completed;
+        }
+        catch (Exception ex)
+        {
+            // 计算失败按空集合处理：上报空 → 全量序列（安全降级，Req 2.4）。不静默吞。
+            _logger.LogWarning(ex, "[多世界续跑] 计算 Completed_Host_Uids 失败，降级上报空集合");
+            return new HashSet<string>();
+        }
     }
 
     /// <summary>SetupNextRoundAsync 的结果：决定多世界主循环后续走向。</summary>
@@ -2115,6 +2163,8 @@ public class AutoHoeingTask : ISoloTask
             // 成员路径不调（amIHost==client.IsHost；成员无房主权限）
             if (amIHost)
             {
+                // 重开续跑边界：第 N 轮新房主重建房间的序列无人再查询（死数据），不裁剪。
+                // 全组跳过的唯一入口是首轮 InitializeMultiplayerAsync 的上报点 A。保持无参（全量序列）。
                 await client.MarkRoomStartedAsync();
             }
 

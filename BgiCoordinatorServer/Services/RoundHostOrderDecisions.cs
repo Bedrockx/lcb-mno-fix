@@ -14,13 +14,16 @@ namespace BgiCoordinatorServer.Services;
 public static class RoundHostOrderDecisions
 {
     /// <summary>
-    /// 生成轮换序列（UID 列表，第 i 项 = 第 i 轮房主 UID）：
-    ///   - 首任房主 UID 在第 0 位；
-    ///   - 其余玩家按 PlayerUid 序数升序；
-    ///   - 过滤空 UID 玩家（无法 UID 寻址）；UID 去重。
-    /// hostUid 为空或不在列表 → 仅按 UID 升序（退化，不置顶）。
+    /// 生成轮换序列（UID 列表）。excludeUids 非空时排除其中所有 UID（重开续跑裁剪）。
+    ///   - excludeUids 为 null/空 → 旧行为：首项=hostUid，其余 UID 升序。
+    ///   - excludeUids 非空 → 先按旧规则生成完整序列，再过滤掉 excludeUids 中的 UID；
+    ///     若 hostUid 也在 excludeUids 中，则它不会置顶（被一并过滤），
+    ///     裁剪后首项 = 第一个未被排除的 UID（其余仍按升序）。
+    ///   - 若全部 UID 都被排除 → 返回空列表（整场已完成）。
+    /// hoeing-multiworld-host-restart-resume-round Req 1.2 / 2.3。
     /// </summary>
-    public static List<string> Build(IEnumerable<PlayerInfo> players, string hostUid)
+    public static List<string> Build(IEnumerable<PlayerInfo> players, string hostUid,
+        IReadOnlySet<string>? excludeUids = null)
     {
         var uids = (players ?? Enumerable.Empty<PlayerInfo>())
             .Where(p => p != null && !string.IsNullOrEmpty(p.PlayerUid))
@@ -37,6 +40,11 @@ public static class RoundHostOrderDecisions
         if (!string.IsNullOrEmpty(hostUid) && uids.Contains(hostUid))
             result.Add(hostUid);
         result.AddRange(rest);
+
+        // 重开续跑裁剪：排除已完成房主 UID。默认 null/空 → 不裁剪（旧行为逐字节不变）。
+        if (excludeUids != null && excludeUids.Count > 0)
+            result = result.Where(u => !excludeUids.Contains(u)).ToList();
+
         return result;
     }
 }

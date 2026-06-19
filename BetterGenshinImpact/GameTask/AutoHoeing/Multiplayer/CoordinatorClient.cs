@@ -901,19 +901,29 @@ public class CoordinatorClient : IAsyncDisposable
     /// 服务端从此 JoinRoom 拒绝非重连新玩家、GetOnlineRooms 也不再返回此房间。
     /// 旧服务端无此 Hub 方法 → 抛 HubException 被静默吞掉，不影响主任务（bugfix §3.9）。
     /// </summary>
-    public async Task MarkRoomStartedAsync()
+    public async Task MarkRoomStartedAsync(IReadOnlySet<string>? completedHostUids = null)
     {
         if (_connection == null || !IsConnected) return;
         try
         {
-            await _connection.InvokeAsync("MarkRoomStarted");
-            _logger.LogInformation("[联机] MarkRoomStartedAsync 完成（房间已锁定）");
+            if (completedHostUids != null && completedHostUids.Count > 0)
+            {
+                await _connection.InvokeAsync("MarkRoomStartedWithProgress", completedHostUids.ToList());
+                _logger.LogInformation("[联机] MarkRoomStartedAsync 完成（上报 {N} 已完成房主，房间已锁定）",
+                    completedHostUids.Count);
+            }
+            else
+            {
+                await _connection.InvokeAsync("MarkRoomStarted");
+                _logger.LogInformation("[联机] MarkRoomStartedAsync 完成（房间已锁定）");
+            }
         }
         catch (Exception ex)
         {
-            // 旧服务端不支持此方法 → HubException("Method 'MarkRoomStarted' does not exist")
-            // 与 ReportHostReadyAsync / DeclareKazuhaCapabilityAsync 静默兜底模式一致
-            _logger.LogWarning(ex, "MarkRoomStartedAsync 失败（静默忽略，旧服务端兼容）");
+            // 旧服务端不支持 MarkRoomStartedWithProgress（或 MarkRoomStarted）→ HubException
+            // 静默降级：等价上报空集合 → 服务端生成全量序列（现状），不影响主任务。
+            // 与 ReportHostReadyAsync / DeclareKazuhaCapabilityAsync 静默兜底模式一致。
+            _logger.LogWarning(ex, "MarkRoomStartedAsync 失败（静默忽略，旧服务端兼容；降级为全量序列）");
         }
     }
 

@@ -947,6 +947,8 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             "fightTimeoutSeconds",
             // === 落后追赶调试参数（单机模式清除，hoeing-multiplayer-lagging-member-catchup）===
             "enableLaggingCatchUp", "lagSegmentThreshold",
+            // === 重开续跑开关（单机模式清除，hoeing-multiworld-host-restart-resume-round）===
+            "multiWorldResumeEnabled",
             // === 快速同步点抢报（单机模式清除）===
             "fastSyncPointEnabled", "fastSyncPathingDistance", "fastSyncTeleportLoadingDelayMs",
             "sharedFightEndQuorumEnabled", "sharedFightEndQuorumRatio",

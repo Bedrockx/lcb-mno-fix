@@ -531,6 +531,20 @@
                                       TextWrapping="Wrap" />
                     </StackPanel>
                 </ui:Card>
+                <!--  子卡片：重开续跑（房主侧，hoeing-multiworld-host-restart-resume-round）  -->
+                <ui:Card Margin="0,8,0,0" Padding="12">
+                    <StackPanel>
+                        <ui:TextBlock Margin="0,0,0,8"
+                                      FontTypography="BodyStrong"
+                                      Text="重开续跑（跳过已完成世界）" />
+                        <ui:ToggleSwitch Margin="0,0,0,4"
+                                         Content="启用重开续跑"
+                                         IsChecked="{Binding MultiWorldResumeEnabled, Mode=TwoWay}" />
+                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="房主中途停止后重新开始时，全组直接跳到第一个待执行的轮次，跳过已锄完的房主世界（默认开启）。关闭则回退为从第 1 轮逐个世界试探的旧行为。仅房主可见，效果作用于全组。"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:Card>
             </StackPanel>
         </ui:CardExpander>
     </StackPanel>

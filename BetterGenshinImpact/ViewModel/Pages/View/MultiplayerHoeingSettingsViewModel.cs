@@ -85,6 +85,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     [ObservableProperty] private bool _enableLaggingCatchUp;
     [ObservableProperty] private string _lagSegmentThreshold = "";
 
+    // ===== 调试（hoeing-multiworld-host-restart-resume-round）：重开续跑，房主侧 =====
+    [ObservableProperty] private bool _multiWorldResumeEnabled;
+
     // ===== D 成员区 =====
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TargetHostEnabled))]
@@ -205,6 +208,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         _enableLaggingCatchUp = GetBool("enableLaggingCatchUp", g.EnableLaggingCatchUp);
         _lagSegmentThreshold = GetInt("lagSegmentThreshold", g.LagSegmentThreshold).ToString();
 
+        // hoeing-multiworld-host-restart-resume-round：重开续跑开关（房主本地，默认开）
+        _multiWorldResumeEnabled = GetBool("multiWorldResumeEnabled", g.MultiWorldResumeEnabled);
+
         _joinModeSelection = GetStr("memberJoinMode", "byHostName") == "random" ? "随机加入现有房间" : "指定房主名称";
         _targetHostName = GetStr("targetHostName", g.TargetHostName);
 
@@ -253,6 +259,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         // hoeing-multiplayer-lagging-member-catchup：落后追赶调试参数（纯本地）
         settings["enableLaggingCatchUp"] = EnableLaggingCatchUp;
         if (int.TryParse(LagSegmentThreshold, out var lst)) settings["lagSegmentThreshold"] = lst;
+
+        // hoeing-multiworld-host-restart-resume-round：重开续跑开关
+        settings["multiWorldResumeEnabled"] = MultiWorldResumeEnabled;
         if (int.TryParse(FightTimeoutSeconds, out var fts)) settings["fightTimeoutSeconds"] = fts;
 
         settings["fastSyncPointEnabled"] = FastSyncPointEnabled;
