@@ -162,9 +162,9 @@ public static class KazuhaCollectExecutor
                 }
             }
 
-            await SimulateHoldElementalSkillAsync(1000, ct);
-            await Delay(200, ct);
-
+            // await SimulateHoldElementalSkillAsync(1000, ct);
+            // await Delay(200, ct);
+            // Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
             // 放长 E：对齐 AutoFightTask.cs L1819-1821 万叶拾取样板，用内建 UseSkill(true) +
             // NormalAttack 触发下落，复用 UseSkill 内建的"放完读 CD 确认 + 自动重试"闭环。
             kazuha!.UseSkill(true);
