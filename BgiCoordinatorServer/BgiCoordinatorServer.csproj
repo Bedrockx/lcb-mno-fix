@@ -12,4 +12,8 @@
     <InternalsVisibleTo Include="BgiCoordinatorServer.UnitTest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Semver" Version="3.0.0" />
+  </ItemGroup>
+
 </Project>

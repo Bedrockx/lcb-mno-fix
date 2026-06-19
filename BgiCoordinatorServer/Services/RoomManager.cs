@@ -25,7 +25,7 @@ public class RoomManager
     }
 
     /// <summary>创建房间，返回唯一6位字母数字房间码。同一 UID 只保留最新房间。</summary>
-    public string CreateRoom(string hostConnectionId, string playerName = "", List<string>? whitelist = null, string playerUid = "", int expectedPlayerCount = 4)
+    public string CreateRoom(string hostConnectionId, string playerName = "", List<string>? whitelist = null, string playerUid = "", int expectedPlayerCount = 4, string reportedVersion = "")
     {
         if (_rooms.Count >= _maxRooms)
             throw new InvalidOperationException("服务器房间数已达上限");
@@ -63,6 +63,7 @@ public class RoomManager
             CreatedAt = DateTime.UtcNow,
             Whitelist = whitelist ?? [],
             ExpectedPlayerCount = expectedPlayerCount,
+            HostBaselineVersion = reportedVersion ?? "",
             Players =
             [
                 new PlayerInfo
@@ -71,6 +72,7 @@ public class RoomManager
                     PlayerId = hostConnectionId,
                     PlayerName = string.IsNullOrEmpty(playerName) ? "房主" : playerName,
                     PlayerUid = playerUid,
+                    ReportedVersion = reportedVersion ?? "",
                     Status = PlayerStatus.Waiting,
                     LastHeartbeat = DateTime.UtcNow
                 }
@@ -82,7 +84,7 @@ public class RoomManager
     }
 
     /// <summary>加入房间，验证房间存在且人数 &lt; 4</summary>
-    public (bool Success, string? Error) JoinRoom(string roomCode, string connectionId, string playerId, string playerName = "", string playerUid = "")
+    public (bool Success, string? Error) JoinRoom(string roomCode, string connectionId, string playerId, string playerName = "", string playerUid = "", string reportedVersion = "")
     {
         if (!_rooms.TryGetValue(roomCode, out var room))
             return (false, "房间不存在");
@@ -118,6 +120,7 @@ public class RoomManager
                 }
                 graceMember.ConnectionId = connectionId;
                 graceMember.LastHeartbeat = DateTime.UtcNow;
+                graceMember.ReportedVersion = reportedVersion ?? "";
                 _connectionRoomMap.TryRemove(oldConnId, out _);
                 _connectionRoomMap[connectionId] = roomCode;
                 _logger?.LogInformation("[JoinRoom] 成员 {Name} 宽限期内重连复用，房间 {Code}", playerName, roomCode);
@@ -215,6 +218,7 @@ public class RoomManager
                 PlayerId = playerId,
                 PlayerName = string.IsNullOrEmpty(playerName) ? $"玩家{room.Players.Count + 1}" : playerName,
                 PlayerUid = playerUid,
+                ReportedVersion = reportedVersion ?? "",
                 Status = PlayerStatus.Waiting,
                 LastHeartbeat = DateTime.UtcNow
             });

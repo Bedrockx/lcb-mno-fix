@@ -83,13 +83,14 @@ public class CoordinatorHub : Hub
     }
 
     /// <summary>创建房间，返回房间码</summary>
-    public async Task<string> CreateRoom(string playerName = "", List<string>? whitelist = null, string playerUid = "", int expectedPlayerCount = 4)
+    public async Task<string> CreateRoom(string playerName = "", List<string>? whitelist = null, string playerUid = "", int expectedPlayerCount = 4, string reportedVersion = "")
     {
         _logger.LogInformation("CreateRoom 收到参数: playerName={Name}, playerUid={Uid}, expectedPlayerCount={Count}, whitelist={WL}",
             playerName, playerUid, expectedPlayerCount, whitelist != null ? string.Join(",", whitelist) : "null");
         // 多世界轮次切换：先离开所有旧 Group，避免旧房间广播串扰
         await LeaveAllGroupsAsync();
-        var code = _roomManager.CreateRoom(Context.ConnectionId, playerName, whitelist, playerUid, expectedPlayerCount);
+        // version-compatibility-check 改动 5：透传房主上报版本作为房间基准版本
+        var code = _roomManager.CreateRoom(Context.ConnectionId, playerName, whitelist, playerUid, expectedPlayerCount, reportedVersion);
         await Groups.AddToGroupAsync(Context.ConnectionId, code);
         TrackGroup(code);
         _logger.LogInformation("连接 {ConnId}({Name}) 创建房间 {Code}", Context.ConnectionId, playerName, code);
@@ -100,10 +101,34 @@ public class CoordinatorHub : Hub
     }
 
     /// <summary>加入房间，广播 PlayerListUpdated</summary>
-    public async Task<bool> JoinRoom(string roomCode, string playerName = "", string playerUid = "")
+    public async Task<bool> JoinRoom(string roomCode, string playerName = "", string playerUid = "", string reportedVersion = "")
     {
         var playerId = Context.ConnectionId;
-        var (success, error) = _roomManager.JoinRoom(roomCode, Context.ConnectionId, playerId, playerName, playerUid);
+
+        // === 版本一致性校验（就地，入房之前）version-compatibility-check R1.1/R6.1 改动 7/14 ===
+        // 基准 = 房间内第一个非通配玩家版本（ResolveBaselineVersion），而非固定取房主版本：
+        // 否则开发者通配版本当房主时，房主通配 → 全员放行，校验失效（Property 7）。
+        var room0 = _roomManager.GetRoom(roomCode);
+        if (room0 != null)
+        {
+            List<string> existingVersions;
+            lock (room0)
+            {
+                existingVersions = room0.Players.Select(p => p.ReportedVersion).ToList();
+            }
+            if (!VersionCompatibilityDecisions.CanJoin(reportedVersion, existingVersions))
+            {
+                var baseline = VersionCompatibilityDecisions.ResolveBaselineVersion(existingVersions) ?? "";
+                var checkResult = BuildVersionCheckResult(reportedVersion, baseline);
+                _logger.LogWarning("连接 {ConnId} 版本校验不兼容，阻断加入房间 {Code}：member={Member} baseline={Baseline}",
+                    Context.ConnectionId, roomCode, reportedVersion, baseline);
+                // 向该加入者单独回传 Check_Result（向后兼容：旧客户端不订阅此事件即忽略，不影响 bool 返回语义 U4.1）
+                await Clients.Caller.SendAsync("VersionCheckRejected", checkResult);
+                return false; // 硬阻断（R5.1），不调用 RoomManager.JoinRoom，成员不入房
+            }
+        }
+
+        var (success, error) = _roomManager.JoinRoom(roomCode, Context.ConnectionId, playerId, playerName, playerUid, reportedVersion);
 
         if (!success)
         {
@@ -121,6 +146,24 @@ public class CoordinatorHub : Hub
         var room = _roomManager.GetRoom(roomCode)!;
         await Clients.Group(roomCode).SendAsync("PlayerListUpdated", room.Players);
         return true;
+    }
+
+    /// <summary>
+    /// 构造版本校验失败的 Check_Result（version-compatibility-check 改动 7 / R5.2–R5.6）。
+    /// 含双方版本号、双方是否通配标记、统一版本引导文案。
+    /// </summary>
+    private static Models.VersionCheckResult BuildVersionCheckResult(string memberVersion, string baselineVersion)
+    {
+        return new Models.VersionCheckResult
+        {
+            Compatible = false,
+            MemberVersion = memberVersion ?? "",
+            BaselineVersion = baselineVersion ?? "",
+            MemberIsWildcard = VersionCompatibilityDecisions.IsWildcard(memberVersion),
+            BaselineIsWildcard = VersionCompatibilityDecisions.IsWildcard(baselineVersion),
+            // R5.6 引导：请将房内所有玩家更新到完全相同的版本后重试
+            Hint = "版本不一致，已阻止加入。请将房内所有玩家更新到完全相同的版本后重试。"
+        };
     }
 
     /// <summary>离开房间，广播 PlayerListUpdated</summary>

@@ -4,6 +4,11 @@ public class Room
 {
     public string Code { get; set; } = "";
     public string HostConnectionId { get; set; } = "";
+
+    /// <summary>房间基准版本：房主 CreateRoom 时上报的完整 Reported_Version 字符串。
+    /// 加入校验以此为参照（version-compatibility-check）。空串=房主旧客户端未上报。</summary>
+    public string HostBaselineVersion { get; set; } = "";
+
     public List<PlayerInfo> Players { get; set; } = [];
     public DateTime CreatedAt { get; set; }
 

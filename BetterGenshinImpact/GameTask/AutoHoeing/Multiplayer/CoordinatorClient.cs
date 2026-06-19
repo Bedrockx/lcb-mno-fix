@@ -69,6 +69,14 @@ public class CoordinatorClient : IAsyncDisposable
     public event Action<string>? PlayerAnomalyRecoveredReceived; // playerUid
     public event Action<int>? StartRouteReceived; // targetRouteIndex
 
+    // === 版本一致性校验事件（hoeing-multiplayer-version-compatibility-check）===
+    /// <summary>
+    /// 服务端版本校验判定加入者与房间基准版本不兼容、硬阻断加入时触发。
+    /// 载荷为 Check_Result（双方版本号、是否通配、统一版本引导文案）。
+    /// JoinRoomAsync 仍返回 false，本事件仅作旁路提示，不改返回语义（U4.1）。
+    /// </summary>
+    public event Action<Models.VersionCheckResult>? VersionCheckRejected;
+
     // === 集体卡死跳段事件（multiplayer-mutual-wait-collective-skip spec）===
     /// <summary>
     /// 服务端集体卡死监测触发后，请求落后玩家跳到 targetProgress 对应段。
@@ -199,6 +207,15 @@ public class CoordinatorClient : IAsyncDisposable
             _connection.On<string>("RoomClosed",
                 reason => RoomClosed?.Invoke(reason));
 
+            // === 版本一致性校验：服务端硬阻断回传 Check_Result（version-compatibility-check 改动 12）===
+            _connection.On<Models.VersionCheckResult>("VersionCheckRejected",
+                result =>
+                {
+                    _logger.LogWarning("[联机][版本校验] 加入被阻断：member={Member} baseline={Baseline} hint={Hint}",
+                        result.MemberVersion, result.BaselineVersion, result.Hint);
+                    VersionCheckRejected?.Invoke(result);
+                });
+
             _connection.On("RouteVerificationAllDone",
                 () => RouteVerificationAllDone?.Invoke());
 
@@ -277,7 +294,7 @@ public class CoordinatorClient : IAsyncDisposable
                 {
                     try
                     {
-                        await _connection.InvokeAsync("JoinRoom", _currentRoomCode, _playerName ?? "", _playerUid ?? "");
+                        await _connection.InvokeAsync("JoinRoom", _currentRoomCode, _playerName ?? "", _playerUid ?? "", BetterGenshinImpact.Core.Config.Global.Version ?? "");
                         _logger.LogInformation("[联机] 重连后重新加入房间成功");
                     }
                     catch (Exception ex)
@@ -451,7 +468,8 @@ public class CoordinatorClient : IAsyncDisposable
         if (_connection == null) return false;
         try
         {
-            var result = await _connection.InvokeAsync<bool>("JoinRoom", roomCode, playerName, playerUid);
+            // version-compatibility-check R2.1：上报完整 Global.Version（含构建元数据，不截断）
+            var result = await _connection.InvokeAsync<bool>("JoinRoom", roomCode, playerName, playerUid, BetterGenshinImpact.Core.Config.Global.Version ?? "");
             _currentRoomCode = roomCode;
             _playerName = playerName;
             _playerUid = playerUid;
@@ -649,7 +667,7 @@ public class CoordinatorClient : IAsyncDisposable
         try
         {
             var result = await _connection.InvokeAsync<string?>("CreateRoom",
-                playerName, whitelist ?? new List<string>(), playerUid, expectedPlayerCount);
+                playerName, whitelist ?? new List<string>(), playerUid, expectedPlayerCount, BetterGenshinImpact.Core.Config.Global.Version ?? "");
             _playerName = playerName;
             _playerUid = playerUid;
             _isInRoom = result != null;

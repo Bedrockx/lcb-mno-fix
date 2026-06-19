@@ -6,6 +6,10 @@ public class PlayerInfo
     public string PlayerId { get; set; } = "";
     public string PlayerName { get; set; } = "";
     public string PlayerUid { get; set; } = "";
+
+    /// <summary>该玩家上报的完整 Reported_Version 字符串（version-compatibility-check）。
+    /// 空串=旧客户端未上报。仅用于 Check_Result 展示与房间整体判定。</summary>
+    public string ReportedVersion { get; set; } = "";
     public PlayerStatus Status { get; set; } = PlayerStatus.Waiting;
     public DateTime LastHeartbeat { get; set; }
 
