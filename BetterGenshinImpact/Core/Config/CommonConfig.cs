@@ -45,6 +45,12 @@ public partial class CommonConfig : ObservableObject
     private bool _saveAs1080P;
 
     /// <summary>
+    ///     是否保存奖励识别调试截图
+    /// </summary>
+    [ObservableProperty]
+    private bool _rewardRecognitionScreenshotEnabled;
+
+    /// <summary>
     ///     退出时最小化至托盘
     /// </summary>
     [ObservableProperty]

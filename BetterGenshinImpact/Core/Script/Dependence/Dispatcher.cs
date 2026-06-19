@@ -318,9 +318,9 @@ public class Dispatcher
                     return null;
                 }
                 AllConfig.AutoDomainEnable = true;
-                await new AutoDomainTask(new AutoDomainParam(0, path)).Start(cancellationToken);
+                var a = await new AutoDomainTask(new AutoDomainParam(0, path)).Start(cancellationToken);
                 AllConfig.AutoDomainEnable = false;
-                return null;
+                return a;
 
             case "AutoBoss":
                 var autoBossConfig = TaskContext.Instance().Config.AutoBossConfig;
@@ -329,8 +329,7 @@ public class Dispatcher
                     return null;
                 }
 
-                await new AutoBossTask( new AutoBossParam(autoBossPath)).Start(cancellationToken);
-                return null;
+                return await new AutoBossTask(new AutoBossParam(autoBossPath)).Start(cancellationToken);
 
             case "AutoFishing":
                 await new AutoFishingTask(AutoFishingTaskParam.BuildFromSoloTaskConfig(soloTask.Config)).Start(
@@ -458,7 +457,7 @@ public class Dispatcher
     /// <param name="param">秘境任务参数</param>  
     /// <param name="customCt">自定义取消令牌</param>  
     /// <returns></returns>  
-    public async Task RunAutoDomainTask(AutoDomainParam param, CancellationToken? customCt = null)  
+    public async Task<Dictionary<string, int>> RunAutoDomainTask(AutoDomainParam param, CancellationToken? customCt = null)
     {  
         if (param == null)  
         {  
@@ -466,7 +465,7 @@ public class Dispatcher
         }  
   
         CancellationToken cancellationToken = customCt ?? CancellationContext.Instance.Cts.Token;  
-        await new AutoDomainTask(param).Start(cancellationToken);  
+        return await new AutoDomainTask(param).Start(cancellationToken);
     }  
 
     /// <summary>
@@ -475,7 +474,7 @@ public class Dispatcher
     /// <param name="param">自动首领讨伐任务参数</param>
     /// <param name="customCt">自定义取消令牌</param>
     /// <returns></returns>
-    public async Task RunAutoBossTask(AutoBossParam param, CancellationToken? customCt = null)
+    public async Task<Dictionary<string, int>> RunAutoBossTask(AutoBossParam param, CancellationToken? customCt = null)
     {
         if (param == null)
         {
@@ -483,7 +482,7 @@ public class Dispatcher
         }
 
         CancellationToken cancellationToken = customCt ?? CancellationContext.Instance.Cts.Token;
-        await new AutoBossTask(param).Start(cancellationToken);
+        return await new AutoBossTask(param).Start(cancellationToken);
     }
   
     /// <summary>  
