@@ -957,7 +957,29 @@ public class Avatar
             // Logger.LogInformation("Q在CD，跳过");
             return;
         }
-        
+
+        // 阿蕾奇诺红血才放Q门控：复用 region1，红血才继续释放，非红血跳过；检测异常兜底放Q。
+        if (ArlecchinoBurstGateDecisions.ShouldGate(TaskContext.Instance().Config.AutoFightConfig, Name))
+        {
+            bool releaseQ = true;
+            try
+            {
+                releaseQ = CombatHealthDetector.IsRedBlood(region1);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "{Name} 红血检测异常，兜底释放Q1", Name);
+                releaseQ = true;
+            }
+
+            if (!releaseQ)
+            {
+                Logger.LogInformation("{Name} 红血门控：未红血，跳过Q1", Name);
+                return;
+            }
+            Logger.LogInformation("{Name} 红血门控：红血，继续释放Q1", Name);
+        }
+
         for (var i = 0; i < 10; i++)
         {
             if (Ct is { IsCancellationRequested: true })
@@ -1512,6 +1534,33 @@ public class Avatar
     public void KeyPress(string key)
     {
         var vk = KeyBindingsSettingsPageViewModel.MappingKey(User32Helper.ToVk(key));
+        if (ArlecchinoBurstGateDecisions.ShouldGate(TaskContext.Instance().Config.AutoFightConfig, Name) && key == "VK_Q")
+        {
+            // 阿蕾奇诺红血才放Q：红血放Q，非红血跳过；检测异常兜底放Q。
+            bool releaseQ = true;
+            try
+            {
+                using var region = CaptureToRectArea();
+                releaseQ = CombatHealthDetector.IsRedBlood(region);
+            }
+            catch (Exception ex)
+            {
+                // 检测失败兜底放Q（宁可放也不憋大招），记录告警便于排查。
+                Logger.LogWarning(ex, "{Name} 红血检测异常，兜底释放Q2", Name);
+                releaseQ = true;
+            }
+
+            if (releaseQ)
+            {
+                Logger.LogInformation("{Name} 红血门控：释放Q2", Name);
+                Simulation.SendInput.Keyboard.KeyPress(vk);
+            }
+            else
+            {
+                Logger.LogInformation("{Name} 红血门控：未红血，跳过Q2", Name);
+            }
+            return;
+        }
         switch (key)
         {
             case "VK_LBUTTON":
