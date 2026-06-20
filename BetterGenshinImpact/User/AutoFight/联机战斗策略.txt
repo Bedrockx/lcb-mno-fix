@@ -8,7 +8,7 @@
 莱依拉 e,wait(0.1),keypress(e),wait(0.2),check, keypress(e),keypress(q),attack(0.2),keypress(e),keypress(q),wait(0.2),check,
 尼可 e,wait(0.1),keypress(e),wait(0.2),check, keypress(e),keypress(q),attack(0.2),keypress(e),keypress(q),wait(0.2),check,
 
-仆人 attack(0.1),e, wait(0.1), check, wait(0.1),charge(0.35), j, charge(0.2), check, charge(0.2), keydown(s), attack(1.17),  e, wait(0.1), check, wait(0.1),charge(0.35), j,attack(0.45), keyup(s), keydown(w), attack(0.38), attack(0.6), keyup(w), keypress(q), wait(0.2), keydown(s), attack(1.17), attack(0.45), keyup(s), keydown(w), attack(0.38), attack(0.6), keyup(w), wait(0.1), check,charge(0.35), keypress(q)
+仆人 keypress(q),attack(0.1),e, wait(0.1), check, wait(0.1),charge(0.35), j, keydown(s), attack(1.17),  e,wait(0.07),attack(0.45),wait(0.07),charge(0.35), keyup(s), keydown(w), attack(0.38), attack(0.6), keyup(w), keypress(q),  e,wait(0.07),attack(0.45),wait(0.07),charge(0.35), keydown(s), attack(1.17), attack(0.45), keyup(s), keydown(w), attack(0.38), attack(0.6), keyup(w), wait(0.1), check,charge(0.35), keypress(q)
 
 温迪 keypress(Q),attack(0.01), keypress(Q),e, wait(0.1), ready, check, e, click(middle), attack(0.2), keypress(Q), wait(0.1), ready, attack(0.22), e, click(middle), dash(0.1), attack(0.3), keypress(Q),attack(0.3), keypress(Q), attack(0.3), keypress(Q), attack(0.3), keypress(Q), e, attack(0.5), click(middle), attack(0.2), dash(0.1), attack(0.3), keypress(Q), attack(0.3), keypress(Q), attack(0.3), keypress(Q), attack(0.3), keypress(Q)
 
