@@ -1858,6 +1858,39 @@ public class PathExecutor
         }
         
         var avatars = _combatScenes.GetAvatars();
+
+        // 联机回血走独立路径，不进入下方单机检测循环（关注点分离）：
+        // 联机最多前台 + 后台两个角色，回血角色由用户通过 RecoverAvatarIndex 指定。
+        // 直接切到该角色放 Q（跳过会在联机布局下错位的 AvatarQSkillAsync 检测），
+        // fire-and-forget 不阻塞主流程；空放（无 Q 能量）无害。单机完全不受影响。
+        var isInMultiGame = _combatScenes.CurrentMultiGameStatus?.IsInMultiGame == true;
+        if (MultiplayerRecoverBurstDecisions.ShouldSkipQDetectionAndDirectBurst(isInMultiGame, PartyConfig.RecoverAvatarIndex)
+            && int.TryParse(PartyConfig.RecoverAvatarIndex, out var recoverIdx))
+        {
+            var recoverAvatar = _combatScenes.SelectAvatar(recoverIdx);
+            Task.Run(async () =>
+            {
+                try
+                {
+                    if (recoverAvatar != null && recoverAvatar.TrySwitch2())
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalBurst);
+                        await Delay(2000, ct);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    // 寻路取消导致的正常中断，无需处理。
+                }
+                catch (Exception ex)
+                {
+                    // 异步回血失败不应让主流程崩溃，记录告警便于排查（禁止静默吞）。
+                    Logger.LogWarning(ex, "[联机] 直接放Q回血异步执行异常");
+                }
+            }, ct);
+            return true;
+        }
+
         foreach (var avatar in avatars)
         {
             if (avatar.Name == "白术")
