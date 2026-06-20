@@ -47,6 +47,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         PickDropsAfterFightSeconds = autoFightConfig.PickDropsAfterFightSeconds;
         KazuhaPickupEnabled = autoFightConfig.KazuhaPickupEnabled;
         ActionSchedulerByCd = autoFightConfig.ActionSchedulerByCd;
+        MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;
@@ -111,6 +112,12 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
 
     public bool KazuhaPickupEnabled = true;
     public string ActionSchedulerByCd = "";
+
+    /// <summary>
+    /// 玛薇卡摩托状态检测开关（透传自配置组 AutoFightConfig）。
+    /// 位置2 (AutoFightTask.cs 非重击分支) 通过 _taskParam 读取本字段决定是否执行摩托检测。默认 false。
+    /// </summary>
+    public bool MavuikaMotorcycleCheckEnabled { get; set; } = false;
     public string KazuhaPartyName;
     public string OnlyPickEliteDropsMode = "";
     public string GuardianAvatar { get; set; } = string.Empty;
@@ -198,6 +205,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         PickDropsAfterFightSeconds = autoFightConfig.PickDropsAfterFightSeconds;
         KazuhaPickupEnabled = autoFightConfig.KazuhaPickupEnabled;
         ActionSchedulerByCd = autoFightConfig.ActionSchedulerByCd;
+        MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;

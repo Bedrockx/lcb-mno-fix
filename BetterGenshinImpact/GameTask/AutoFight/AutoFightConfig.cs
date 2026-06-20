@@ -42,6 +42,15 @@ public partial class AutoFightConfig : ObservableObject
     /// 多种用分号分隔，例如:白术;钟离,12;，如果人名，则用内置cd检查，如果是人名和数字，则把数字当做出招cd(秒)。
     /// </summary>
     [ObservableProperty] private string _actionSchedulerByCd = "";
+
+    /// <summary>
+    /// 玛薇卡摩托状态检测开关。
+    /// 开启后自动检测玛薇卡是否处于摩托状态，非重击命令下摩托，重击命令自动上摩托。
+    /// 默认 false（关闭）：关闭时跳过 Avatar.cs 重击分支与 AutoFightTask.cs 非重击分支的摩托检测/开收摩托按键。
+    /// 注意：位置1(Avatar.cs)读全局战斗配置实例；位置2(AutoFightTask.cs)读当前配置组实例(经 AutoFightParam 透传)。
+    /// </summary>
+    [ObservableProperty] private bool _mavuikaMotorcycleCheckEnabled = false;
+
     /// <summary>
     /// 只拾取精英掉落
     /// Closed ：关闭功能

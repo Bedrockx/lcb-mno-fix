@@ -73,6 +73,21 @@ public class Avatar
     private static readonly object SkillCheckLock = new object();
 
     /// <summary>
+    /// 玛薇卡摩托状态判定的色差阈值。色差小于该值判为摩托状态，大于等于判为非摩托状态。
+    /// 数值来自对大量截图的观察：摩托状态下色差一般在 10-15 之间，非摩托状态一般在 20 以上。
+    /// </summary>
+    private const double MotorcycleColorDifferenceThreshold = 15;
+
+    /// <summary>玛薇卡摩托状态两个采样点所在行（Sample_Point_A 与 B 同一行）。</summary>
+    private const int MotorcycleSampleRow = 991;
+
+    /// <summary>Sample_Point_A 所在列。</summary>
+    private const int MotorcycleSampleColA = 1678;
+
+    /// <summary>Sample_Point_B 所在列。</summary>
+    private const int MotorcycleSampleColB = 1728;
+
+    /// <summary>
     /// 元素爆发是否就绪
     /// </summary>
     public bool IsBurstReady { get; set; }
@@ -720,6 +735,47 @@ public class Avatar
     }
 
     /// <summary>
+    /// 计算两个 BGR 像素颜色的欧氏色差：sqrt((b1-b2)^2 + (g1-g2)^2 + (r1-r2)^2)。
+    /// 纯函数，无副作用。Vec3b 三分量依次为 蓝(Item0)/绿(Item1)/红(Item2)。
+    /// </summary>
+    public static double MotorcycleColorDifference(Vec3b a, Vec3b b)
+    {
+        return Math.Sqrt(
+            Math.Pow(a.Item0 - b.Item0, 2) + // 蓝通道差值的平方
+            Math.Pow(a.Item1 - b.Item1, 2) + // 绿通道差值的平方
+            Math.Pow(a.Item2 - b.Item2, 2)   // 红通道差值的平方
+        );
+    }
+
+    /// <summary>
+    /// 给定两个 BGR 像素颜色，判定是否处于摩托状态：色差 &lt; 阈值 即为摩托状态。
+    /// 纯函数，无副作用、无屏幕采样、无日志。供属性测试直接调用。
+    /// </summary>
+    public static bool IsMotorcycleColor(Vec3b a, Vec3b b)
+    {
+        return MotorcycleColorDifference(a, b) < MotorcycleColorDifferenceThreshold;
+    }
+
+    /// <summary>
+    /// 判断当前角色是否处于玛薇卡摩托状态。
+    /// 非玛薇卡角色记录一条 LogDebug 诊断日志并返回 false（不截图）。
+    /// 玛薇卡角色截取当前画面，读取两个采样点 BGR 颜色，按色差阈值判定。
+    /// </summary>
+    public bool IsMotorcycle()
+    {
+        if (Name != "玛薇卡")
+        {
+            Logger.LogDebug("对非玛薇卡角色 {Name} 调用了 IsMotorcycle()，直接返回 false（未执行屏幕采样）", Name);
+            return false;
+        }
+
+        using var region = CaptureToRectArea();
+        var a = region.SrcMat.At<Vec3b>(MotorcycleSampleRow, MotorcycleSampleColA);
+        var b = region.SrcMat.At<Vec3b>(MotorcycleSampleRow, MotorcycleSampleColB);
+        return IsMotorcycleColor(a, b);
+    }
+
+    /// <summary>
     /// 使用元素战技 E
     /// </summary>
     public void UseSkill(bool hold = false,int retryTimes = 1)
@@ -1245,6 +1301,40 @@ public class Avatar
                 ms -= 25;
             }
 
+            Simulation.SendInput.SimulateAction(GIActions.NormalAttack, KeyType.KeyUp);
+        }
+        else if (TaskContext.Instance().Config.AutoFightConfig.MavuikaMotorcycleCheckEnabled && Name == "玛薇卡")
+        {
+            // 玛薇卡摩托状态检测开关（位置1：读全局战斗配置）。关闭时跳过检测与开摩托
+            //摩托状态才执行
+            Sleep(200);
+            using var region = CaptureToRectArea();
+            var pos = region.SrcMat.At<Vec3b>(991, 1678);
+            var pos2 = region.SrcMat.At<Vec3b>(991, 1728);
+            double colorDifference = Math.Sqrt(
+                Math.Pow(pos.Item0 - pos2.Item0, 2) + // 蓝通道差值的平方
+                Math.Pow(pos.Item1 - pos2.Item1, 2) + // 绿通道差值的平方
+                Math.Pow(pos.Item2 - pos2.Item2, 2)   // 红通道差值的平方
+            );
+            // Logger.LogInformation("玛薇卡蓄力颜色差值:{ColorDifference}", Math.Round(colorDifference, 2));
+            if (colorDifference >= 15) // 这个数值是通过观察大量截图得来的，摩托状态下差值一般在10-15之间，非摩托状态一般在20以上
+            {
+                Logger.LogWarning("{Name} 重击命令可能没有进入摩托状态，尝试开摩托！ {t}", Name,Math.Round(colorDifference, 2));
+                //点按E技能
+                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                Sleep(200);
+                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                Sleep(300);
+                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+            }
+            else
+            {
+                Logger.LogWarning("{Name} 当前处于摩托状态，执行重击 {t}", Name,Math.Round(colorDifference, 2));
+            }
+
+            // 重击普攻：不受开关影响，始终执行
+            Simulation.SendInput.SimulateAction(GIActions.NormalAttack, KeyType.KeyDown);
+            Sleep(ms, Ct); // 持续操作应该被cts取消
             Simulation.SendInput.SimulateAction(GIActions.NormalAttack, KeyType.KeyUp);
         }
         else

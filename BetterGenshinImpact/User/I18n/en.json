@@ -266,6 +266,8 @@
   "下载": "Download",
   "一般填写套装内生之花名，可填入多个名称；留空则不用": "Usually enter the artifact set's Flower name; you can enter multiple names. Leave blank to disable",
   "自动检测战斗结束": "Auto detect combat end",
+  "玛薇卡摩托状态检测": "Mavuika motorcycle state detection",
+  "开启后自动检测玛薇卡是否处于摩托状态，非重击命令下摩托，重击命令自动上摩托": "When enabled, automatically detects whether Mavuika is in motorcycle state; dismounts on non-charged-attack commands and mounts automatically on charged-attack commands",
   "检测到战斗已经结束的情况下，停止自动战斗功能": "Stop auto combat when combat end is detected",
   "扫描掉落物光柱": "Scan drops nearby",
   "战斗结束后旋转视角寻找掉落物光柱并靠近（仅在无万叶时备用）": "After combat, rotate camera to locate drop light pillars and move toward them (only as backup without Kazuha)",

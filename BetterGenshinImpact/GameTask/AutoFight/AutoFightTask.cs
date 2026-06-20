@@ -1438,7 +1438,28 @@ public class AutoFightTask : ISoloTask
                                 Logger.LogWarning(ex, "异步战斗结束检测异常");
                             }
                         });
-
+                        
+                        //如果当前角色是玛薇卡，检测是否为摩托状态，如果是摩托状态且动作不是重击，则等待摩托状态结束，摩托状态结束后继续执行动作
+                        Task.Run(() =>{
+                            if (_taskParam.MavuikaMotorcycleCheckEnabled && avatar?.Name == "玛薇卡" && !command.Args.Contains("重击"))
+                            {
+                                //摩托状态才执行
+                                using var region = CaptureToRectArea();
+                                var pos = region.SrcMat.At<Vec3b>(991, 1678);
+                                var pos2 = region.SrcMat.At<Vec3b>(991, 1728);
+                                double colorDifference = Math.Sqrt(
+                                    Math.Pow(pos.Item0 - pos2.Item0, 2) + // 蓝通道差值的平方
+                                    Math.Pow(pos.Item1 - pos2.Item1, 2) + // 绿通道差值的平方
+                                    Math.Pow(pos.Item2 - pos2.Item2, 2) // 红通道差值的平方
+                                );
+                                // Logger.LogInformation("玛薇卡蓄力颜色差值:{ColorDifference}", Math.Round(colorDifference, 2));
+                                if (colorDifference < 15 && avatar.IsActive(region)) // 这个数值是通过观察大量截图得来的，摩托状态下差值一般在10-15之间，非摩托状态一般在20以上
+                                {
+                                    Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                                    // Logger.LogWarning("检测到玛薇卡处于摩托状态，等待摩托状态结束");
+                                }
+                            }
+                        });
                         command.Execute(combatScenes, lastCommand);
                         //统计战斗人次
                         if (i == combatCommands.Count - 1 || command.Name != combatCommands[i + 1].Name)

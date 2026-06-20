@@ -540,6 +540,33 @@
                                 Text="{Binding Config.AutoFightConfig.ActionSchedulerByCd, Mode=TwoWay}"
                                 TextWrapping="Wrap" />
                 </Grid>
+
+                <!-- 玛薇卡摩托状态检测 -->
+                <Grid Margin="16,5,16,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <ui:TextBlock Grid.Row="0"
+                                  Grid.Column="0"
+                                  FontTypography="Body"
+                                  Text="玛薇卡摩托状态检测"
+                                  TextWrapping="Wrap" />
+                    <ui:TextBlock Grid.Row="1"
+                                  Grid.Column="0"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="建议非满命玛薇卡开启，非重击命令下摩托，重击命令自动上摩托"
+                                  TextWrapping="Wrap" />
+                    <ui:ToggleSwitch Grid.Row="0"
+                                     Grid.RowSpan="2"
+                                     Grid.Column="1"
+                                     Margin="0,0,36,0"
+                                     IsChecked="{Binding Config.AutoFightConfig.MavuikaMotorcycleCheckEnabled, Mode=TwoWay}" />
+                </Grid>
                 <!--内嵌的设置-->
                 <Separator Margin="-18,0" BorderThickness="0,1,0,0" />
                 <Grid Margin="16,10,52,0">
