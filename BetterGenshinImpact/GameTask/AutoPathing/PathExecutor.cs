@@ -1915,7 +1915,8 @@ public class PathExecutor
                 {
                     if (PartyConfig.RecoverAvatarIndex != null)
                     {
-                        for (int i = 1; i <= 4; i++)
+                        var avatarCount = AvatarSwitchIndexDecisions.EffectiveAvatarCount(_combatScenes?.GetAvatars().Count);
+                        for (int i = 1; i <= avatarCount; i++)
                         {
                             var avatar2 = _combatScenes.SelectAvatar(i);
                             if (avatar2.IsActive(bitmap))
@@ -2008,12 +2009,13 @@ public class PathExecutor
                         
                     if (!string.IsNullOrWhiteSpace(PartyConfig.MainAvatarIndex))
                     {
+                        var avatarCount = AvatarSwitchIndexDecisions.EffectiveAvatarCount(_combatScenes?.GetAvatars().Count);
                         var avatarIndex = int.Parse(PartyConfig.MainAvatarIndex);
-                        var nextAvatarIndex = (avatarIndex % 4) + 1;
+                        var nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(avatarIndex, avatarCount);
                         if (_combatScenes?.SelectAvatar(nextAvatarIndex).Name == "枫原万叶" && 
                             _combatScenes?.SelectAvatar(PathingConditionConfig.InitialMainAvatarIndex)?.Name != "枫原万叶")
                         {
-                            nextAvatarIndex = (nextAvatarIndex % 4) + 1;
+                            nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(nextAvatarIndex, avatarCount);
                         }
             
                         var avatar = _combatScenes?.SelectAvatar(avatarIndex);
@@ -2032,16 +2034,17 @@ public class PathExecutor
                     }
                     else
                     {
-                        for (int i = 1; i <= 4; i++)
+                        var avatarCount = AvatarSwitchIndexDecisions.EffectiveAvatarCount(_combatScenes?.GetAvatars().Count);
+                        for (int i = 1; i <= avatarCount; i++)
                         {
                             var avatar = _combatScenes?.SelectAvatar(i);
                             if (avatar != null && avatar.IsActive(bitmap))
                             {
-                                var nextAvatarIndex = (i % 4) + 1;
+                                var nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(i, avatarCount);
                                 if (_combatScenes?.SelectAvatar(nextAvatarIndex).Name == "枫原万叶" && 
                                     _combatScenes?.SelectAvatar(PathingConditionConfig.InitialMainAvatarIndex)?.Name != "枫原万叶")
                                 {
-                                    nextAvatarIndex = (nextAvatarIndex % 4) + 1;
+                                    nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(nextAvatarIndex, avatarCount);
                                 }
                                 await SwitchAvatar(nextAvatarIndex.ToString());
                                 break;
@@ -3113,13 +3116,14 @@ public class PathExecutor
 
                             if (!string.IsNullOrWhiteSpace(PartyConfig.MainAvatarIndex))
                             {
+                                var avatarCount = AvatarSwitchIndexDecisions.EffectiveAvatarCount(_combatScenes?.GetAvatars().Count);
                                 var avatarIndex = int.Parse(PartyConfig.MainAvatarIndex);
                                 
-                                var nextAvatarIndex = (avatarIndex % 4) + 1;
+                                var nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(avatarIndex, avatarCount);
                                 if (_combatScenes?.SelectAvatar(nextAvatarIndex).Name == "枫原万叶" && 
                                     _combatScenes?.SelectAvatar(PathingConditionConfig.InitialMainAvatarIndex)?.Name != "枫原万叶")
                                 {
-                                    nextAvatarIndex = (nextAvatarIndex % 4) + 1;
+                                    nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(nextAvatarIndex, avatarCount);
                                 }
                                 
                                 var avatar2 = _combatScenes?.SelectAvatar(avatarIndex);
@@ -3138,16 +3142,17 @@ public class PathExecutor
                             }
                             else
                             {
-                                for (int i = 1; i <= 4; i++)
+                                var avatarCount = AvatarSwitchIndexDecisions.EffectiveAvatarCount(_combatScenes?.GetAvatars().Count);
+                                for (int i = 1; i <= avatarCount; i++)
                                 {
                                     var avatar2 = _combatScenes?.SelectAvatar(i);
                                     if (avatar2 != null && avatar2.IsActive(bitmap))
                                     {
-                                        var nextAvatarIndex = (i % 4) + 1;
+                                        var nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(i, avatarCount);
                                         if (_combatScenes?.SelectAvatar(nextAvatarIndex).Name == "枫原万叶" && 
                                             _combatScenes?.SelectAvatar(PathingConditionConfig.InitialMainAvatarIndex)?.Name != "枫原万叶")
                                         {
-                                            nextAvatarIndex = (nextAvatarIndex % 4) + 1;
+                                            nextAvatarIndex = AvatarSwitchIndexDecisions.NextAvatarIndex(nextAvatarIndex, avatarCount);
                                         }
                                         await SwitchAvatar(nextAvatarIndex.ToString());
                                         break;
