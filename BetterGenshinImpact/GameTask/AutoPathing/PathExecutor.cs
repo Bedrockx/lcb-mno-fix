@@ -1001,8 +1001,13 @@ public class PathExecutor
                                                             // BC3 调用点③（kazuha-continuous-return-abnormal-coord-and-moveto-distance-fix 改动 3）：
                                                             // isGetOut: true → false 关闭卡死脱困，避免脱困逻辑在战后聚物粗接近期间
                                                             // 随机扭动/跳跃/复苏传送，与战斗主循环/聚物定位抢镜头抢移动。
+                                                            // hoeing-return-fightpoint-moveto-stuck-sync-timeout-fix:
+                                                            // 仅此回点调用点传入预算 = KazuhaSyncTimeoutSeconds(与 WaitAtFightPointAsync 等待终态同源:
+                                                            // MultiplayerCoordinator.EffectiveConfig 与 KazuhaCollectSync 内部 _config 是同一实例)。
+                                                            // 单机 MultiplayerCoordinator==null → 传 null → 旧行为(只受 240s)。
                                                             await MoveTo(waypoint, isGetOut: false, task: null, nextWaypoint: null,
-                                                                nextDistance: null, retryDis: 4, isPoint: false, escapeClimbOnReturn: true);
+                                                                nextDistance: null, retryDis: 4, isPoint: false, escapeClimbOnReturn: true,
+                                                                returnMoveBudgetSeconds: MultiplayerCoordinator?.EffectiveConfig?.KazuhaSyncTimeoutSeconds);
                                                         }
                                                     }
                                                 }
@@ -2332,7 +2337,7 @@ public class PathExecutor
 
     public DateTime moveToStartTime;
 
-    public async Task MoveTo(WaypointForTrack waypoint,bool isGetOut = true, PathingTask? task = null, Waypoint? nextWaypoint = null,double? nextDistance = null,int retryDis = 4, bool isPoint = true, double? closeDistance = null, string? fastSyncId = null, WaypointForTrack? fastSyncWaypoint = null, bool escapeClimbOnReturn = false)
+    public async Task MoveTo(WaypointForTrack waypoint,bool isGetOut = true, PathingTask? task = null, Waypoint? nextWaypoint = null,double? nextDistance = null,int retryDis = 4, bool isPoint = true, double? closeDistance = null, string? fastSyncId = null, WaypointForTrack? fastSyncWaypoint = null, bool escapeClimbOnReturn = false, double? returnMoveBudgetSeconds = null)
     {
         // Logger.LogWarning("999");
         bool fastReported = false;  // 抢报一次性短路 bool（fastsync-redesign-parameter-passing spec）
@@ -2485,6 +2490,23 @@ public class PathExecutor
             }
 
             num++;
+
+            // hoeing-return-fightpoint-moveto-stuck-sync-timeout-fix:
+            // 仅回点 MoveTo 粗接近段(调用点显式传 returnMoveBudgetSeconds)启用"聚物同步预算"提前结束。
+            // returnMoveBudgetSeconds==null 时 ShouldEndReturnMove 必返回 false → 整段短路,旧行为不变。
+            // 与下方 240s 判定的本质区别:这里【不抛异常】,而是发 MoveForward KeyUp 后正常 return,
+            // 像到点一样退出 MoveTo,让调用点继续走两段 MoveCloseTo + WaitAtFightPointAsync 兜底。
+            if (PathExecutorReturnMoveDecisions.ShouldEndReturnMove(
+                    returnMoveBudgetSeconds,
+                    (DateTime.UtcNow - moveToStartTime).TotalSeconds))
+            {
+                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                Logger.LogInformation(
+                    "[联机] 回点 MoveTo 粗接近段达到聚物同步预算 {Budget}s，提前结束移动段并继续后续流程(不放弃整条路径)",
+                    returnMoveBudgetSeconds);
+                return;
+            }
+
             if ((DateTime.UtcNow - moveToStartTime).TotalSeconds > 240)
             {
                 Logger.LogWarning("执行超时，放弃此次追踪");
@@ -2503,7 +2525,15 @@ public class PathExecutor
             {
                 Logger.LogInformation("[联机] 回点检测到攀爬，发送 Drop 脱离");
                 Simulation.SendInput.SimulateAction(GIActions.Drop);
-                await Delay(500, ct);
+                if (num % 2 == 0)
+                {
+                    //向左走一下
+                    Simulation.SendInput.SimulateAction(GIActions.MoveLeft, KeyType.KeyPress);
+                }
+                else
+                {
+                    Simulation.SendInput.SimulateAction(GIActions.MoveRight, KeyType.KeyPress);
+                }
             }
 
              (position, additionalTimeInMs) = await GetPositionAndTime(screen2, waypoint,isPoint);

@@ -93,6 +93,19 @@ public class Avatar
     public bool IsBurstReady { get; set; }
 
     /// <summary>
+    /// 阿蕾奇诺红血才放Q 门控开关（运行期由 AutoFightTask 经 AutoFightParam 注入当前配置组/独立任务的值）。
+    /// 默认 false：不门控，正常放Q。仅在战斗启动注入；其他放Q路径（秘境/深渊等）保持默认 false 不感知。
+    /// 详见 .kiro/specs/arlecchino-q-low-hp-gate/design.md。
+    /// </summary>
+    public bool ArlecchinoBurstLowHpGateEnabled { get; set; } = false;
+
+    /// <summary>
+    /// 玛薇卡摩托状态检测开关（位置1：重击分支用）。运行期由 AutoFightTask 经 AutoFightParam 注入当前配置组/独立任务的值，
+    /// 替代原先读全局 AutoFightConfig 的做法，修复"配置组开关对位置1失效"问题。默认 false。
+    /// </summary>
+    public bool MavuikaMotorcycleCheckEnabled { get; set; } = false;
+
+    /// <summary>
     /// 名字所在矩形位置
     /// </summary>
     public Rect NameRect { get; set; }
@@ -959,7 +972,7 @@ public class Avatar
         }
 
         // 阿蕾奇诺红血才放Q门控：复用 region1，红血才继续释放，非红血跳过；检测异常兜底放Q。
-        if (ArlecchinoBurstGateDecisions.ShouldGate(TaskContext.Instance().Config.AutoFightConfig, Name))
+        if (ArlecchinoBurstGateDecisions.ShouldGate(ArlecchinoBurstLowHpGateEnabled, Name))
         {
             bool releaseQ = true;
             try
@@ -1325,9 +1338,9 @@ public class Avatar
 
             Simulation.SendInput.SimulateAction(GIActions.NormalAttack, KeyType.KeyUp);
         }
-        else if (TaskContext.Instance().Config.AutoFightConfig.MavuikaMotorcycleCheckEnabled && Name == "玛薇卡")
+        else if (MavuikaMotorcycleCheckEnabled && Name == "玛薇卡")
         {
-            // 玛薇卡摩托状态检测开关（位置1：读全局战斗配置）。关闭时跳过检测与开摩托
+            // 玛薇卡摩托状态检测开关（位置1：读注入的配置组/独立任务开关，非全局）。关闭时跳过检测与开摩托
             //摩托状态才执行
             Sleep(200);
             using var region = CaptureToRectArea();
@@ -1534,7 +1547,7 @@ public class Avatar
     public void KeyPress(string key)
     {
         var vk = KeyBindingsSettingsPageViewModel.MappingKey(User32Helper.ToVk(key));
-        if (ArlecchinoBurstGateDecisions.ShouldGate(TaskContext.Instance().Config.AutoFightConfig, Name) && key == "VK_Q")
+        if (ArlecchinoBurstGateDecisions.ShouldGate(ArlecchinoBurstLowHpGateEnabled, Name) && vk == User32.VK.VK_Q)
         {
             // 阿蕾奇诺红血才放Q：红血放Q，非红血跳过；检测异常兜底放Q。
             bool releaseQ = true;

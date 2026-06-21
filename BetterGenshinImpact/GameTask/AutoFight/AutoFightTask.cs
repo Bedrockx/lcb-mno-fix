@@ -700,6 +700,13 @@ public class AutoFightTask : ISoloTask
         ct.Register(cts2.Cancel);
 
         combatScenes.BeforeTask(cts2.Token);
+        // 注入阿蕾奇诺红血门控开关到每个角色（让 Avatar.KeyPress/UseBurst 读到当前配置组/独立任务的开关值，
+        // 而非全局 AutoFightConfig；修复"配置组开关失效"问题）。
+        foreach (var avatarToInit in combatScenes.GetAvatars())
+        {
+            avatarToInit.ArlecchinoBurstLowHpGateEnabled = _taskParam.ArlecchinoBurstLowHpGateEnabled;
+            avatarToInit.MavuikaMotorcycleCheckEnabled = _taskParam.MavuikaMotorcycleCheckEnabled;
+        }
         TimeSpan fightTimeout = TimeSpan.FromSeconds(_taskParam.Timeout); // 战斗超时时间
         Stopwatch timeoutStopwatch = Stopwatch.StartNew();
 

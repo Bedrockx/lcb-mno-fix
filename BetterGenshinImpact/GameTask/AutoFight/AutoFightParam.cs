@@ -48,6 +48,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         KazuhaPickupEnabled = autoFightConfig.KazuhaPickupEnabled;
         ActionSchedulerByCd = autoFightConfig.ActionSchedulerByCd;
         MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
+        ArlecchinoBurstLowHpGateEnabled = autoFightConfig.ArlecchinoBurstLowHpGateEnabled;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;
@@ -118,6 +119,12 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
     /// 位置2 (AutoFightTask.cs 非重击分支) 通过 _taskParam 读取本字段决定是否执行摩托检测。默认 false。
     /// </summary>
     public bool MavuikaMotorcycleCheckEnabled { get; set; } = false;
+
+    /// <summary>
+    /// 阿蕾奇诺红血才放Q 门控开关（透传自配置组 / 全局 AutoFightConfig）。
+    /// AutoFightTask 在战斗启动时把本值注入到每个 Avatar 实例，使 KeyPress / UseBurst 读到正确实例的开关。默认 false。
+    /// </summary>
+    public bool ArlecchinoBurstLowHpGateEnabled { get; set; } = false;
     public string KazuhaPartyName;
     public string OnlyPickEliteDropsMode = "";
     public string GuardianAvatar { get; set; } = string.Empty;
@@ -206,6 +213,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         KazuhaPickupEnabled = autoFightConfig.KazuhaPickupEnabled;
         ActionSchedulerByCd = autoFightConfig.ActionSchedulerByCd;
         MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
+        ArlecchinoBurstLowHpGateEnabled = autoFightConfig.ArlecchinoBurstLowHpGateEnabled;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;
