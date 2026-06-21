@@ -77,6 +77,14 @@ public class AnomalyDetector
         {
             try
             {
+                // 联机按线路切角色期间抑制异常检测的输入（空格/ESC 等），避免在配队/筛选/角色选择界面误按导致关界面
+                if (TemplatePickupService.SuppressPickupInput)
+                {
+                    await Task.Delay(50, ct);
+                    loopCount++;
+                    continue;
+                }
+
                 // 每约250ms检测一次（5次循环 × 50ms）
                 if (loopCount % 5 == 0)
                 {

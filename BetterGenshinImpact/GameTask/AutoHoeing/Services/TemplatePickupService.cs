@@ -23,6 +23,14 @@ public class TemplatePickupService
 {
     private static readonly ILogger Logger = App.GetLogger<TemplatePickupService>();
 
+    /// <summary>
+    /// 联机按线路切角色期间的「后台子任务输入抑制」开关（hoeing-multiplayer-per-route-switch-roles）。
+    /// 置 true 时：拾取循环跳过滚轮翻页与按 F；异常检测循环跳过空格/ESC 等输入。
+    /// 避免在配队/筛选/角色选择界面误操作（滚走元素图标、误按 ESC 关界面）。
+    /// 由 PathExecutor 在换角色 SwitchAsync 外置位/复位，换角色结束后复位 false。其它路径不感知（默认 false）。
+    /// </summary>
+    public static volatile bool SuppressPickupInput = false;
+
     private RecognitionObject? _fIconRo;
     private readonly List<TargetItem> _targetItems = new();
 
@@ -126,6 +134,13 @@ public class TemplatePickupService
         {
             try
             {
+                // 联机按线路切角色期间抑制拾取输入：跳过本轮所有滚轮/按键，避免干扰配队筛选界面
+                if (SuppressPickupInput)
+                {
+                    await Task.Delay(checkDelay, ct);
+                    continue;
+                }
+
                 using var region = CaptureToRectArea();
 
                 // 识别F图标

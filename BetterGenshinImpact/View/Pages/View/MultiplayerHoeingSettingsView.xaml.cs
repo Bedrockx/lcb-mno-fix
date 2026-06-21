@@ -53,7 +53,7 @@ public partial class MultiplayerHoeingSettingsView : UserControl
     // 内置线路按钮组动态容器（迁现状 builtinRouteContainer / importRow / buttonPanel）
     private System.Windows.Controls.StackPanel? _builtinRouteContainer;
     private System.Windows.Controls.StackPanel? _importRow;
-    private System.Windows.Controls.WrapPanel? _builtinButtonPanel;
+    private System.Windows.Controls.Panel? _builtinButtonPanel;
 
     private readonly RouteDirectoryScanner _routeScanner = new();
     private readonly ILogger<MultiplayerHoeingSettingsView> _logger = App.GetLogger<MultiplayerHoeingSettingsView>();
@@ -450,18 +450,27 @@ public partial class MultiplayerHoeingSettingsView : UserControl
                 Margin = new Thickness(0, 8, 0, 4)
             });
 
-            var buttonPanel = new System.Windows.Controls.WrapPanel { Orientation = System.Windows.Controls.Orientation.Horizontal };
+            // 每行一个文件夹：竖直 StackPanel 承载，每行是「线路按钮 + ⚙角色」的水平 StackPanel
+            var buttonPanel = new System.Windows.Controls.StackPanel { Orientation = System.Windows.Controls.Orientation.Vertical };
             _builtinButtonPanel = buttonPanel;
             var selectedRoute = GetStr("selectedBuiltinRoute", _globalCfg.SelectedBuiltinRoute);
+            var routeButtons = new List<System.Windows.Controls.Button>();
 
             foreach (var folder in builtinFolders)
             {
+                var row = new System.Windows.Controls.StackPanel
+                {
+                    Orientation = System.Windows.Controls.Orientation.Horizontal,
+                    Margin = new Thickness(0, 0, 0, 6)
+                };
+
                 var btn = new System.Windows.Controls.Button
                 {
                     Content = folder.FolderName,
-                    Margin = new Thickness(0, 0, 8, 8),
+                    Margin = new Thickness(0, 0, 8, 0),
                     Tag = folder.FolderName
                 };
+                routeButtons.Add(btn);
 
                 // 设置按钮样式 - 使用基本的 WPF 样式而不是 WPF UI 的 Appearance
                 if (folder.FolderName == selectedRoute)
@@ -477,18 +486,35 @@ public partial class MultiplayerHoeingSettingsView : UserControl
 
                 btn.Click += (s, e) =>
                 {
-                    // 更新所有按钮样式
-                    foreach (var child in buttonPanel.Children.OfType<System.Windows.Controls.Button>())
+                    // 更新所有线路主按钮样式（仅线路按钮，不含 ⚙角色 按钮）
+                    foreach (var rb in routeButtons)
                     {
-                        child.Background = SystemColors.ControlBrush;
-                        child.Foreground = SystemColors.ControlTextBrush;
+                        rb.Background = SystemColors.ControlBrush;
+                        rb.Foreground = SystemColors.ControlTextBrush;
                     }
                     btn.Background = SystemColors.HighlightBrush;
                     btn.Foreground = SystemColors.HighlightTextBrush;
                     _settings["selectedBuiltinRoute"] = btn.Tag.ToString();
                 };
 
-                buttonPanel.Children.Add(btn);
+                row.Children.Add(btn);
+
+                // 按线路切角色（hoeing-multiplayer-per-route-switch-roles）：
+                // 在文件夹主按钮旁新增「⚙角色」小按钮，点击弹出该文件夹线路角色配置弹窗。
+                // 不改动主按钮「点击=选中线路」的现有语义，仅在同一行内追加（纯加法）。
+                var cfgRolesBtn = new System.Windows.Controls.Button
+                {
+                    Content = "⚙角色",
+                    Margin = new Thickness(0, 0, 0, 0),
+                    Tag = folder.FullPath,
+                };
+                // 局部变量捕获 folder 字段，避免闭包捕获循环变量问题
+                var folderNameForDialog = folder.FolderName;
+                var folderFullPathForDialog = folder.FullPath;
+                cfgRolesBtn.Click += async (_, _) => await OnConfigureRouteRoles(folderNameForDialog, folderFullPathForDialog);
+                row.Children.Add(cfgRolesBtn);
+
+                buttonPanel.Children.Add(row);
             }
 
             _builtinRouteContainer.Children.Add(buttonPanel);
@@ -515,7 +541,9 @@ public partial class MultiplayerHoeingSettingsView : UserControl
         var buttonsEnabled = useFixedRoutes && !hasManualPath;
 
         // 可见性统一由 XAML 绑定 ShowManualRoute 控制，本方法只管按钮启用/高亮
-        foreach (var btn in _builtinButtonPanel.Children.OfType<System.Windows.Controls.Button>())
+        // 按钮现嵌在每行的 StackPanel 内，需递归收集所有 Button
+        var allButtons = EnumerateButtons(_builtinButtonPanel).ToList();
+        foreach (var btn in allButtons)
         {
             btn.IsEnabled = buttonsEnabled;
         }
@@ -523,11 +551,22 @@ public partial class MultiplayerHoeingSettingsView : UserControl
         // 如果不满足条件，清除选择状态
         if (!buttonsEnabled)
         {
-            foreach (var btn in _builtinButtonPanel.Children.OfType<System.Windows.Controls.Button>())
+            foreach (var btn in allButtons)
             {
                 btn.Background = SystemColors.ControlBrush;
                 btn.Foreground = SystemColors.ControlTextBrush;
             }
+        }
+    }
+
+    // 递归收集面板内所有 Button（每行文件夹的按钮嵌在行 StackPanel 内）
+    private static IEnumerable<System.Windows.Controls.Button> EnumerateButtons(System.Windows.Controls.Panel panel)
+    {
+        foreach (var child in panel.Children)
+        {
+            if (child is System.Windows.Controls.Button b) yield return b;
+            else if (child is System.Windows.Controls.Panel p)
+                foreach (var inner in EnumerateButtons(p)) yield return inner;
         }
     }
 
@@ -613,6 +652,117 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             // 兜底：任何未预期异常都不应让弹窗崩溃（Req 6.2/6.3/6.4）
             _logger.LogWarning(ex, "[导入线路] 导入流程发生未预期异常");
             Toast.Error("导入失败，请查看日志");
+        }
+    }
+
+    // ===== 按线路切角色配置弹窗（hoeing-multiplayer-per-route-switch-roles）=====
+
+    /// <summary>
+    /// 为某内置线路文件夹弹出「配置线路角色」弹窗：列出该文件夹下所有线路文件，每行 1 号位 / 2 号位
+    /// 角色名输入框，预填已存映射。确认后合并其它文件夹已存条目 + 本文件夹新值 → 序列化写 _settings。
+    /// R1.1/R1.3/R1.4/R1.5, R2.1/R2.2。布局用 Grid 承载行内列（ui-layout-debugging-discipline）。
+    /// </summary>
+    private async Task OnConfigureRouteRoles(string folderName, string folderFullPath)
+    {
+        try
+        {
+            var files = _routeScanner.ListRouteFiles(folderFullPath);
+            // 读取已存映射，预填该文件夹的条目
+            var existing = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PerRouteSwitchRolesDecisions
+                .ParseRoutes(_settings.TryGetValue("perRouteSwitchRoles", out var raw) ? raw : null);
+
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(8) };
+
+            // 表头行：线路 / 1号位 / 2号位（列定义与下方数据行一致：*,120,120）
+            var headerGrid = new System.Windows.Controls.Grid { Margin = new Thickness(0, 0, 0, 4) };
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+            headerGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+            var hLine = new TextBlock { Text = "线路", FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            var h1 = new TextBlock { Text = "1号位", FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center };
+            var h2 = new TextBlock { Text = "2号位", FontWeight = FontWeights.Bold, HorizontalAlignment = HorizontalAlignment.Center };
+            System.Windows.Controls.Grid.SetColumn(hLine, 0);
+            System.Windows.Controls.Grid.SetColumn(h1, 1);
+            System.Windows.Controls.Grid.SetColumn(h2, 2);
+            headerGrid.Children.Add(hLine);
+            headerGrid.Children.Add(h1);
+            headerGrid.Children.Add(h2);
+            panel.Children.Add(headerGrid);
+            if (files.Count == 0)
+            {
+                panel.Children.Add(new TextBlock { Text = "该文件夹无线路文件", Margin = new Thickness(0, 8, 0, 2) });
+            }
+
+            // 每行：线路名只读 + 1号位 TextBox + 2号位 TextBox，用 Grid 承载（列 *,120,120）
+            var rowControls = new List<(string RouteId, TextBox P1, TextBox P2)>();
+            foreach (var f in files)
+            {
+                var routeId = $"{folderName}/{f.RelativeId}";
+                existing.TryGetValue(routeId, out var entry);
+
+                var grid = new System.Windows.Controls.Grid { Margin = new Thickness(0, 4, 0, 0) };
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+
+                var nameCell = new TextBlock { Text = f.RelativeId, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+                var p1 = new TextBox { Text = entry?.Position1 ?? "", PlaceholderText = "1号位", Margin = new Thickness(2, 0, 2, 0) };
+                var p2 = new TextBox { Text = entry?.Position2 ?? "", PlaceholderText = "2号位", Margin = new Thickness(2, 0, 2, 0) };
+                System.Windows.Controls.Grid.SetColumn(nameCell, 0);
+                System.Windows.Controls.Grid.SetColumn(p1, 1);
+                System.Windows.Controls.Grid.SetColumn(p2, 2);
+                grid.Children.Add(nameCell);
+                grid.Children.Add(p1);
+                grid.Children.Add(p2);
+                panel.Children.Add(grid);
+                rowControls.Add((routeId, p1, p2));
+            }
+
+            var scroll = new System.Windows.Controls.ScrollViewer
+            {
+                Content = panel,
+                VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+                MaxHeight = 500,
+            };
+
+            var dialog = new Wpf.Ui.Controls.MessageBox
+            {
+                Title = $"配置线路角色 - {folderName}",
+                Content = scroll,
+                PrimaryButtonText = "确定",
+                CloseButtonText = "取消",
+                Owner = Application.Current.MainWindow,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            };
+            var r = await dialog.ShowDialogAsync();
+            if (r != MessageBoxResult.Primary) return;
+
+            // 确认：合并已存其它文件夹条目 + 本文件夹新值 → 序列化写 _settings
+            var merged = new Dictionary<string, BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.RouteRoleEntry>(existing);
+            // 先移除本文件夹下所有旧条目（routeId 以 "{folderName}/" 开头），再用新值覆盖
+            var prefix = folderName + "/";
+            foreach (var key in merged.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList())
+                merged.Remove(key);
+            foreach (var (routeId, p1, p2) in rowControls)
+            {
+                var e = new BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.RouteRoleEntry
+                {
+                    RouteId = routeId,
+                    Position1 = p1.Text?.Trim() ?? "",
+                    Position2 = p2.Text?.Trim() ?? ""
+                };
+                if (BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PerRouteSwitchRolesDecisions.RouteNeedsSwitch(e))
+                    merged[routeId] = e;
+            }
+            _settings["perRouteSwitchRoles"] =
+                BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PerRouteSwitchRolesDecisions.SerializeRoutes(merged);
+            Toast.Success("线路角色配置已保存");
+        }
+        catch (Exception ex)
+        {
+            // 弹窗构建/读写异常不应让配置弹窗崩溃（可恢复异常）
+            _logger.LogWarning(ex, "[按线路切角色] 配置弹窗异常");
+            Toast.Warning("配置线路角色失败，请查看日志");
         }
     }
 
@@ -962,6 +1112,8 @@ public partial class MultiplayerHoeingSettingsView : UserControl
         }
         // 单机模式清除开锄前换武器配置（与现有联机专属字段处理一致，避免残留值被执行层误读）
         _settings.Remove("preSwitchWeaponRows");
+        // 单机模式清除按线路切角色配置（hoeing-multiplayer-per-route-switch-roles，联机专属字段）
+        _settings.Remove("perRouteSwitchRoles");
     }
 
     // 变体偏好写入（迁现状）：不分联机/单机，Save 末尾统一

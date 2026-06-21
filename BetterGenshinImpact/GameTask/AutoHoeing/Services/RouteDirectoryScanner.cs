@@ -94,6 +94,52 @@ public class RouteDirectoryScanner
 
         return folders;
     }
+
+    /// <summary>
+    /// 列出某内置线路文件夹下递归扫描到的所有 *.json 线路文件，返回稳定相对标识列表（R1.2）。
+    /// 标识 = 相对该文件夹的相对路径（含变体子文件夹），用 '/' 归一分隔符，按序数升序排序保证稳定（R1.1）。
+    /// 文件夹不存在 / 无 json → 返回空列表，不抛异常（R1.3）。
+    /// 不修改 ScanBuiltinRoutes（§Unchanged Behavior 第 6 条），仅新增本方法。
+    /// </summary>
+    /// <param name="folderFullPath">BuiltinRouteFolder.FullPath</param>
+    public List<RouteFileItem> ListRouteFiles(string folderFullPath)
+    {
+        var items = new List<RouteFileItem>();
+        if (string.IsNullOrEmpty(folderFullPath) || !Directory.Exists(folderFullPath))
+        {
+            return items;   // 空列表，不抛（R1.3）
+        }
+
+        try
+        {
+            var files = Directory.GetFiles(folderFullPath, "*.json", SearchOption.AllDirectories);
+            foreach (var f in files)
+            {
+                var rel = Path.GetRelativePath(folderFullPath, f).Replace('\\', '/');
+                items.Add(new RouteFileItem { RelativeId = rel, FullPath = f });
+            }
+            items.Sort((a, b) => string.CompareOrdinal(a.RelativeId, b.RelativeId)); // 稳定排序
+        }
+        catch (Exception ex)
+        {
+            // 扫描失败不应阻断弹窗（可恢复异常）：记录并返回已收集项
+            Logger.LogWarning(ex, "[线路清单] 扫描文件夹失败: {Path}", folderFullPath);
+        }
+
+        return items;
+    }
+}
+
+/// <summary>
+/// 文件夹内单条线路文件标识。
+/// </summary>
+public class RouteFileItem
+{
+    /// <summary>相对该文件夹的相对路径（'/' 分隔），唯一且稳定，作为映射键。</summary>
+    public string RelativeId { get; set; } = "";
+
+    /// <summary>线路文件绝对路径（仅 UI 展示/调试用，不入持久化）。</summary>
+    public string FullPath { get; set; } = "";
 }
 
 /// <summary>

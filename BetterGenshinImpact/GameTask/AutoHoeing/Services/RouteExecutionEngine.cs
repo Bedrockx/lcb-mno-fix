@@ -37,10 +37,16 @@ public class RouteExecutionEngine
     // 当前正在执行的 PathExecutor 引用（联机模式下供 AnomalyDetector 信号传递使用）
     private PathExecutor? _activeExecutor;
 
+    // 按线路切角色 Provider（hoeing-multiplayer-per-route-switch-roles）：仅联机 + 配了角色时注入 Hook。
+    private PerRouteSwitchRolesProvider? _perRouteSwitchProvider;
+
     // 反复复苏双层兜底（multi-revival-rapid-recurrence-fallback spec）：
     // 路线生命周期内累计复苏时间戳，OnMultiplayerDefeatedDetected 时调用 Track 决定 escalation 动作；
     // ExecuteRoute 入口 Reset 同时覆盖多世界轮换（design §2.6）。
     private readonly RevivalRecurrenceTracker _revivalTracker = new();
+
+    /// <summary>注入按线路切角色 Provider（hoeing-multiplayer-per-route-switch-roles）。null = 不启用。</summary>
+    public void SetPerRouteSwitchProvider(PerRouteSwitchRolesProvider? provider) => _perRouteSwitchProvider = provider;
 
     public void SetCoordinator(MultiplayerCoordinator? coordinator)
     {
@@ -177,6 +183,17 @@ public class RouteExecutionEngine
                     {
                         Logger.LogDebug("[联机] MultiplayerEnabled={Enabled}，coordinator={HasCoord}，单机模式执行",
                             _config.MultiplayerEnabled, _coordinator != null);
+                    }
+                    
+                    // 按线路切角色（hoeing-multiplayer-per-route-switch-roles）：仅联机 + 配了角色时注入 Hook
+                    if (_config.MultiplayerEnabled && _coordinator != null && _perRouteSwitchProvider != null)
+                    {
+                        var perRouteHook = _perRouteSwitchProvider.BuildHookForRoute(route);
+                        if (perRouteHook != null)
+                        {
+                            executor.PerRouteSwitchHook = perRouteHook;
+                            Logger.LogInformation("[联机][按线路切角色] 线路 {Name} 已注入切角色 Hook", route.FileName);
+                        }
                     }
                     
                     // 注册当前 executor，供 AnomalyDetector 异步信号使用

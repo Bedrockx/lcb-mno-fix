@@ -2,6 +2,7 @@ using BetterGenshinImpact.Core.Config;
 using BetterGenshinImpact.Core.Recognition;
 using BetterGenshinImpact.Core.Simulator;
 using BetterGenshinImpact.GameTask.AutoFight.Model;
+using BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
 using BetterGenshinImpact.GameTask.AutoTrackPath;
 using BetterGenshinImpact.GameTask.Common.Job;
 using BetterGenshinImpact.GameTask.Model.Area;
@@ -42,6 +43,13 @@ public class AutoSwitchRolesTask : ISoloTask
     /// <summary>配置组名称。</summary>
     private readonly string? _groupName;
 
+    /// <summary>
+    /// 联机切角色覆盖参数（hoeing-multiplayer-per-route-switch-roles）。null = 单机原行为。
+    /// 非 null 时 Start 分流走 RunMultiplayerProbeModeAsync（去切队 + 号位动态探测 + MapCloseButton 判定），
+    /// 单机调用方不传此参数 → 恒 null → 逐字节走原 RunRecommendedModeAsync。
+    /// </summary>
+    private readonly MultiplayerSwitchOverride? _mpOverride;
+
     private AutoSwitchRolesResources _res = null!;
 
     /// <summary>当前单轮打开配对界面尝试次数。</summary>
@@ -51,11 +59,13 @@ public class AutoSwitchRolesTask : ISoloTask
     private int _totalOpenTries;
 
     public AutoSwitchRolesTask(PathingPartyConfig? partyConfig = null,
-        Dictionary<string, object?>? settings = null, string? groupName = null)
+        Dictionary<string, object?>? settings = null, string? groupName = null,
+        MultiplayerSwitchOverride? mpOverride = null)
     {
         _partyConfig = partyConfig;
         _settingsOverride = settings;
         _groupName = groupName;
+        _mpOverride = mpOverride;
     }
 
     public async Task Start(CancellationToken ct)
@@ -95,12 +105,22 @@ public class AutoSwitchRolesTask : ISoloTask
             switch (mode)
             {
                 case SwitchRolesMode.Recommended:
-                    // 切换队伍（R6.2）：仅 RecommendedMode 在主流程前切
-                    if (!string.IsNullOrEmpty(_config.SwitchPartyName))
+                    if (_mpOverride != null)
                     {
-                        await new SwitchPartyTask().Start(_config.SwitchPartyName, _ct);
+                        // 联机（hoeing-multiplayer-per-route-switch-roles）：R5 不切队（不读 SwitchPartyName）
+                        // + 号位动态探测。走全新联机专属方法，单机方法一字不动。
+                        await RunMultiplayerProbeModeAsync();
                     }
-                    await RunRecommendedModeAsync();
+                    else
+                    {
+                        // 单机原路径，逐字节不变
+                        // 切换队伍（R6.2）：仅 RecommendedMode 在主流程前切
+                        if (!string.IsNullOrEmpty(_config.SwitchPartyName))
+                        {
+                            await new SwitchPartyTask().Start(_config.SwitchPartyName, _ct);
+                        }
+                        await RunRecommendedModeAsync();
+                    }
                     break;
                 case SwitchRolesMode.QuickPair:
                     await RunQuickPairModeAsync();
@@ -532,6 +552,302 @@ public class AutoSwitchRolesTask : ISoloTask
         }
 
         return true;
+    }
+
+    // ====================== 联机号位动态探测模式 RunMultiplayerProbeModeAsync（hoeing-multiplayer-per-route-switch-roles） ======================
+    //
+    // 仅当 _mpOverride != null（联机执行层注入）时由 Start 分流进入。全新方法，不触碰任何单机方法
+    // （RunRecommendedModeAsync / SwitchCharactersRecommended / OpenPairingInterface / QuickPairMode 一字不动）。
+    // R5 去切队（Start 分流已跳过 SwitchPartyTask）；R6 配队页判定用 MapCloseButton（_mpOverride.IsPairingPageOpen）；
+    // R7 号位动态探测（逐格点击 + 300ms + MapCloseButton 消失=命中）；R8 换角色交互复用单机找头像/更换-加入。
+
+    private async Task RunMultiplayerProbeModeAsync()
+    {
+        // 0. 解析别名 + 裁剪可操作数（R9）。联机仅 1/2 号位。
+        var initialAvatars = GetAvatars();
+        var operable = initialAvatars.Length;
+        var resolved = new[]
+        {
+            AutoSwitchRolesDecisions.ResolvePosition(_config.Position1, _res.AliasMap),
+            AutoSwitchRolesDecisions.ResolvePosition(_config.Position2, _res.AliasMap),
+        };
+        var clamped = PerRouteSwitchRolesDecisions.ClampTargetsToOperableCount(resolved, operable);
+
+        if (clamped.Count == 0 || clamped.All(t => t == null))
+        {
+            _logger.LogInformation("[联机切角色] 裁剪后无号位需切换（可操作数={Operable}），跳过", operable); // R9.5
+            await new ReturnMainUiTask().Start(_ct);
+            return;
+        }
+
+        var coords = _mpOverride!.PositionCoordinates;
+        var replaceTpl = _res.TryReadTemplate("Assets/RecognitionObject/更换.png");
+        var joinTpl = _res.TryReadTemplate("Assets/RecognitionObject/加入.png");
+        // 复用单机推荐模式筛选：按 attribute.txt 的「角色→元素/武器」先筛选再找角色（与单机一致）
+        var filterConfig = _res.LoadFilterConfig();
+        var noResultTpl = _res.TryReadTemplate("Assets/RecognitionObject/暂无筛选结果.png");
+
+        // 1. 探测「我的 1 号位」（R7.2/R7.3/R7.4），最多重试 ProbeMaxRetries 次（R7.6/R7.7）
+        var firstHitIndex = -1;
+        for (int retry = 0; retry <= _mpOverride.ProbeMaxRetries; retry++)
+        {
+            if (!await EnsurePairingPageOpenMultiplayer()) continue; // 按 L 打开 + MapCloseButton 判定（R6.1）
+
+            for (int i = 0; i < coords.Length; i++)
+            {
+                var before = IsMultiplayerPairingPageOpen();      // 点前 MapCloseButton 应存在
+                Click(coords[i].X, coords[i].Y);
+                await Delay(_mpOverride.ProbeClickWaitMs, _ct);    // R7.2 等 300ms
+                var after = IsMultiplayerPairingPageOpen();
+                if (PerRouteSwitchRolesDecisions.IsMyPositionDetected(before, after)) // before && !after
+                {
+                    firstHitIndex = i;                            // 命中：已进入角色选择页，不再点该格（R7.4）
+                    break;
+                }
+                // 未命中：MapCloseButton 仍在，点不开，继续下一候选（R7.3）
+            }
+
+            if (firstHitIndex >= 0) break;
+            _logger.LogInformation("[联机切角色] 第 {Round} 轮探测未命中任何号位", retry + 1);
+        }
+
+        if (firstHitIndex < 0)
+        {
+            // R7.7：重试耗尽仍未命中 → 放弃本次切换，记警告，不阻断（上层 PathExecutor 仍按 R10.5 上报到达）
+            _logger.LogWarning("[联机切角色] 号位探测重试 {Max} 次仍未命中，放弃本次切换", _mpOverride.ProbeMaxRetries);
+            await new ReturnMainUiTask().Start(_ct);
+            return;
+        }
+
+        // 2. 换 1 号位（已在角色选择页）：复用单机「找头像→翻页→更换/加入」交互（R7.4/R8）
+        var target1 = clamped[0];
+        if (target1 != null)
+        {
+            _logger.LogInformation("[联机切角色] 命中 1 号位（候选索引 {Idx}），切换为「{Name}」", firstHitIndex, target1);
+            await SwitchOneCharacterOnSelectionPage(target1, replaceTpl, joinTpl, filterConfig, noResultTpl);
+        }
+        else
+        {
+            // 1 号位目标为空但 2 号位有目标：退出角色选择页回配队页，便于后续点 2 号位
+            KeyPress(User32.VK.VK_ESCAPE);
+            await Delay(500, _ct);
+        }
+
+        // 3. 2 号位（R7.5）：可操作数≥2 且 clamped[1] 非空时，直接点「命中索引 +1」候选，不再探测
+        var target2 = clamped.Count >= 2 ? clamped[1] : null;
+        var secondIdx = PerRouteSwitchRolesDecisions.Resolve2ndPositionCandidateIndex(firstHitIndex, coords.Length);
+        if (target2 != null && secondIdx != null)
+        {
+            if (await EnsurePairingPageOpenMultiplayer())
+            {
+                var before = IsMultiplayerPairingPageOpen();
+                Click(coords[secondIdx.Value].X, coords[secondIdx.Value].Y);
+                await Delay(_mpOverride.ProbeClickWaitMs, _ct);
+                var after = IsMultiplayerPairingPageOpen();
+                if (PerRouteSwitchRolesDecisions.IsMyPositionDetected(before, after))
+                {
+                    _logger.LogInformation("[联机切角色] 切换 2 号位（候选索引 {Idx}）为「{Name}」", secondIdx.Value, target2);
+                    await SwitchOneCharacterOnSelectionPage(target2, replaceTpl, joinTpl, filterConfig, noResultTpl);
+                }
+                else
+                {
+                    _logger.LogWarning("[联机切角色] 2 号位候选（索引 {Idx}）点不开，跳过 2 号位", secondIdx.Value); // 不阻断
+                }
+            }
+        }
+
+        await new ReturnMainUiTask().Start(_ct);
+        // 切换完角色后立即重新识别队伍并刷新缓存，确保后续锄地/战斗用的是切换后的新角色
+        RunnerContext.Instance.ClearCombatScenes();
+        try
+        {
+            await RunnerContext.Instance.GetCombatScenes(_ct, forceRefresh: true);
+            _logger.LogInformation("[联机切角色] 切换完成，已重新识别队伍并刷新缓存");
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            // 重识别失败不阻断后续流程：后续锄地/战斗的角色识别本身也有兜底
+            _logger.LogWarning(ex, "[联机切角色] 切换后重新识别队伍失败，继续后续流程");
+        }
+    }
+
+    /// <summary>联机配队页「已打开」判定：右上角 MapCloseButton 存在。委托缺失时按未打开处理。</summary>
+    private bool IsMultiplayerPairingPageOpen()
+        => _mpOverride?.IsPairingPageOpen != null && _mpOverride.IsPairingPageOpen();
+
+    /// <summary>
+    /// 联机：按 L 打开配队页，循环用 MapCloseButton 判定直到存在或单轮重试耗尽（R6.1/R6.3）。
+    /// 不读「队伍配置.png」，与单机 OpenPairingInterface 互不影响。
+    /// </summary>
+    private async Task<bool> EnsurePairingPageOpenMultiplayer()
+    {
+        if (IsMultiplayerPairingPageOpen()) return true;
+        for (int tries = 0; AutoSwitchRolesDecisions.ShouldRetrySingleRound(tries); tries++)
+        {
+            KeyPress(User32.VK.VK_L);
+            await Delay(3200, _ct);
+            if (IsMultiplayerPairingPageOpen()) return true;
+        }
+        _logger.LogWarning("[联机切角色] 按 L 后未检测到配队页（MapCloseButton）打开");
+        return false;
+    }
+
+    /// <summary>
+    /// 联机：在已进入的角色选择页上，复用单机「（按 attribute.txt 筛选）→ 找头像（多页翻页）→ 点更换/加入 → ESC 兜底」
+    /// 交互切换为目标角色（R8/OQ-7）。筛选逻辑与单机 SwitchCharactersRecommended 完全一致。不改动单机方法。
+    /// </summary>
+    private async Task SwitchOneCharacterOnSelectionPage(string targetName, Mat? replaceTpl, Mat? joinTpl,
+        Dictionary<string, (string? Element, string? Weapon)> filterConfig, Mat? noResultTpl)
+    {
+        // 筛选块（与单机一致）：仅当 filterConfig 有该角色 且 noResultTpl 可用
+        var hasNoFilterResult = false;
+        if (filterConfig.TryGetValue(targetName, out var f) && noResultTpl != null)
+        {
+            _logger.LogInformation("[联机切角色] 对角色「{Name}」执行筛选: 元素={Element}, 武器={Weapon}",
+                targetName, f.Element ?? "空", f.Weapon ?? "空");
+            var filterTpl = _res.TryReadTemplate("Assets/RecognitionObject/筛选.png");
+            if (filterTpl != null)
+            {
+                var filterBtn = CaptureToRectArea().Find(RecognitionObject.TemplateMatch(filterTpl, 0, 0, 1920, 1080));
+                if (filterBtn.IsExist())
+                {
+                    filterBtn.Click();
+                    await Delay(200, _ct);
+
+                    // 复位筛选选项列表到最上方（双击滚动条顶端 797,120），避免列表停在被滚过的位置导致点错元素/武器
+                    Click(797, 120);
+                    await Delay(80, _ct);
+                    Click(797, 120);
+                    await Delay(200, _ct);
+
+                    if (f.Element != null)
+                    {
+                        var elemTpl = _res.TryReadTemplate($"Assets/RecognitionObject/{f.Element}.png");
+                        if (elemTpl != null)
+                        {
+                            var eBtn = CaptureToRectArea().Find(RecognitionObject.TemplateMatch(elemTpl, 0, 0, 1920, 1080));
+                            if (eBtn.IsExist()) { eBtn.Click(); await Delay(200, _ct); }
+                            else _logger.LogWarning("[联机切角色] 未找到元素筛选图标: {Element}", f.Element);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[联机切角色] 元素筛选图标模板缺失，跳过元素筛选: {Element}", f.Element);
+                        }
+                    }
+
+                    if (f.Weapon != null)
+                    {
+                        var wpnTpl = _res.TryReadTemplate($"Assets/RecognitionObject/{f.Weapon}.png");
+                        if (wpnTpl != null)
+                        {
+                            var wBtn = CaptureToRectArea().Find(RecognitionObject.TemplateMatch(wpnTpl, 0, 0, 1920, 1080));
+                            if (wBtn.IsExist()) { wBtn.Click(); await Delay(200, _ct); }
+                            else _logger.LogWarning("[联机切角色] 未找到武器筛选图标: {Weapon}", f.Weapon);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[联机切角色] 武器筛选图标模板缺失，跳过武器筛选: {Weapon}", f.Weapon);
+                        }
+                    }
+
+                    var confirmTpl = _res.TryReadTemplate("Assets/RecognitionObject/确认筛选.png");
+                    if (confirmTpl != null)
+                    {
+                        var confirm = CaptureToRectArea().Find(RecognitionObject.TemplateMatch(confirmTpl, 0, 0, 1920, 1080));
+                        if (confirm.IsExist())
+                        {
+                            confirm.Click();
+                            await Delay(500, _ct);
+
+                            var noResult = CaptureToRectArea().Find(RecognitionObject.TemplateMatch(noResultTpl, 0, 0, 1920, 1080));
+                            if (noResult.IsExist())
+                            {
+                                _logger.LogWarning("[联机切角色] 筛选后无结果，跳过角色「{Name}」", targetName);
+                                hasNoFilterResult = true;
+                                for (int k = 0; k < 3; k++)
+                                {
+                                    KeyPress(User32.VK.VK_ESCAPE);
+                                    await Delay(200, _ct);
+                                }
+                            }
+                        }
+                        else _logger.LogWarning("[联机切角色] 未找到确认筛选图标");
+                    }
+                    else _logger.LogWarning("[联机切角色] 确认筛选图标模板缺失");
+                }
+                else _logger.LogWarning("[联机切角色] 未找到筛选图标");
+            }
+            else _logger.LogWarning("[联机切角色] 筛选图标模板缺失，跳过筛选");
+        }
+
+        if (hasNoFilterResult)
+        {
+            // 筛选无结果：ESC 已退出筛选/角色页，直接返回不切该号位
+            return;
+        }
+
+        // 角色头像查找：最多 3 页，每页内 num 从 1 递增直到头像文件不存在（与单机一致）
+        var characterFound = false;
+        var pageTries = 0;
+        while (pageTries < 3)
+        {
+            for (int num = 1; ; num++)
+            {
+                var mat = _res.TryReadCharacterImage(AutoSwitchRolesDecisions.CharacterImageFileName(targetName, num));
+                if (mat == null) break; // 首个不存在即停
+
+                var res = CaptureToRectArea().Find(RecognitionObject.TemplateMatch(mat, 0, 0, 1920, 1080));
+                if (res.IsExist())
+                {
+                    _logger.LogInformation("[联机切角色] 已找到角色「{Name}」", targetName);
+                    res.Click();
+                    await Delay(200, _ct);
+                    characterFound = true;
+                    break;
+                }
+            }
+
+            if (characterFound) break;
+            if (pageTries < 3)
+            {
+                _logger.LogInformation("[联机切角色] 滚动页面");
+                await ScrollPageAsync(350);
+            }
+            pageTries++;
+        }
+
+        if (!characterFound)
+        {
+            _logger.LogWarning("[联机切角色] 未找到角色「{Name}」，跳过该号位", targetName);
+            KeyPress(User32.VK.VK_ESCAPE);
+            await Delay(500, _ct);
+            return;
+        }
+
+        // 更换 / 加入
+        var replace = replaceTpl != null
+            ? CaptureToRectArea().Find(RecognitionObject.TemplateMatch(replaceTpl, 0, 0, 1920, 1080))
+            : new Region();
+        var join = joinTpl != null
+            ? CaptureToRectArea().Find(RecognitionObject.TemplateMatch(joinTpl, 0, 0, 1920, 1080))
+            : new Region();
+
+        if (replace.IsExist() || join.IsExist())
+        {
+            await Delay(300, _ct);
+            (replace.IsExist() ? replace : join).Click();
+            LeftButtonClick();
+            await Delay(500, _ct);
+        }
+        else
+        {
+            _logger.LogInformation("[联机切角色] 该角色已在队伍中，无需切换");
+            await Delay(300, _ct);
+            KeyPress(User32.VK.VK_ESCAPE);
+            await Delay(500, _ct);
+        }
+        await Delay(500, _ct);
     }
 
     // ====================== 存在bug-快速配对模式 QuickPairMode（R9，含已知缺陷，1:1 移植） ======================

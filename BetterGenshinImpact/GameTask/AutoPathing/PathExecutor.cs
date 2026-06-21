@@ -101,6 +101,16 @@ public class PathExecutor
     private bool _syncPointReached = false;
 
     /// <summary>
+    /// 按线路切角色 Hook（hoeing-multiplayer-per-route-switch-roles）。默认 null = 不启用。
+    /// 由 RouteExecutionEngine 在「该线路配了角色」时注入。承载：本线路是否需切换 +
+    /// 「传送完成后执行切角色」的异步委托。null 时所有相关分支短路（§Unchanged Behavior 第 2/3 条）。
+    /// </summary>
+    public PerRouteSwitchHook? PerRouteSwitchHook { get; set; }
+
+    /// <summary>本线路是否已为「按线路切角色」触发过（每线路 new 新实例，实例级隔离，R4.3）。</summary>
+    private bool _perRouteSwitchDone = false;
+
+    /// <summary>
     /// 异常恢复后，需要在下一个同步点等待前上报 Normal（恢复参与全员判定）。
     /// </summary>
     private bool _needReportNormalBeforeSync = false;
@@ -608,6 +618,15 @@ public class PathExecutor
                                 _wpIdxToSyncIdCache.TryGetValue(CurWaypoint.Item1, out __tpFastSyncId);
                             }
 
+                            // 按线路切角色（hoeing-multiplayer-per-route-switch-roles，R10.1/OQ-8）：
+                            // 本线路首个 teleport 且配了切角色 → 抑制抢报（syncId 透传 null，先切角色再上报到达）。
+                            // PerRouteSwitchHook==null 或本线路无切换时 ResolveFastSyncIdForWaypoint 恒等返回原值，逐字节不变。
+                            bool __isFirstTeleportForSwitch = PerRouteSwitchHook is { RouteHasSwitch: true }
+                                                              && !_perRouteSwitchDone && !_syncPointReached;
+                            __tpFastSyncId = BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer.PerRouteSwitchRolesDecisions
+                                .ResolveFastSyncIdForWaypoint(__tpFastSyncId,
+                                    PerRouteSwitchHook?.RouteHasSwitch ?? false, __isFirstTeleportForSwitch);
+
                             if (MultiplayerCoordinator != null)
                             {
                                 try
@@ -640,6 +659,33 @@ public class PathExecutor
                             {
                                 // Logger.LogInformation("线路切换，强制校验");
                                 await ValidateGameWithTask(task,true);
+                            }
+
+                            // 按线路切角色（hoeing-multiplayer-per-route-switch-roles，R4.1/R10.3/R10.4）：
+                            // 传送完成 → 先切角色 → 切角色成功后再走下方 WaitForAllPlayers 上报到达。
+                            // PerRouteSwitchHook==null 或本线路无切换或已切过 → 整块短路，不换角色路径逐字节不变。
+                            if (PerRouteSwitchHook is { RouteHasSwitch: true } __perRouteHook
+                                && !_perRouteSwitchDone)
+                            {
+                                _perRouteSwitchDone = true;   // 每线路一次性（实例级，R4.3）
+                                // 换角色期间抑制后台拾取输入（滚轮/按F），避免在配队筛选界面误滚动元素图标
+                                BetterGenshinImpact.GameTask.AutoHoeing.Services.TemplatePickupService.SuppressPickupInput = true;
+                                try
+                                {
+                                    Logger.LogInformation("[联机][按线路切角色] 本线路首个传送点到达，先切角色再上报到达");
+                                    await __perRouteHook.SwitchAsync(ct);
+                                }
+                                catch (OperationCanceledException) { throw; }   // R4.5/R10 取消透传
+                                catch (Exception perRouteEx)
+                                {
+                                    // R4.4/R10.5：切角色失败记警告后仍继续 → 下方 WaitForAllPlayers 仍会上报到达，
+                                    // 避免该成员永不上报导致队友无限等待。
+                                    Logger.LogWarning(perRouteEx, "[联机][按线路切角色] 切角色失败，继续上报到达避免队友空等");
+                                }
+                                finally
+                                {
+                                    BetterGenshinImpact.GameTask.AutoHoeing.Services.TemplatePickupService.SuppressPickupInput = false;
+                                }
                             }
 
                             // 联机模式：传送完成后检查是否需要同步等待

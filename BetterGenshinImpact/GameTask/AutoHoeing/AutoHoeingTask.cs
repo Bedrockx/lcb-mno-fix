@@ -89,6 +89,10 @@ public class AutoHoeingTask : ISoloTask
     private bool _preSwitchWeaponDone = false;
     // 解析后的两行换武器配置（来自配置组 settings['preSwitchWeaponRows']），ApplyPreSwitchWeaponRowsOverride 内填充。
     private List<Multiplayer.PreSwitchWeaponRow> _preSwitchWeaponRows = new();
+    // 解析后的按线路切角色映射（来自配置组 settings['perRouteSwitchRoles']），ApplyPerRouteSwitchRolesOverride 内填充。
+    private Dictionary<string, Multiplayer.RouteRoleEntry> _perRouteSwitchRoles = new();
+    // 按线路切角色 Provider（封装 RouteId 推导 + Hook 构造），注入 RouteExecutionEngine。
+    private Multiplayer.PerRouteSwitchRolesProvider? _perRouteSwitchProvider;
 
     /// <summary>
     /// 隐藏服务器地址的前半部分（隐私保护）
@@ -1528,6 +1532,12 @@ public class AutoHoeingTask : ISoloTask
         _cookingService.LoadTemplates(assetsDir);
         _executionEngine = new RouteExecutionEngine(
             _pickupService, _anomalyDetector, _dumperService, _blacklistManager, _config, _partyConfig);
+
+        // 按线路切角色（hoeing-multiplayer-per-route-switch-roles）：构造 Provider 并注入 engine。
+        // Provider 封装 RouteId 推导 + Hook 构造；仅联机 + 配了角色时生效（engine 内门控）。
+        _perRouteSwitchProvider = new Multiplayer.PerRouteSwitchRolesProvider(
+            _perRouteSwitchRoles, _partyConfig, _groupName, _logger);
+        _executionEngine.SetPerRouteSwitchProvider(_perRouteSwitchProvider);
 
         // 联机模式初始化
         if (_config.MultiplayerEnabled)
@@ -3783,6 +3793,7 @@ public class AutoHoeingTask : ISoloTask
         // 配置组键覆盖全局键。_config 已是全局深拷贝，可安全 mutate（不污染全局单例）。
         ApplyVariantPreferencesOverride();
         ApplyPreSwitchWeaponRowsOverride();
+        ApplyPerRouteSwitchRolesOverride();
     }
 
     /// <summary>
@@ -3796,6 +3807,18 @@ public class AutoHoeingTask : ISoloTask
         object? raw = _settingsOverride.TryGetValue("preSwitchWeaponRows", out var v) ? v : null;
         if (raw == null) { _preSwitchWeaponRows = new(); return; }
         _preSwitchWeaponRows = Multiplayer.PreSwitchWeaponDecisions.ParseRows(raw);
+    }
+
+    /// <summary>
+    /// 从配置组 settings['perRouteSwitchRoles'] 解析按线路切角色映射（hoeing-multiplayer-per-route-switch-roles）。
+    /// 缺失（raw==null）→ 保持空映射（不触发任何线路切角色）；否则委托纯函数 ParseRoutes（内部异常兜底为空映射，R3）。
+    /// </summary>
+    private void ApplyPerRouteSwitchRolesOverride()
+    {
+        if (_settingsOverride == null) { _perRouteSwitchRoles = new(); return; }
+        object? raw = _settingsOverride.TryGetValue("perRouteSwitchRoles", out var v) ? v : null;
+        if (raw == null) { _perRouteSwitchRoles = new(); return; }
+        _perRouteSwitchRoles = Multiplayer.PerRouteSwitchRolesDecisions.ParseRoutes(raw);
     }
     /// _config.VariantPreferences。配置组键覆盖全局键；缺失或解析失败则保持全局值（可恢复）。
     /// </summary>
