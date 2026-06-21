@@ -21,6 +21,9 @@ public class WorldStateMonitor : IAsyncDisposable
     private readonly ILogger<WorldStateMonitor> _logger = App.GetLogger<WorldStateMonitor>();
     private readonly CoordinatorClient _client;
     private readonly string _playerUid;
+    // 单人调试模式（纯本地，构造时注入；遵循显式依赖，不读全局静态）。
+    // 为 true 时跳过 connected-but-not-in-game 被踢出终止判定。详见 hoeing-multiplayer-solo-debug-mode。
+    private readonly bool _soloDebugMode;
     private readonly CancellationTokenSource _cts;
     private Task? _monitorTask;
 
@@ -76,10 +79,11 @@ public class WorldStateMonitor : IAsyncDisposable
     /// <summary>掉出房间且重试全部失败。</summary>
     public event Func<Task>? OnDroppedFromRoom;
 
-    public WorldStateMonitor(CoordinatorClient client, string playerUid, CancellationToken externalCt = default)
+    public WorldStateMonitor(CoordinatorClient client, string playerUid, CancellationToken externalCt = default, bool soloDebugMode = false)
     {
         _client = client;
         _playerUid = playerUid;
+        _soloDebugMode = soloDebugMode;
         // EC-01: 使用 linked CTS，外部取消时后台 Task 也自动停止
         _cts = externalCt == default
             ? new CancellationTokenSource()
@@ -350,6 +354,16 @@ public class WorldStateMonitor : IAsyncDisposable
 
         if (isConnected)
         {
+            // 单人调试模式：单人世界恒 IsInMultiGame=false + SignalR 正常，会持续累计 connected-but-not-in-game
+            // 并在阈值处被踢出。开启单人调试模式时跳过这条累计与据其触发的 ConfirmExitAsync（需求 2.1/2.2），
+            // 输出含"单人调试模式"标识的说明日志（需求 2.4）。其余分支（截图失败/恢复窗口/轮次切换/心跳）不受影响。
+            if (SoloDebugDecisions.ShouldBypassConnectedNotInGameExit(_soloDebugMode))
+            {
+                if (_connectedButNotInGame != 0) _connectedButNotInGame = 0;
+                _logger.LogDebug("[WorldStateMonitor] 单人调试模式已开启，跳过被踢出（connected-but-not-in-game）终止判定");
+                return;
+            }
+
             // IsInMultiGame=false + SignalR 正常 → 可能是瞬态干扰，也可能是被踢出
             _connectedButNotInGame++;
             _isInRecoveryWindow = false; // 不进入恢复窗口（OQ-4：保持不变）

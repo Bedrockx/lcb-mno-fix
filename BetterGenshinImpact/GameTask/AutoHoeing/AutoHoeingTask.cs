@@ -436,6 +436,9 @@ public class AutoHoeingTask : ISoloTask
             _config.EnableLaggingCatchUp = false;
             _config.LagSegmentThreshold = 1;
 
+            // === 单人调试模式重置（hoeing-multiplayer-solo-debug-mode，纯本地）===
+            _config.SoloDebugMode = false;
+
             ApplySettingsOverride();
         }
 
@@ -885,7 +888,9 @@ public class AutoHoeingTask : ISoloTask
             _coordinatorClientRef = client;
 
             // 启动世界状态监测（需求 2）
-            _worldStateMonitor = new WorldStateMonitor(client, _config.PlayerUid, _ct);
+            // 注入单人调试模式标志（纯本地，显式依赖）：为 true 时 WorldStateMonitor 跳过
+            // connected-but-not-in-game 被踢出终止判定，供单人世界调试线路。hoeing-multiplayer-solo-debug-mode。
+            _worldStateMonitor = new WorldStateMonitor(client, _config.PlayerUid, _ct, _config.SoloDebugMode);
             client.WorldStateMonitor = _worldStateMonitor;
             _worldStateMonitor.OnExitConfirmed += async (isHost, reason) =>
             {
@@ -3702,6 +3707,8 @@ public class AutoHoeingTask : ISoloTask
             // hoeing-multiplayer-lagging-member-catchup：落后追赶调试参数回读（纯本地，配置组场景必须经此 override 才能传到运行时 EffectiveConfig）
             _config.EnableLaggingCatchUp = Get("enableLaggingCatchUp", _config.EnableLaggingCatchUp);
             _config.LagSegmentThreshold = Get("lagSegmentThreshold", _config.LagSegmentThreshold);
+            // hoeing-multiplayer-solo-debug-mode：单人调试模式回读（纯本地，配置组场景必须经此 override 才能传到运行时 EffectiveConfig）
+            _config.SoloDebugMode = Get("soloDebugMode", _config.SoloDebugMode);
             NormalizeKazuhaTimeoutOrder(_config);
             _config.FightTimeoutSeconds = Get("fightTimeoutSeconds", _config.FightTimeoutSeconds);
             // === 集体卡死监测（multiplayer-mutual-wait-collective-skip §8.8 / OQ-1~OQ-5 默认值）===

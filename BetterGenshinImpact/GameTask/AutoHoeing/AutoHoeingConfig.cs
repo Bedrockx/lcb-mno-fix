@@ -485,6 +485,19 @@ public partial class AutoHoeingConfig : ObservableObject
     private int _lagSegmentThreshold = 1;
 
     /// <summary>
+    /// 单人调试模式：纯本地调试开关，默认 false。
+    /// 开启后联机锄地在单人世界下绕过 WorldStateMonitor 的"被踢出联机世界"终止判定
+    /// （IsInMultiGame=false + SignalR 正常的 connected-but-not-in-game 累计与据其触发的 ConfirmExitAsync），
+    /// 使任务持续运行供开发者单人调试整条锄地线路。
+    /// 纯本地：不进 Multiplayer/Models/RoomConfig.cs 与 BgiCoordinatorServer/Models/RoomConfig.cs、
+    /// 不碰 SignalR、不做房主→成员下发，每个玩家各自决定。
+    /// 仅用于调试，不保证依赖真实多人世界的下游环节在单人下完整可用。
+    /// 详见 .kiro/specs/hoeing-multiplayer-solo-debug-mode。
+    /// </summary>
+    [ObservableProperty]
+    private bool _soloDebugMode = false;
+
+    /// <summary>
     /// 房间白名单，逗号分隔的玩家名称
     /// </summary>
     [ObservableProperty]

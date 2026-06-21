@@ -545,6 +545,20 @@
                                       TextWrapping="Wrap" />
                     </StackPanel>
                 </ui:Card>
+                <!--  子卡片：单人调试模式（纯本地，hoeing-multiplayer-solo-debug-mode）  -->
+                <ui:Card Margin="0,8,0,0" Padding="12">
+                    <StackPanel>
+                        <ui:TextBlock Margin="0,0,0,8"
+                                      FontTypography="BodyStrong"
+                                      Text="单人调试模式" />
+                        <ui:ToggleSwitch Margin="0,0,0,4"
+                                         Content="单人调试模式"
+                                         IsChecked="{Binding SoloDebugMode, Mode=TwoWay}" />
+                        <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                      Text="仅用于单人调试线路：开启后单人世界下联机锄地不再因检测不到多人世界而退出，便于调试整条线路。默认关闭，正常联机锄地请勿开启（不保证依赖真实多人世界的环节在单人下可用）。"
+                                      TextWrapping="Wrap" />
+                    </StackPanel>
+                </ui:Card>
             </StackPanel>
         </ui:CardExpander>
     </StackPanel>

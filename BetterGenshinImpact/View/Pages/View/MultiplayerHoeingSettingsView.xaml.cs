@@ -949,6 +949,8 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             "enableLaggingCatchUp", "lagSegmentThreshold",
             // === 重开续跑开关（单机模式清除，hoeing-multiworld-host-restart-resume-round）===
             "multiWorldResumeEnabled",
+            // === 单人调试模式开关（单机模式清除，hoeing-multiplayer-solo-debug-mode）===
+            "soloDebugMode",
             // === 快速同步点抢报（单机模式清除）===
             "fastSyncPointEnabled", "fastSyncPathingDistance", "fastSyncTeleportLoadingDelayMs",
             "sharedFightEndQuorumEnabled", "sharedFightEndQuorumRatio",

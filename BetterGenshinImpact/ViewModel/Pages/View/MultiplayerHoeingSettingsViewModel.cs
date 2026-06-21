@@ -88,6 +88,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     // ===== 调试（hoeing-multiworld-host-restart-resume-round）：重开续跑，房主侧 =====
     [ObservableProperty] private bool _multiWorldResumeEnabled;
 
+    // ===== 调试（hoeing-multiplayer-solo-debug-mode）：单人调试模式，纯本地 =====
+    [ObservableProperty] private bool _soloDebugMode;
+
     // ===== D 成员区 =====
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TargetHostEnabled))]
@@ -211,6 +214,9 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
         // hoeing-multiworld-host-restart-resume-round：重开续跑开关（房主本地，默认开）
         _multiWorldResumeEnabled = GetBool("multiWorldResumeEnabled", g.MultiWorldResumeEnabled);
 
+        // hoeing-multiplayer-solo-debug-mode：单人调试模式开关（纯本地，默认关）
+        _soloDebugMode = GetBool("soloDebugMode", g.SoloDebugMode);
+
         _joinModeSelection = GetStr("memberJoinMode", "byHostName") == "random" ? "随机加入现有房间" : "指定房主名称";
         _targetHostName = GetStr("targetHostName", g.TargetHostName);
 
@@ -262,6 +268,8 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
 
         // hoeing-multiworld-host-restart-resume-round：重开续跑开关
         settings["multiWorldResumeEnabled"] = MultiWorldResumeEnabled;
+        // hoeing-multiplayer-solo-debug-mode：单人调试模式开关（纯本地）
+        settings["soloDebugMode"] = SoloDebugMode;
         if (int.TryParse(FightTimeoutSeconds, out var fts)) settings["fightTimeoutSeconds"] = fts;
 
         settings["fastSyncPointEnabled"] = FastSyncPointEnabled;
