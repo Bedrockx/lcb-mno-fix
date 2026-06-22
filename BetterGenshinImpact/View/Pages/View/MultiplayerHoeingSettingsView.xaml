@@ -362,6 +362,25 @@
                 </StackPanel>
             </ui:CardExpander>
 
+            <!--  按线路切换角色（成员侧，独立可折叠卡片）：线路由房主下发，成员只配「线路→自己的1/2号位角色」  -->
+            <ui:CardExpander Margin="0,0,0,12"
+                             ContentPadding="12"
+                             Icon="{ui:SymbolIcon People24}"
+                             IsExpanded="False"
+                             Visibility="{Binding ShowMemberArea}">
+                <ui:CardExpander.Header>
+                    <ui:TextBlock FontTypography="Body" Text="按线路切换角色" />
+                </ui:CardExpander.Header>
+                <StackPanel>
+                    <ui:TextBlock Margin="0,0,0,6"
+                                  Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="线路由房主决定，无需在此选择。点右侧「⚙角色」为对应线路文件夹配置你自己要切换的角色（留空则不切换）。"
+                                  TextWrapping="Wrap" />
+                    <!--  成员侧线路角色配置占位（code-behind 填充：每行 线路名 + ⚙角色 按钮）  -->
+                    <ContentControl x:Name="MemberRouteRolesHost" />
+                </StackPanel>
+            </ui:CardExpander>
+
             <!--  E 联机战斗策略（房主成员共用）  -->
             <ui:CardExpander Margin="0,0,0,12"
                              ContentPadding="12"

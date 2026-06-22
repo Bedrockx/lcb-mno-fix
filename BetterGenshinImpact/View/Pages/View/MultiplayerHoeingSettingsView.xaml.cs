@@ -74,6 +74,7 @@ public partial class MultiplayerHoeingSettingsView : UserControl
         BuildPreSwitchWeaponRows();  // 构建固定2行开锄前换武器 UI
         InitVariantPrefBuffer();   // 迁现状 variantPrefBuffer 预填
         BuildBuiltinRouteHost();   // 迁 RebuildBuiltinButtons + import/openDir 事件
+        BuildMemberRouteRolesHost(); // 成员侧「按线路切角色」配置列表（仅成员可见区，code-behind 填充）
         HookVariantPanel();        // VariantExpander.Expanded += BuildVariantPanelContent; _refreshVariantPanel = ...
         HookFightStrategyButton(); // "打开联机战斗策略文件" → MultiplayerFightStrategyFileHelper.OpenForEdit()
         HookDocButtons();          // 变体卡 Header 的"使用教程"/"制作规则" → OpenDoc
@@ -764,6 +765,54 @@ public partial class MultiplayerHoeingSettingsView : UserControl
             _logger.LogWarning(ex, "[按线路切角色] 配置弹窗异常");
             Toast.Warning("配置线路角色失败，请查看日志");
         }
+    }
+
+    // 成员侧「按线路切角色」配置列表：每行 = 线路文件夹名（只读）+ ⚙角色 按钮。
+    // 线路由房主下发，成员不选线路；此处仅为各内置线路文件夹提供配置自己 1/2 号位角色的入口（点 ⚙角色 复用同一弹窗）。
+    private void BuildMemberRouteRolesHost()
+    {
+        if (MemberRouteRolesHost == null) return;
+        var panel = new System.Windows.Controls.StackPanel();
+        var folders = _routeScanner.ScanBuiltinRoutes();
+        if (folders.Count == 0)
+        {
+            panel.Children.Add(new TextBlock
+            {
+                Text = "未发现内置线路文件夹",
+                Foreground = SystemColors.GrayTextBrush,
+                Margin = new Thickness(0, 4, 0, 0)
+            });
+            MemberRouteRolesHost.Content = panel;
+            return;
+        }
+
+        foreach (var folder in folders)
+        {
+            var row = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+
+            var nameText = new TextBlock
+            {
+                Text = folder.FolderName,
+                VerticalAlignment = VerticalAlignment.Center,
+                MinWidth = 220,
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            row.Children.Add(nameText);
+
+            var cfgRolesBtn = new System.Windows.Controls.Button { Content = "⚙角色" };
+            var folderNameForDialog = folder.FolderName;
+            var folderFullPathForDialog = folder.FullPath;
+            cfgRolesBtn.Click += async (_, _) => await OnConfigureRouteRoles(folderNameForDialog, folderFullPathForDialog);
+            row.Children.Add(cfgRolesBtn);
+
+            panel.Children.Add(row);
+        }
+
+        MemberRouteRolesHost.Content = panel;
     }
 
     // ===== 战斗策略 / 文档按钮挂接 =====
