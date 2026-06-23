@@ -1,7 +1,7 @@
 // 版本5.29
 
 // 盾（刚需）
-茜特菈莉 e,attack(0.1),keypress(q),wait(0.5),keypress(q),keypress(e),wait(0.2),check
+茜特菈莉 e,wait(0.3),e,keypress(q),wait(0.5),keypress(q),keypress(e),wait(0.2),check
 伊涅芙 e,attack(0.22),keypress(q),wait(0.1),keypress(q),attack(0.2),keypress(q),wait(0.2),check
 //钟离 attack(0.05),keypress(q),keydown(e),wait(1),keyup(e),wait(0.2),check,
 钟离 attack(0.05),keypress(q),wait(0.5),attack(0.5),keypress(q),wait(0.2),check,
@@ -78,7 +78,10 @@
 哥伦比娅 attack,e,wait(0.15),keypress(e),attack,keypress(q),charge(1),check,keypress(q),charge(1),check,
 //联机锄地万叶是聚物工具人，不要动，可以自己加个Q
 万叶 wait(0.2),check,wait(0.2),check,wait(0.2),check,wait(0.2),check,wait(0.2),check,
-琴 attack(0.01),keypress(q)
+//三人的2P琴，快速放Q
+//琴 attack(0.01),keypress(q)
+//四人的琴，迟一点放Q
+琴 attack(0.01),e,check,wait(1),attack(0.01),check,wait(1),keypress(q)
 
 
 

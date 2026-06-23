@@ -47,6 +47,11 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
     // TryGetCollectPointForCurrent(syncKey) 在 syncKey 匹配时返回 true，给 PathExecutor 战后非万叶分支
     // 调用以触发二段 MoveCloseTo 精接近聚物点。
     private (string SyncKey, double X, double Y)? _lastCollectPoint;
+    // kazuha-collect-min-buffer-before-stay: 记录"收到本周期有效聚物点坐标的时刻"（UTC）。
+    // 与 _lastCollectPoint 同生命周期（跨周期保留）；WaitAsNonKazuhaAsync 用它算"距收到坐标已过多久"，
+    // 据此补足到 MinBufferBeforeStayMs(1500ms) 再进 KazuhaSyncWaitSeconds 停留。
+    // 走向 A/B 判定仍以 syncKey 匹配为准，不单看本字段是否有值（避免误用上一周期旧时间戳）。
+    private DateTime _lastCollectPointTimeUtc;
     private readonly Action<string, string, double, double> _onKazuhaCollectStartedCache;
 
     public KazuhaCollectSyncCoordinator(
@@ -73,6 +78,8 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
             if (string.IsNullOrEmpty(syncKey)) return;
             if (!KazuhaCollectPointDecisions.IsValid(collectX, collectY)) return;
             _lastCollectPoint = (syncKey, collectX, collectY);
+            // kazuha-collect-min-buffer-before-stay: 与坐标缓存同步记下收到时刻，供停留前补足缓冲计时。
+            _lastCollectPointTimeUtc = DateTime.UtcNow;
             _logger.LogDebug("[联机][聚物] 缓存聚物点 syncKey={Key} ({X:F1},{Y:F1})", syncKey, collectX, collectY);
         };
         _client.KazuhaCollectStarted += _onKazuhaCollectStartedCache;
@@ -539,6 +546,24 @@ public sealed class KazuhaCollectSyncCoordinator : IDisposable
         // 不创建 KazuhaSyncTimeoutSeconds 超时 CTS，对终态信号是否到达完全无感（design.md Property 1）。
         CurrentState = KazuhaCollectState.WaitingForKazuha;
         var maskedUid = AutoPartyTask.MaskUid(_client.PlayerUid);
+
+        // kazuha-collect-min-buffer-before-stay: 走向 A（本周期收到有效聚物点坐标）时，
+        // 从"收到坐标时刻"算起至少满 MinBufferBeforeStayMs(1500ms) 才进 KazuhaSyncWaitSeconds 停留，
+        // 避免成员恰好站在聚物点上 → 二段瞬间完成 → 比万叶物堆成型更早离开、吃不到聚物。
+        // 走向 B（未收到坐标 / syncKey 不匹配）→ receivedCollectPoint == false → 补足 0，行为逐字节不变。
+        var receivedCollectPoint = TryGetCollectPointForCurrent(syncKey, out _, out _);
+        var elapsedMs = receivedCollectPoint
+            ? (DateTime.UtcNow - _lastCollectPointTimeUtc).TotalMilliseconds
+            : 0.0;
+        var bufferRemainMs = KazuhaCollectSyncDecisions.ComputeMinBufferRemainMs(receivedCollectPoint, elapsedMs);
+        if (bufferRemainMs > 0)
+        {
+            _logger.LogInformation(
+                "[联机][聚物] 非万叶玩家 {Uid} 二段完成，收到坐标已过 {Elapsed:F0}ms，补足缓冲 {Buffer}ms 后再停留 (syncKey={Key})",
+                maskedUid, elapsedMs, bufferRemainMs, syncKey);
+            await Task.Delay(bufferRemainMs, ct);
+        }
+
         var waitMs = KazuhaCollectSyncDecisions.ComputePostSecondApproachWaitMs(_config);
         _logger.LogInformation("[联机][聚物] 非万叶玩家 {Uid} 二段完成，统一停留 {Ms}ms 后离开 (syncKey={Key})",
             maskedUid, waitMs, syncKey);

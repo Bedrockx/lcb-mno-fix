@@ -247,6 +247,9 @@ public class AutoPartyTask
         // 同意申请后到 BGI 房间名单更新之间有几秒延迟，期间不踢人，避免误踢自己人刚到的成员
         DateTime lastAcceptTime = DateTime.MinValue;
         DateTime lastKickScanTime = DateTime.MinValue;
+        // F2 诊断日志节流状态（策略 D：变化立即输出 + 无变化每 5s 兜底心跳）
+        F2DiagnosticLogThrottle.F2Metrics? lastEmittedF2Metrics = null;
+        DateTime lastF2DiagnosticEmitTime = DateTime.MinValue;
 
         try
         {
@@ -343,9 +346,18 @@ public class AutoPartyTask
                             }
                         }
                         f2Count = kickCount + 1;
-                        // 诊断日志：每轮 F2 检测都输出当前人数对比，便于定位卡住时实际值
-                        _logger.LogInformation("[自动组队-房主][F2诊断] 踢出按钮={Kick}，实际人数={F2Count}/{Expected}，SignalR人数={SignalR}",
-                            kickCount, f2Count, expectedCount, signalRCount);
+                        // 诊断日志：策略 D 节流——metrics 变化立即输出，无变化每 5s 兜底心跳一条，避免刷屏淹没其他日志
+                        var currentF2Metrics = new F2DiagnosticLogThrottle.F2Metrics(kickCount, f2Count, expectedCount, signalRCount);
+                        var nowForF2Diag = DateTime.Now;
+                        if (F2DiagnosticLogThrottle.ShouldEmit(
+                                currentF2Metrics, lastEmittedF2Metrics, lastF2DiagnosticEmitTime,
+                                nowForF2Diag, F2DiagnosticLogThrottle.DefaultHeartbeatInterval))
+                        {
+                            _logger.LogInformation("[自动组队-房主][F2诊断] 踢出按钮={Kick}，实际人数={F2Count}/{Expected}，SignalR人数={SignalR}",
+                                kickCount, f2Count, expectedCount, signalRCount);
+                            lastEmittedF2Metrics = currentF2Metrics;
+                            lastF2DiagnosticEmitTime = nowForF2Diag;
+                        }
                     }
 
                     var decision = HostPartyReadinessDecisions.Decide(new HostPartyReadinessInput(

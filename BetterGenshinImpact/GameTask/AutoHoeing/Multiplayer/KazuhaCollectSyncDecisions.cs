@@ -13,6 +13,12 @@ namespace BetterGenshinImpact.GameTask.AutoHoeing.Multiplayer;
 public static class KazuhaCollectSyncDecisions
 {
     /// <summary>
+    /// kazuha-collect-min-buffer-before-stay: 非万叶成员收到二段聚物点坐标后，
+    /// 进入 KazuhaSyncWaitSeconds 停留前的最小缓冲时长（固定硬编码，不做配置项）。
+    /// </summary>
+    public const int MinBufferBeforeStayMs = 1500;
+
+    /// <summary>
     /// 判断当前周期是否需要启用万叶聚物同步流程。
     /// 等价于：<c>EnableKazuhaSync ∧ isConnected</c>。
     /// kazuha-player-auto-detection: 删除 KazuhaPlayerIndex ∈ [1,4] 判定，改为 EnableKazuhaSync 布尔门控。
@@ -63,5 +69,23 @@ public static class KazuhaCollectSyncDecisions
         bool hasCombatScenesCached)
     {
         return isEnabled && isCurrentPlayerKazuha && hasCombatScenesCached;
+    }
+
+    /// <summary>
+    /// kazuha-collect-min-buffer-before-stay: "收到二段聚物点坐标后至少 1.5 秒才进入 KazuhaSyncWaitSeconds 停留"
+    /// 的补足毫秒数纯计算。
+    /// 仅走向 A（receivedCollectPoint == true，本周期收到有效坐标）生效：
+    ///   - elapsedMsSinceCollectPoint >= 1500 → 返回 0（已满，不额外等）
+    ///   - elapsedMsSinceCollectPoint &lt;  1500 → 返回 ceil(1500 - elapsed)（向上取整、非负、&lt;=1500）
+    /// 走向 B（receivedCollectPoint == false，没收到坐标 / syncKey 不匹配）→ 恒返回 0（不补足，保持现状）。
+    /// 缓冲是"额外前置"，不替代 ComputePostSecondApproachWaitMs 的停留。无外部依赖（PBT 友好）。
+    /// </summary>
+    /// <param name="receivedCollectPoint">本周期是否收到有效二段聚物点坐标（走向 A==true）</param>
+    /// <param name="elapsedMsSinceCollectPoint">从收到坐标到现在经过的毫秒数（调用方用 UtcNow - _lastCollectPointTimeUtc 算得）</param>
+    public static int ComputeMinBufferRemainMs(bool receivedCollectPoint, double elapsedMsSinceCollectPoint)
+    {
+        if (!receivedCollectPoint) return 0;
+        var remain = MinBufferBeforeStayMs - elapsedMsSinceCollectPoint;
+        return remain <= 0 ? 0 : (int)Math.Ceiling(remain);
     }
 }
