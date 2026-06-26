@@ -29,6 +29,7 @@ using BetterGenshinImpact.GameTask.Common;
 using Compunet.YoloSharp;
 using Compunet.YoloSharp.Data;
 using Microsoft.Extensions.DependencyInjection;
+using BetterGenshinImpact.GameTask.Common.Element.Assets;
 
 namespace BetterGenshinImpact.GameTask.AutoFight.Model;
 
@@ -98,6 +99,9 @@ public class Avatar
     /// 详见 .kiro/specs/arlecchino-q-low-hp-gate/design.md。
     /// </summary>
     public bool ArlecchinoBurstLowHpGateEnabled { get; set; } = false;
+    
+    //阿蕾奇诺自动EQ
+    public bool ArlecchinoAutoEnabled { get; set; } = false;
 
     /// <summary>
     /// 玛薇卡摩托状态检测开关（位置1：重击分支用）。运行期由 AutoFightTask 经 AutoFightParam 注入当前配置组/独立任务的值，
@@ -733,18 +737,112 @@ public class Avatar
     /// </summary>
     /// <param name="ms">攻击时长，建议是200的倍数</param>
     public void Attack(int ms = 0)
+{
+    Avatar? alqn = CombatScenes.SelectAvatar("阿蕾奇诺");
+    var isTimes = 0;
+
+    // 新增：5秒计时变量
+    var lastChargeTime = DateTime.Now;
+
+    while (ms >= 0)
     {
-        while (ms >= 0)
+        if (Ct is { IsCancellationRequested: true })
         {
-            if (Ct is { IsCancellationRequested: true })
+            return;
+        }
+
+        if (ArlecchinoAutoEnabled && Name == "阿蕾奇诺")
+        {
+            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+            using var region1 = CaptureToRectArea();
+            var aa = CombatHealthDetector.IsRedBlood(region1);
+            var bb = IsQi(region1);
+            if (!bb || aa)
             {
-                return;
+                if (isTimes > 2)
+                {
+                    Simulation.SendInput.SimulateAction(GIActions.ElementalBurst);
+                    Sleep(100, Ct);
+                    using var imageAfterBurst = CaptureToRectArea();
+                    if (imageAfterBurst.Find(ElementAssets.Instance.PaimonMenuRo).IsEmpty())
+                    {
+                        // Logger.LogWarning("1113 {t1} {t2}", bb, aa);
+                        Sleep(2000, Ct);
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        Sleep(50, Ct);
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        Sleep(800, Ct);
+                        Charge(450);
+                        Sleep(100, Ct);
+                    }
+                }
+                isTimes += 1;
+                // Logger.LogWarning("112 {t}", isTimes);
+            }
+            else
+            {
+                isTimes = 0;
+                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                Sleep(50, Ct);
             }
 
+            if (!AutoFightSkill.AvatarSkillAsync(Logger, alqn, false, 1, Ct, region1, false).Result)
+            {
+                if (!IsQi(region1) && region1.Find(ElementAssets.Instance.PaimonMenuRo).IsExist())
+                {
+                    // Logger.LogWarning("222");
+                    Sleep(50, Ct);
+                    Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                    Sleep(50, Ct);
+                    Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                    Sleep(800, Ct);
+                    Charge(450);
+                    Sleep(150, Ct);
+                }
+            }
+            else
+            {
+                // 每隔5秒执行一次 Charge(350)
+                if ((DateTime.Now - lastChargeTime).TotalMilliseconds >= 2000)
+                {
+                    Charge(280);
+                    Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                    lastChargeTime = DateTime.Now; // 重置计时
+                }
+            }
+
+            ms -= 200;
+            Sleep(100, Ct);
+        }
+        else
+        {
             Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
             ms -= 200;
             Sleep(200, Ct);
         }
+    }
+}
+    
+    // 阿蕾奇诺契检测区域
+    private const int QiX = 1014;
+    private const int QiY = 1000;
+    private const int QiW = 40;
+    private const int QiH = 20;
+
+    // 阿蕾奇诺契 BGR: (255, 144, 140) ±12
+    private static readonly Scalar QiLower = new Scalar(235, 125, 120);
+    private static readonly Scalar QiUpper = new Scalar(255, 162, 158);
+    public static bool IsQi(ImageRegion ra)
+    {
+        using var bloodRect = ra.DeriveCrop(QiX, QiY, QiW, QiH);
+        using var mask = OpenCvCommonHelper.Threshold(bloodRect.SrcMat, QiLower, QiUpper);
+        using var labels = new Mat();
+        using var stats = new Mat();
+        using var centroids = new Mat();
+        var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+            connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+        // Logger.LogWarning("numLabels : {t}", numLabels);
+        return numLabels > 2;
     }
 
     /// <summary>
@@ -1358,6 +1456,20 @@ public class Avatar
         }
         else if (MavuikaMotorcycleCheckEnabled && Name == "玛薇卡")
         {
+            Avatar? mwk = CombatScenes.SelectAvatar("玛薇卡");
+            
+            if (AutoFightSkill.AvatarSkillAsync(Logger, mwk, false, 1, Ct).Result)
+            {
+                Logger.LogWarning("玛薇卡E技能CD..");
+                return;
+            }
+            
+            using var region2 = CaptureToRectArea();
+            if (!Bv.IsInMainUi(region2))
+            {
+                Logger.LogWarning("没有在主界面..");
+                return;
+            }
             // 玛薇卡摩托状态检测开关（位置1：读注入的配置组/独立任务开关，非全局）。关闭时跳过检测与开摩托
             //摩托状态才执行
             Sleep(200);
@@ -1369,6 +1481,12 @@ public class Avatar
                 Math.Pow(pos.Item1 - pos2.Item1, 2) + // 绿通道差值的平方
                 Math.Pow(pos.Item2 - pos2.Item2, 2)   // 红通道差值的平方
             );
+            // var pixelValue = region.SrcMat.At<Vec3b>(32, 67);
+            // // 检查每个通道的值是否在允许的范围内
+            // var paimon = (!(Math.Abs(pixelValue[0] - 143) <= 10 &&
+            //                 Math.Abs(pixelValue[1] - 196) <= 10 &&
+            //                 Math.Abs(pixelValue[2] - 233) <= 10));
+
             // Logger.LogInformation("玛薇卡蓄力颜色差值:{ColorDifference}", Math.Round(colorDifference, 2));
             if (colorDifference >= 15) // 这个数值是通过观察大量截图得来的，摩托状态下差值一般在10-15之间，非摩托状态一般在20以上
             {
@@ -1377,7 +1495,9 @@ public class Avatar
                 Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                 Sleep(200);
                 Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                Sleep(300);
+                Sleep(100);
+                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                Sleep(200);
                 Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
             }
             else

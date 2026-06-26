@@ -49,6 +49,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         ActionSchedulerByCd = autoFightConfig.ActionSchedulerByCd;
         MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
         ArlecchinoBurstLowHpGateEnabled = autoFightConfig.ArlecchinoBurstLowHpGateEnabled;
+        ArlecchinoAutoEnabled = autoFightConfig.ArlecchinoAutoEnabled;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;
@@ -125,6 +126,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
     /// AutoFightTask 在战斗启动时把本值注入到每个 Avatar 实例，使 KeyPress / UseBurst 读到正确实例的开关。默认 false。
     /// </summary>
     public bool ArlecchinoBurstLowHpGateEnabled { get; set; } = false;
+    public bool ArlecchinoAutoEnabled { get; set; } = false;
     public string KazuhaPartyName;
     public string OnlyPickEliteDropsMode = "";
     public string GuardianAvatar { get; set; } = string.Empty;
@@ -214,6 +216,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         ActionSchedulerByCd = autoFightConfig.ActionSchedulerByCd;
         MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
         ArlecchinoBurstLowHpGateEnabled = autoFightConfig.ArlecchinoBurstLowHpGateEnabled;
+        ArlecchinoAutoEnabled = autoFightConfig.ArlecchinoAutoEnabled;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;

@@ -756,9 +756,9 @@ public class AutoPartyTask
             using var ra = CaptureToRectArea();
             // 按 1080P 比例裁剪名称区域，x 向左偏移 10px 避免首字被截断
             var scale = TaskContext.Instance().SystemInfo.ScaleTo1080PRatio;
-            var x = (int)(692 * scale);
+            var x = (int)(682 * scale);
             var y = (int)(512 * scale);
-            var w = (int)(410 * scale);
+            var w = (int)(420 * scale);
             var h = (int)(50 * scale);
 
             // 边界检查

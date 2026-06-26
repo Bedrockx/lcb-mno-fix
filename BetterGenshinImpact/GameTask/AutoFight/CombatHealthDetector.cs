@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using OpenCvSharp;
 using BetterGenshinImpact.GameTask.Model.Area;
 using BetterGenshinImpact.Core.Recognition.OpenCv;
+using Serilog.Core;
 
 namespace BetterGenshinImpact.GameTask.AutoFight;
 
@@ -19,6 +20,12 @@ public static class CombatHealthDetector
     private const int RedBloodY = 1009;
     private const int RedBloodW = 3;
     private const int RedBloodH = 3;
+    
+    // 阿蕾奇诺契检测区域
+    private const int QiX = 1014;
+    private const int QiY = 1000;
+    private const int QiW = 40;
+    private const int QiH = 20;
 
     // 绿血检测点
     private const int GreenBloodX = 814;
@@ -62,8 +69,12 @@ public static class CombatHealthDetector
     #region 颜色常量与容差
 
     // 红血 BGR: (250, 90, 89) ±12
-    private static readonly Scalar RedBloodLower = new Scalar(238, 78, 77);
-    private static readonly Scalar RedBloodUpper = new Scalar(255, 102, 101);
+    private static readonly Scalar RedBloodLower = new Scalar(245, 85, 85);
+    private static readonly Scalar RedBloodUpper = new Scalar(255, 95, 85);
+
+    // 阿蕾奇诺契 BGR: (255, 144, 140) ±12
+    private static readonly Scalar QiLower = new Scalar(243, 132, 128);
+    private static readonly Scalar QiUpper = new Scalar(255, 156, 152);
 
     // 绿血 BGR: (34, 215, 150) ±15
     private const int GreenBloodB = 34;
@@ -95,6 +106,18 @@ public static class CombatHealthDetector
     {
         using var bloodRect = ra.DeriveCrop(RedBloodX, RedBloodY, RedBloodW, RedBloodH);
         using var mask = OpenCvCommonHelper.Threshold(bloodRect.SrcMat, RedBloodLower, RedBloodUpper);
+        using var labels = new Mat();
+        using var stats = new Mat();
+        using var centroids = new Mat();
+        var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+            connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+        return numLabels > 1;
+    }
+    
+    public static bool IsQi(ImageRegion ra)
+    {
+        using var bloodRect = ra.DeriveCrop(QiX, QiY, QiW, QiH);
+        using var mask = OpenCvCommonHelper.Threshold(bloodRect.SrcMat, QiLower, QiUpper);
         using var labels = new Mat();
         using var stats = new Mat();
         using var centroids = new Mat();

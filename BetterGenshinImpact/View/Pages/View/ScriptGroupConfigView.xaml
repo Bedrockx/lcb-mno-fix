@@ -1258,6 +1258,34 @@
                                                  Margin="0,0,12,0"
                                                  IsChecked="{Binding PathingConfig.AutoFightConfig.ArlecchinoBurstLowHpGateEnabled, Mode=TwoWay}" />
                             </Grid>
+                            
+                            <Grid Margin="0,12,0,0">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="阿蕾奇诺普攻自动EQ"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="开启后阿蕾奇诺的策略只需要attack(10)就可以普攻/没契/红血就自动识别EQ"
+                                              TextWrapping="Wrap" />
+                                <ui:ToggleSwitch Grid.Row="0"
+                                                 Grid.RowSpan="2"
+                                                 Grid.Column="1"
+                                                 Margin="0,0,12,0"
+                                                 IsChecked="{Binding PathingConfig.AutoFightConfig.ArlecchinoAutoEnabled, Mode=TwoWay}" />
+                            </Grid>
+                            
+                            
                         </StackPanel>
                     </ui:CardExpander>
 

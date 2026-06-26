@@ -58,6 +58,8 @@ public partial class AutoFightConfig : ObservableObject
     /// 注意：Avatar.cs 读全局战斗配置实例(TaskContext.Instance().Config.AutoFightConfig)。
     /// </summary>
     [ObservableProperty] private bool _arlecchinoBurstLowHpGateEnabled = false;
+    
+    [ObservableProperty] private bool _arlecchinoAutoEnabled = false;
 
     /// <summary>
     /// 只拾取精英掉落

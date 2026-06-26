@@ -706,6 +706,7 @@ public class AutoFightTask : ISoloTask
         {
             avatarToInit.ArlecchinoBurstLowHpGateEnabled = _taskParam.ArlecchinoBurstLowHpGateEnabled;
             avatarToInit.MavuikaMotorcycleCheckEnabled = _taskParam.MavuikaMotorcycleCheckEnabled;
+            avatarToInit.ArlecchinoAutoEnabled = _taskParam.ArlecchinoAutoEnabled;
         }
         TimeSpan fightTimeout = TimeSpan.FromSeconds(_taskParam.Timeout); // 战斗超时时间
         Stopwatch timeoutStopwatch = Stopwatch.StartNew();
