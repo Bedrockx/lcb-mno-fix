@@ -759,7 +759,7 @@ public class Avatar
             var bb = IsQi(region1);
             if (!bb || aa)
             {
-                if (isTimes > 2)
+                if (isTimes > 5)
                 {
                     Simulation.SendInput.SimulateAction(GIActions.ElementalBurst);
                     Sleep(100, Ct);
@@ -771,19 +771,33 @@ public class Avatar
                         Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                         Sleep(50, Ct);
                         Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                        Sleep(800, Ct);
+                        Sleep(795, Ct);
+                        if (Ct is { IsCancellationRequested: true })
+                        {
+                            return;
+                        }
                         Charge(450);
                         Sleep(100, Ct);
                     }
                 }
-                isTimes += 1;
+                if (aa) isTimes += 1;
+                if (!bb) isTimes += 5;
                 // Logger.LogWarning("112 {t}", isTimes);
+                if (Ct is { IsCancellationRequested: true })
+                {
+                    return;
+                }
             }
             else
             {
                 isTimes = 0;
                 Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
                 Sleep(50, Ct);
+            }
+            
+            if (Ct is { IsCancellationRequested: true })
+            {
+                return;
             }
 
             if (!AutoFightSkill.AvatarSkillAsync(Logger, alqn, false, 1, Ct, region1, false).Result)
@@ -795,7 +809,11 @@ public class Avatar
                     Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                     Sleep(50, Ct);
                     Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                    Sleep(800, Ct);
+                    Sleep(795, Ct);
+                    if (Ct is { IsCancellationRequested: true })
+                    {
+                        return;
+                    }
                     Charge(450);
                     Sleep(150, Ct);
                 }
@@ -824,14 +842,14 @@ public class Avatar
 }
     
     // 阿蕾奇诺契检测区域
-    private const int QiX = 1014;
+    private const int QiX = 1000;
     private const int QiY = 1000;
-    private const int QiW = 40;
+    private const int QiW = 25;
     private const int QiH = 20;
 
     // 阿蕾奇诺契 BGR: (255, 144, 140) ±12
-    private static readonly Scalar QiLower = new Scalar(235, 125, 120);
-    private static readonly Scalar QiUpper = new Scalar(255, 162, 158);
+    private static readonly Scalar QiLower = new Scalar(245, 132, 128);
+    private static readonly Scalar QiUpper = new Scalar(255, 155, 151);
     public static bool IsQi(ImageRegion ra)
     {
         using var bloodRect = ra.DeriveCrop(QiX, QiY, QiW, QiH);
@@ -841,7 +859,7 @@ public class Avatar
         using var centroids = new Mat();
         var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
             connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
-        // Logger.LogWarning("numLabels : {t}", numLabels);
+        // Logger.LogWarning("numLabelsQ : {t}", numLabels);
         return numLabels > 2;
     }
 

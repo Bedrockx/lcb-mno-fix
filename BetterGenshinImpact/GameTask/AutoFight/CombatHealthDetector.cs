@@ -69,8 +69,8 @@ public static class CombatHealthDetector
     #region 颜色常量与容差
 
     // 红血 BGR: (250, 90, 89) ±12
-    private static readonly Scalar RedBloodLower = new Scalar(245, 85, 85);
-    private static readonly Scalar RedBloodUpper = new Scalar(255, 95, 85);
+    private static readonly Scalar RedBloodLower = new Scalar(250, 88, 87);
+    private static readonly Scalar RedBloodUpper = new Scalar(255, 92, 91);
 
     // 阿蕾奇诺契 BGR: (255, 144, 140) ±12
     private static readonly Scalar QiLower = new Scalar(243, 132, 128);
