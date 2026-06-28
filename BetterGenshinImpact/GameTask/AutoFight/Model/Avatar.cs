@@ -745,13 +745,17 @@ public class Avatar
 
     while (ms >= 0)
     {
-        if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
+        if (Ct is { IsCancellationRequested: true })
         {
             return;
         }
 
         if (ArlecchinoAutoEnabled && Name == "阿蕾奇诺")
         {
+            if (AutoFightTask.FightEndTotoly)
+            {
+                return;
+            }
             Avatar? alqn = CombatScenes.SelectAvatar("阿蕾奇诺");
             using var region1 = CaptureToRectArea();
             // 每隔5秒执行一次 Charge(350)

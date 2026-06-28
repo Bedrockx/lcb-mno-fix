@@ -4664,9 +4664,9 @@
                 Command="{Binding GoToHotKeyPageCommand}" />
         </ui:CardControl>-->
 
-        <!-- ==================== 锄地一条龙 ==================== -->
+        <!-- ==================== 锄地一条龙 ====================Visibility="{Binding AutoHoeingVisible, Converter={StaticResource BooleanToVisibilityConverter}}"> -->
         <ui:CardExpander Margin="0,0,0,12" ContentPadding="0"
-                         Visibility="{Binding AutoHoeingVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                         Visibility="Collapsed"  >
             <ui:CardExpander.Icon>
                 <ui:FontIcon Glyph="&#xf1bb;" Style="{StaticResource FaFontIconStyle}" />
             </ui:CardExpander.Icon>

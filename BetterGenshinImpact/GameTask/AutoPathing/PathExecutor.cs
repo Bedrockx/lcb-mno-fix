@@ -2418,7 +2418,7 @@ public class PathExecutor
             {
                 var waitStart = DateTime.UtcNow;
                 var recovered = false;
-                while ((DateTime.UtcNow - waitStart).TotalMilliseconds < 1500)
+                while ((DateTime.UtcNow - waitStart).TotalMilliseconds < 2000)
                 {
                     await Delay(100, ct);
                     using var retryScreen = CaptureToRectArea();
@@ -2430,7 +2430,7 @@ public class PathExecutor
                 }
                 if (!recovered)
                 {
-                    Logger.LogWarning("等待主界面恢复超时(1500ms)，继续执行");
+                    Logger.LogWarning("等待主界面恢复超时(2000ms)，继续执行");
                 }
             }
         }
@@ -3721,7 +3721,7 @@ public class PathExecutor
             {
                 var waitStart = DateTime.UtcNow;
                 var recovered = false;
-                while ((DateTime.UtcNow - waitStart).TotalMilliseconds < 1500)
+                while ((DateTime.UtcNow - waitStart).TotalMilliseconds < 2000)
                 {
                     await Delay(100, ct);
                     using var retryScreen = CaptureToRectArea();
@@ -3733,7 +3733,7 @@ public class PathExecutor
                 }
                 if (!recovered)
                 {
-                    Logger.LogWarning("MoveCloseTo 等待主界面恢复超时(1500ms)，继续执行");
+                    Logger.LogWarning("MoveCloseTo 等待主界面恢复超时(2000ms)，继续执行");
                 }
             }
         }
