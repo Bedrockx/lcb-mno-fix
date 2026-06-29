@@ -742,6 +742,7 @@ public class Avatar
 
     // 新增：计时变量
     var lastChargeTime = DateTime.Now;
+    var redTime = DateTime.Now;
 
     while (ms >= 0)
     {
@@ -856,7 +857,7 @@ public class Avatar
                     var bb222 = !IsQi(region999);
                     if (bb222 || aa)
                     {
-                        Logger.LogInformation("特化检测：阿蕾奇诺->红血放Q..");
+                        Logger.LogInformation(aa?"特化检测：阿蕾奇诺->红血放Q..{t1} {t2}":"特化检测：阿蕾奇诺->契空放Q..{t1} {t2}",aa, bb22);
                         Simulation.SendInput.SimulateAction(GIActions.ElementalBurst);
                         Sleep(100, Ct);
                         using var imageAfterBurst = CaptureToRectArea();
@@ -898,7 +899,16 @@ public class Avatar
                 if (aa)
                 {
                     // Logger.LogWarning("红血1 {isTimes}",isTimes);
-                    isTimes += 2;
+
+                    if ((DateTime.Now - redTime).TotalMilliseconds >= 100)
+                    {
+                        redTime = DateTime.Now;
+                        isTimes += 1; 
+                    }
+                    else
+                    {
+                        isTimes = 0;
+                    }
                 }
 
                 if (bb22)
