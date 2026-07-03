@@ -257,6 +257,11 @@ public class AutoPartyTask
                 ct.ThrowIfCancellationRequested();
                 _logger.LogDebug("[自动组队-房主] 循环检测，剩余时间: {Sec}s，当前人数: {Count}", (int)(deadline - DateTime.Now).TotalSeconds, client.CurrentRoomPlayerCount);
 
+                // 循环级缓存：最近一轮 F2 诊断算出的权威人数（= kickCount + 1）。
+                // 决策块只在 !inMainUi 时更新它；周期扫描仅在 isInF2Screen 时消费，与 F2 轮次对应，值有效。
+                // 供块外周期性踢陌生人扫描复用同一份权威人数，避免引入第二人数来源（见 design §改动 2）。
+                int lastF2Count = 0;
+
                 // 检测"立即开始"标志（房主在 BGI UI 点击了立即开始按钮）
                 if (AutoHoeingTask.SkipPartyWait)
                 {
@@ -329,17 +334,20 @@ public class AutoPartyTask
                         // 不在主界面：派蒙不可见，多半在 F2 页面
                         // 信号 B：F2 页面 → 数右侧红色"踢出"按钮（房主自己没有，每个成员对应 1 个）
                         // 实际进入世界人数 = 踢出按钮数量 + 1
+                        // 用局部克隆改 ROI，绝不触碰共享单例 KickBtnRa（消除跨调用污染根因，见 design §改动 3）。
                         for (var i = 4; i > 0; i--)
                         {
                             var aa = RecognitionObject.Ocr(checkRa.Width * 0.5, checkRa.Height * 0.61 - 125 * (4 - i), checkRa.Width * 0.5, checkRa.Height * 0.4 - 30);
-                            AutoFightAssets.Instance.KickBtnRa.RegionOfInterest = aa.RegionOfInterest;
-                            if (checkRa.Find(AutoFightAssets.Instance.KickBtnRa).IsExist())
+                            var probe = AutoFightAssets.Instance.KickBtnRa.Clone();
+                            probe.RegionOfInterest = aa.RegionOfInterest;
+                            if (checkRa.Find(probe).IsExist())
                             {
                                 kickCount = i;
                                 break;
                             }
                         }
                         f2Count = kickCount + 1;
+                        lastF2Count = f2Count;   // 回写循环级缓存，供块外周期扫描复用同一份权威人数
                         // 诊断日志：策略 D 节流——metrics 变化立即输出，无变化每 5s 兜底心跳一条，避免刷屏淹没其他日志
                         var currentF2Metrics = new F2DiagnosticLogThrottle.F2Metrics(kickCount, f2Count, expectedCount, signalRCount);
                         var nowForF2Diag = DateTime.Now;
@@ -375,7 +383,7 @@ public class AutoPartyTask
                         case HostPartyDecisionKind.KickStrangers:
                             // 满员触发逐行成分校验。防误踢由名字校验 + 连续 2 次确认接管，
                             // 不再受时间保护期 / 扫描节流门控（组队放人阶段不需等待）。
-                            var kickResult = await KickStrangersAsync(client, consecutiveMissByIdentity, expectedCount, ct);
+                            var kickResult = await KickStrangersAsync(client, consecutiveMissByIdentity, expectedCount, f2Count, ct);
                             if (kickResult == StrangerKickScanResult.AllAllowed)
                             {
                                 // 满员且逐行校验全为名单成员 ⇒ 开锄收敛出口
@@ -446,7 +454,7 @@ public class AutoPartyTask
                 // 满员触发 + 逐行名字校验 + 连续 2 次确认在 KickStrangersAsync 内部完成。
                 if (isInF2Screen)
                 {
-                    if (await KickStrangersAsync(client, consecutiveMissByIdentity, expectedCount, ct) == StrangerKickScanResult.Kicked)
+                    if (await KickStrangersAsync(client, consecutiveMissByIdentity, expectedCount, lastF2Count, ct) == StrangerKickScanResult.Kicked)
                     {
                         // 踢人会触发弹窗 / UI 变化，下一轮重新评估
                         continue;
@@ -790,6 +798,7 @@ public class AutoPartyTask
         CoordinatorClient client,
         Dictionary<string, int> consecutiveMissByIdentity,
         int expectedCount,
+        int worldCount,
         CancellationToken ct)
     {
         try
@@ -803,23 +812,33 @@ public class AutoPartyTask
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray() ?? Array.Empty<string>();
 
-            // BGI 房间名单可能为空（成员还没注册），保守起见跳过踢人（Preservation 3.1）
+            // FindMulti 定位所有踢出按钮（ROI 已在 §改动 3/4 治本消除污染，天然覆盖完整右半屏 1P~4P 行）。
+            var kickRegions = ra.FindMulti(AutoFightAssets.Instance.KickBtnRa);
+
+            // 无踢出按钮 = F2 内除房主外无其他成员（含单人房 / 只有房主自己），世界里没有陌生人。
+            //   - 已满员（如单人 期望=1，1/1）→ 返回 AllAllowed，让主循环收敛开锄；
+            //   - 未满员（如期望=4 但暂时只有房主）→ 返回 NotFull 继续等人（不打满员日志，避免刷屏）。
+            if (kickRegions.Count == 0)
+            {
+                if (StrangerKickDecisions.ShouldTriggerCompositionCheck(worldCount, expectedCount))
+                {
+                    _logger.LogInformation("[踢陌生人] 世界满员 {World}/{Expected} 且无其他成员，无陌生人，可开始", worldCount, expectedCount);
+                    return StrangerKickScanResult.AllAllowed;
+                }
+                return StrangerKickScanResult.NotFull;
+            }
+
+            // 有其他成员（踢出按钮 > 0）才需要名单校验。
+            // BGI 房间名单可能为空（成员还没注册），保守起见跳过踢人（Preservation 3.4）。
             if (allowedNames.Length == 0)
             {
                 _logger.LogDebug("[踢陌生人] BGI 房间名单为空，跳过本次扫描");
                 return StrangerKickScanResult.NotFull;
             }
 
-            var kickRegions = ra.FindMulti(AutoFightAssets.Instance.KickBtnRa);
-            if (kickRegions.Count == 0)
-            {
-                return StrangerKickScanResult.NotFull;
-            }
-
-            // 满员触发（替代被删的 f2Count > bgiCount 计数守卫）：worldCount = 踢出按钮数 + 1。
-            // 世界硬上限 4 人，满员时若混入陌生人则合法成员永远进不来，此刻必须做逐行成分校验。
-            // 未满员不做校验（Preservation 3.2：未满员的陌生人等满员那一刻再踢）。
-            var worldCount = kickRegions.Count + 1;
+            // 满员判定用外层传入的权威人数（= kickCount + 1），本方法不再自己数人数判满员
+            // （消除对被污染共享 ROI 的依赖，见 design §改动 1/2）。
+            // 未满员时不做校验（Preservation 3.5：未满员的陌生人等满员那一刻再踢）。
             if (!StrangerKickDecisions.ShouldTriggerCompositionCheck(worldCount, expectedCount))
             {
                 _logger.LogDebug("[踢陌生人] 世界未满员 {World}/{Expected}，不触发成分校验", worldCount, expectedCount);
@@ -1078,6 +1097,7 @@ public class AutoPartyTask
     internal static int CountKickButtons(ImageRegion checkRa)
     {
         var kickCount = 0;
+        // 用局部克隆改 ROI，绝不触碰共享单例 KickBtnRa（消除跨调用污染根因，见 design §改动 4）。
         for (var i = 4; i > 0; i--)
         {
             var aa = RecognitionObject.Ocr(
@@ -1085,8 +1105,9 @@ public class AutoPartyTask
                 checkRa.Height * 0.61 - 125 * (4 - i),
                 checkRa.Width * 0.5,
                 checkRa.Height * 0.4 - 30);
-            AutoFightAssets.Instance.KickBtnRa.RegionOfInterest = aa.RegionOfInterest;
-            if (checkRa.Find(AutoFightAssets.Instance.KickBtnRa).IsExist())
+            var probe = AutoFightAssets.Instance.KickBtnRa.Clone();
+            probe.RegionOfInterest = aa.RegionOfInterest;
+            if (checkRa.Find(probe).IsExist())
             {
                 kickCount = i;
                 break;
