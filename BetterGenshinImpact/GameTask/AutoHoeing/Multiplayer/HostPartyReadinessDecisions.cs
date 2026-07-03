@@ -62,17 +62,15 @@ public static class HostPartyReadinessDecisions
                 : HostPartyDecision.Of(HostPartyDecisionKind.ReopenF2NoDelay);
         }
 
-        // InMainUi=false：F2 信号 B 主路径（task 3 不会再动这部分）
+        // InMainUi=false：F2 信号 B 主路径
         if (x.F2Count >= x.ExpectedCount)
         {
-            // 交叉校验：游戏内人数 > BGI 房间人数 → 陌生人闯入
-            // 注意：bgiCount=SignalRCount，沿用 InMainUi=false 时的当前值
-            var bgiCount = x.SignalRCount;
-            if (x.F2Count > bgiCount && bgiCount > 0)
-            {
-                return HostPartyDecision.Of(HostPartyDecisionKind.KickStrangers);
-            }
-            return HostPartyDecision.StartHoeing(x.F2Count);
+            // 满员触发成分校验：先进 KickStrangers 分支做逐行 OCR 名字校验。
+            // KickStrangersAsync 内部用 IsInWhitelist + 连续 2 次不匹配决定踢不踢；
+            // 无陌生人时返回 AllAllowed，由调用方收敛开锄（见 AutoPartyTask KickStrangers case）。
+            // 不再用 F2Count > bgiCount 计数守卫（成分错位漏判元凶，见
+            // .kiro/specs/hoeing-party-stranger-kick-race-nodelay-fix/design.md §改动 2）。
+            return HostPartyDecision.Of(HostPartyDecisionKind.KickStrangers);
         }
 
         return HostPartyDecision.Of(HostPartyDecisionKind.WaitInF2);

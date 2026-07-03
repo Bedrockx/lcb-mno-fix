@@ -172,7 +172,7 @@
                         <ui:TextBlock Grid.Row="1"
                                       Grid.Column="0"
                                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="锄地和采集中可能会漏捡掉，简易策略配置时间默认900ms"
+                                      Text="锄地和采集中可能会漏捡掉，简易策略配置时间默认900ms（联机时由房主同步给成员）"
                                       TextWrapping="Wrap" />
                         <ui:ToggleSwitch Grid.Row="0"
                                          Grid.RowSpan="2"
@@ -563,7 +563,7 @@
                         <ui:TextBlock Grid.Row="1"
                                       Grid.Column="0"
                                       Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="只有路径在传送点时，才会去七天神像恢复"
+                                      Text="只有路径在传送点时，才会去七天神像恢复（联机时由房主同步给成员）"
                                       TextWrapping="Wrap" />
                         <ui:ToggleSwitch Grid.Row="0"
                                          Grid.RowSpan="2"
@@ -1267,20 +1267,29 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <ui:TextBlock Grid.Row="0"
                                               Grid.Column="0"
                                               FontTypography="Body"
-                                              Text="阿蕾奇诺普攻自动EQ"
+                                              Text="阿蕾奇诺普攻自动EQ,参数0~220,对应判断契空的20%~90%"
                                               TextWrapping="Wrap" />
                                 <ui:TextBlock Grid.Row="1"
                                               Grid.Column="0"
                                               Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                                               Text="开启后阿蕾奇诺的策略只需要attack(10)就可以普攻/没契/红血就自动识别EQ"
                                               TextWrapping="Wrap" />
+                                
+                                <ui:TextBox Grid.Row="0"
+                                            Grid.RowSpan="2"
+                                            Grid.Column="1"
+                                            Margin="0,0,10,0"
+                                            IsEnabled="{Binding PathingConfig.AutoFightConfig.ArlecchinoAutoEnabled, Mode=TwoWay}"
+                                            Text="{Binding PathingConfig.AutoFightConfig.QiKong, Mode=TwoWay}" />
+                                
                                 <ui:ToggleSwitch Grid.Row="0"
                                                  Grid.RowSpan="2"
-                                                 Grid.Column="1"
+                                                 Grid.Column="2"
                                                  Margin="0,0,12,0"
                                                  IsChecked="{Binding PathingConfig.AutoFightConfig.ArlecchinoAutoEnabled, Mode=TwoWay}" />
                             </Grid>
@@ -2259,7 +2268,7 @@
                                     <ui:TextBlock Grid.Row="1"
                                                   Grid.Column="0"
                                                   Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                                  Text="战斗结束后旋转视角寻找掉落物光柱并靠近（仅在无万叶时备用）"
+                                                  Text="战斗结束后旋转视角寻找掉落物光柱并靠近（仅在无万叶时备用）（联机时由房主同步给成员）"
                                                   TextWrapping="Wrap" />
                                     <ui:ToggleSwitch Grid.Row="0"
                                                      Grid.RowSpan="2"
@@ -2677,7 +2686,7 @@
                     <ui:TextBlock Grid.Row="0"
                                   Grid.Column="2"
                                   FontTypography="Body"
-                                  Text="游泳检测(自动战斗过程中)"
+                                  Text="游泳检测(自动战斗过程中)（联机时由房主同步给成员）"
                                   TextWrapping="Wrap" />
                     <ui:TextBlock Grid.Row="1"
                                   Grid.Column="2"

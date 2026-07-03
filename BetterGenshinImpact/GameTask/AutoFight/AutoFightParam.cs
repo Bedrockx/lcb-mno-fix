@@ -50,6 +50,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
         ArlecchinoBurstLowHpGateEnabled = autoFightConfig.ArlecchinoBurstLowHpGateEnabled;
         ArlecchinoAutoEnabled = autoFightConfig.ArlecchinoAutoEnabled;
+        QiKong = autoFightConfig.QiKong;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;
@@ -127,6 +128,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
     /// </summary>
     public bool ArlecchinoBurstLowHpGateEnabled { get; set; } = false;
     public bool ArlecchinoAutoEnabled { get; set; } = false;
+    public int QiKong { get; set; } = 0;
     public string KazuhaPartyName;
     public string OnlyPickEliteDropsMode = "";
     public string GuardianAvatar { get; set; } = string.Empty;
@@ -217,6 +219,7 @@ public class AutoFightParam : BaseTaskParam<AutoFightTask>
         MavuikaMotorcycleCheckEnabled = autoFightConfig.MavuikaMotorcycleCheckEnabled;
         ArlecchinoBurstLowHpGateEnabled = autoFightConfig.ArlecchinoBurstLowHpGateEnabled;
         ArlecchinoAutoEnabled = autoFightConfig.ArlecchinoAutoEnabled;
+        QiKong = autoFightConfig.QiKong;
 
         FinishDetectConfig.FastCheckEnabled = autoFightConfig.FinishDetectConfig.FastCheckEnabled;
         FinishDetectConfig.FastCheckParams = autoFightConfig.FinishDetectConfig.FastCheckParams;

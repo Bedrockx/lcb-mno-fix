@@ -81,6 +81,11 @@ public class AutoHoeingTask : ISoloTask
     private volatile bool _sessionTerminated;
     private string? _stopReason;
     private CancellationTokenSource? _linkedStopCts;
+
+    // hoeing-multiplayer-sync-execution-params §C2 通道 C：成员回填时暂存被覆盖的全局
+    // PickDropsAfterFightSeconds 原值，finally（§C4）恢复，保证单机 ScanPickTask 零感知。
+    // 用 ??= 只在首次回填记录，多世界多次回填不覆盖真正原值。
+    private int? _savedGlobalPickDropsAfterFightSeconds;
     
     private bool _teamAlreadySwitched = false;
     private bool _worldPermissionSet = false;
@@ -493,6 +498,13 @@ public class AutoHoeingTask : ISoloTask
         }
         finally
         {
+            // 通道 C 恢复（hoeing-multiplayer-sync-execution-params §C4）：还原成员回填时覆盖的
+            // 全局 PickDropsAfterFightSeconds，保证单机 ScanPickTask 后续读到原值。无条件恢复（HasValue 守护）。
+            if (_savedGlobalPickDropsAfterFightSeconds.HasValue)
+            {
+                TaskContext.Instance().Config.AutoFightConfig.PickDropsAfterFightSeconds = _savedGlobalPickDropsAfterFightSeconds.Value;
+                _savedGlobalPickDropsAfterFightSeconds = null;
+            }
             // 清除联机战斗超时覆盖值
             PathingConditionConfig.MultiplayerFightTimeoutOverride = null;
             // multiplayer-hoeing-selectable-fight-strategy §C5: 复位战斗策略开关静态信号为默认 true（保持现有固定行为）
@@ -784,6 +796,21 @@ public class AutoHoeingTask : ISoloTask
                     // === 落后追赶上传（hoeing-lagging-catchup-host-synced-setting spec）===
                     EnableLaggingCatchUp = _config.EnableLaggingCatchUp,
                     LagSegmentThreshold = Math.Clamp(_config.LagSegmentThreshold, 1, 3),
+                    // === 执行期参数房主同步（hoeing-multiplayer-sync-execution-params spec §C1）===
+                    // 上传源统一取房主当前配置组 _partyConfig（房主锄地实际生效实例，OQ-1）；
+                    // _partyConfig 为 null 时退回全局 AutoFightConfig（AutoFight 类）或字段默认。
+                    PartyTimeoutAction = _config.PartyTimeoutAction,
+                    PickDropsAfterFightEnabled = _partyConfig?.AutoFightConfig?.PickDropsAfterFightEnabled
+                        ?? TaskContext.Instance().Config.AutoFightConfig.PickDropsAfterFightEnabled,
+                    PickDropsAfterFightSeconds = SyncExecParamsDecisions.ClampSeconds(
+                        _partyConfig?.AutoFightConfig?.PickDropsAfterFightSeconds
+                        ?? TaskContext.Instance().Config.AutoFightConfig.PickDropsAfterFightSeconds),
+                    QuicklySkip = _partyConfig?.QuicklySkip ?? false,
+                    CombatScriptEndDelayMs = SyncExecParamsDecisions.ClampDelayMs(
+                        _partyConfig?.CombatScriptEndDelayMs ?? 900),
+                    OnlyInTeleportRecover = _partyConfig?.OnlyInTeleportRecover ?? false,
+                    SwimmingEnabled = _partyConfig?.AutoFightConfig?.SwimmingEnabled
+                        ?? TaskContext.Instance().Config.AutoFightConfig.SwimmingEnabled,
                 };
                 
                 // 房主上传配置，带重试机制（最多3次）
@@ -1171,6 +1198,9 @@ public class AutoHoeingTask : ISoloTask
                         // === 落后追赶同步（hoeing-lagging-catchup-host-synced-setting spec，成员回填房主下发值）===
                         _config.EnableLaggingCatchUp = hostConfig.EnableLaggingCatchUp;
                         _config.LagSegmentThreshold = Math.Clamp(hostConfig.LagSegmentThreshold, 1, 3);
+
+                        // === 执行期参数房主同步（hoeing-multiplayer-sync-execution-params §C2）===
+                        ApplyHostExecParams(hostConfig);
 
                         // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                         PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -2093,6 +2123,9 @@ public class AutoHoeingTask : ISoloTask
                     // === 落后追赶同步（hoeing-lagging-catchup-host-synced-setting spec，多世界轮换块）===
                     _config.EnableLaggingCatchUp = hostConfig.EnableLaggingCatchUp;
                     _config.LagSegmentThreshold = Math.Clamp(hostConfig.LagSegmentThreshold, 1, 3);
+
+                    // === 执行期参数房主同步（hoeing-multiplayer-sync-execution-params §C2，多世界轮换块，R6）===
+                    ApplyHostExecParams(hostConfig);
 
                     // 联机模式：设置战斗超时覆盖值（不修改原始配置）
                     PathingConditionConfig.MultiplayerFightTimeoutOverride = hostConfig.FightTimeoutSeconds;
@@ -3584,6 +3617,41 @@ public class AutoHoeingTask : ISoloTask
             .Select(s => s.Trim())
             .Where(s => s.Length > 0)
             .ToList();
+    }
+
+    /// <summary>
+    /// hoeing-multiplayer-sync-execution-params §C2：成员回填房主同步的 6 类执行期参数。
+    /// 单世界（~1140-1192）与多世界轮换（~2080-2115）两处回填共用，避免遗漏（DRY）。
+    /// 通道 D：PartyTimeoutAction 回填 _config（仅回填，成员超时行为不变，见 §C3）。
+    /// 通道 B：QuicklySkip/OnlyInTeleportRecover/CombatScriptEndDelayMs 写成员 _partyConfig（PathExecutor 读 PartyConfig.*）。
+    /// 通道 B'：PickDropsAfterFightEnabled/SwimmingEnabled/PickDropsAfterFightSeconds 写 _partyConfig.AutoFightConfig。
+    /// 通道 C：全局 PickDropsAfterFightSeconds（ScanPickTask 绕过 taskParams 读全局），存原值→覆盖，finally 恢复。
+    /// </summary>
+    private void ApplyHostExecParams(Multiplayer.Models.RoomConfig hostConfig)
+    {
+        // 通道 D：仅回填 _config，不改变成员超时行为
+        _config.PartyTimeoutAction = hostConfig.PartyTimeoutAction;
+
+        // 通道 B / B'：写成员本机 _partyConfig（及其下挂 AutoFightConfig）
+        if (_partyConfig != null)
+        {
+            _partyConfig.QuicklySkip = hostConfig.QuicklySkip;
+            _partyConfig.CombatScriptEndDelayMs = SyncExecParamsDecisions.ClampDelayMs(hostConfig.CombatScriptEndDelayMs);
+            _partyConfig.OnlyInTeleportRecover = hostConfig.OnlyInTeleportRecover;
+            if (_partyConfig.AutoFightConfig != null)
+            {
+                _partyConfig.AutoFightConfig.PickDropsAfterFightEnabled = hostConfig.PickDropsAfterFightEnabled;
+                _partyConfig.AutoFightConfig.PickDropsAfterFightSeconds = SyncExecParamsDecisions.ClampSeconds(hostConfig.PickDropsAfterFightSeconds);
+                _partyConfig.AutoFightConfig.SwimmingEnabled = hostConfig.SwimmingEnabled;
+            }
+        }
+
+        // 通道 C：ScanPickTask 读全局 AutoFightConfig.PickDropsAfterFightSeconds，绕过 taskParams。
+        // 存原值（仅首次）→ 覆盖，finally（§C4）恢复。
+        _savedGlobalPickDropsAfterFightSeconds ??=
+            TaskContext.Instance().Config.AutoFightConfig.PickDropsAfterFightSeconds;
+        TaskContext.Instance().Config.AutoFightConfig.PickDropsAfterFightSeconds =
+            SyncExecParamsDecisions.ClampSeconds(hostConfig.PickDropsAfterFightSeconds);
     }
 
     /// <summary>

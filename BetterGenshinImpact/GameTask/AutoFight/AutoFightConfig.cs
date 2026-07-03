@@ -61,6 +61,8 @@ public partial class AutoFightConfig : ObservableObject
     
     [ObservableProperty] private bool _arlecchinoAutoEnabled = false;
 
+    [ObservableProperty] private int _qiKong = 0;
+
     /// <summary>
     /// 只拾取精英掉落
     /// Closed ：关闭功能

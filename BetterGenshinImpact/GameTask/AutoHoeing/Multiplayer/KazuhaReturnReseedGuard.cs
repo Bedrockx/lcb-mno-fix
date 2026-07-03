@@ -33,6 +33,18 @@ public static class KazuhaReturnReseedGuard
     public const int ReseedReSampleDelayMs = 100;
 
     /// <summary>
+    /// 派蒙检测（画面稳定门控）轮询间隔毫秒数。战斗结算画面 / 小地图重绘期间，
+    /// 每 50ms 检测一次 Bv.IsInMainUi，命中主界面即结束等待。
+    /// </summary>
+    public const int ScreenStablePollIntervalMs = 50;
+
+    /// <summary>
+    /// 派蒙检测最大轮询次数。50ms × 10 = 500ms 总窗口上限；
+    /// 耗尽仍未命中主界面则退化到现有重播种 + 重识别行为（不崩溃、不死循环）。
+    /// </summary>
+    public const int ScreenStableMaxPolls = 10;
+
+    /// <summary>
     /// 核心编排：判定首次坐标是否可信；异常则重播种战斗点锚点 + 重识别，最多 maxRetry 次；
     /// 任一次落入阈值即返回可信坐标，全部仍异常则返回"放弃本轮移动"。
     /// </summary>
@@ -46,6 +58,8 @@ public static class KazuhaReturnReseedGuard
     /// <param name="reSample">重识别委托：CaptureToRectArea + Navigation.GetPosition，返回新坐标。</param>
     /// <param name="reSampleStable">(0,0) 失败时的全局匹配重识别委托：CaptureToRectArea + Navigation.GetPositionStable。不重播种（Q4）。</param>
     /// <param name="delay">延时委托：Task.Delay(ReseedReSampleDelayMs, ct)。</param>
+    /// <param name="isScreenStable">画面稳定门控：返回当前帧是否在稳定主界面，由调用方 CaptureToRectArea + Bv.IsInMainUi 实现。</param>
+    /// <param name="screenStablePollDelay">派蒙检测轮询延时：Task.Delay(ScreenStablePollIntervalMs, ct)。</param>
     /// <param name="log">日志委托。</param>
     /// <param name="ct">取消令牌。</param>
     public static async Task<ReseedGuardResult> EvaluateAndReseedAsync(
@@ -58,6 +72,8 @@ public static class KazuhaReturnReseedGuard
         Func<Point2f> reSample,
         Func<Point2f> reSampleStable,
         Func<CancellationToken, Task> delay,
+        Func<bool> isScreenStable,                        // 新增：当前帧是否在稳定主界面
+        Func<CancellationToken, Task> screenStablePollDelay, // 新增：50ms 轮询延时
         Action<string> log,
         CancellationToken ct)
     {
@@ -76,6 +92,20 @@ public static class KazuhaReturnReseedGuard
         {
             reseedAnchor();              // SetPrevPosition(战斗点)：把漂移的陈旧锚点拨回战斗点
             await delay(ct);             // 极短延时让小地图重绘稳定 / 角色位置变化
+
+            // 画面稳定门控（本次修复）：重识别前先派蒙检测等画面稳定。
+            // 间隔 50ms 轮询，最多 ScreenStableMaxPolls(=10) 次 ≈ 500ms；
+            // 命中主界面立即结束等待；耗尽仍未稳定则退化，继续执行下方 reSample（维持现状）。
+            for (int poll = 0; poll < ScreenStableMaxPolls; poll++)
+            {
+                if (isScreenStable())
+                {
+                    if (poll > 0) log($"[重识别] 第{attempt}次重识别前派蒙检测：画面已稳定（轮询{poll}次）");
+                    break;
+                }
+                await screenStablePollDelay(ct);
+            }
+
             pos = reSample();            // 重新截图 + GetPosition
 
             // 重识别失败（(0,0)）：改走 GetPositionStable 全局匹配内层重试（见下）。

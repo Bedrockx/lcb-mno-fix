@@ -1023,6 +1023,13 @@ public class PathExecutor
                                                             return Navigation.GetPositionStable(s, waypoint.MapName, waypoint.MapMatchMethod);
                                                         },
                                                         delay: token => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, token),
+                                                        // 画面稳定门控（本次修复）：重识别前先派蒙检测。CaptureToRectArea + Bv.IsInMainUi。
+                                                        isScreenStable: () =>
+                                                        {
+                                                            using var s = CaptureToRectArea();
+                                                            return Bv.IsInMainUi(s);
+                                                        },
+                                                        screenStablePollDelay: token => Task.Delay(KazuhaReturnReseedGuard.ScreenStablePollIntervalMs, token),
                                                         log: m => Logger.LogInformation("[联机] 战后聚物回点{Msg}", m),
                                                         ct: ct);
 
@@ -1452,6 +1459,16 @@ public class PathExecutor
         var result = await NewRetry.WaitForAction( () =>
             {
                 _returnMainUiTask.Start(ct).Wait(5000,ct);
+                using (var ra2 = CaptureToRectArea())
+                {
+                    var boon = ra2.Find(AutoFightAssets.Instance.NutritionBagRa);
+                    if (boon.IsExist())
+                    {
+                        boon.Click();
+                        return true;
+                    }
+                    Logger.LogWarning("自动吃药：小道具页面复检未发现营养袋1");
+                }
                 Logger.LogInformation("自动吃药：尝试装配便携式营养袋剩余次数 {t}",PathingConditionConfig.RetryAssemblyNum);
                 Delay(1000, ct).Wait();
                 Simulation.SendInput.SimulateAction(GIActions.QuickUseGadget, KeyType.KeyDown);
@@ -1466,7 +1483,7 @@ public class PathExecutor
                         boon.Click();
                         return true;
                     }
-                    Logger.LogWarning("自动吃药：小道具页面未发现营养袋");
+                    Logger.LogWarning("自动吃药：小道具页面未发现营养袋2");
                 }
                 //点击一下鼠标
                 Simulation.SendInput.Mouse.LeftButtonClick();

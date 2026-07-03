@@ -108,6 +108,8 @@ public class Avatar
     /// 替代原先读全局 AutoFightConfig 的做法，修复"配置组开关对位置1失效"问题。默认 false。
     /// </summary>
     public bool MavuikaMotorcycleCheckEnabled { get; set; } = false;
+    
+    public int QiKong { get; set; } = 0;
 
     /// <summary>
     /// 名字所在矩形位置
@@ -857,40 +859,43 @@ public class Avatar
                     var bb222 = !IsQi(region999);
                     if (bb222 || aa)
                     {
-                        Logger.LogInformation(aa?"特化检测：阿蕾奇诺->红血放Q..{t1} {t2}":"特化检测：阿蕾奇诺->契空放Q..{t1} {t2}",aa, bb22);
+                        Logger.LogInformation(aa?"特化检测：阿蕾奇诺->红血放Q..{t1} {t2} {t3}":"特化检测：阿蕾奇诺->契空放Q..{t1} {t2} {t3}",aa, bb22,cc);
                         Simulation.SendInput.SimulateAction(GIActions.ElementalBurst);
-                        Sleep(100, Ct);
-                        using var imageAfterBurst = CaptureToRectArea();
-                        if (imageAfterBurst.Find(ElementAssets.Instance.PaimonMenuRo).IsEmpty())
+                        if (!IsReady(region999,1805,979,15,12,new Scalar(255,250,238),new Scalar(255,251,240),2))
                         {
-                            Sleep(1995, Ct);
-                            if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
+                            Sleep(100, Ct); 
+                            using var imageAfterBurst = CaptureToRectArea();
+                            if (imageAfterBurst.Find(ElementAssets.Instance.PaimonMenuRo).IsEmpty())
                             {
-                                return;
-                            }
-
-                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                            Sleep(50, Ct);
-                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                            Sleep(795, Ct);
-                            if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
-                            {
-                                return;
-                            }
-
-                            for (int i = 0; i < 3; i++)
-                            {
-                                Charge(450);
-                                Sleep(150, Ct);
-                                using var region13 = CaptureToRectArea();
-                                var bb2 = IsQi(region13);
-                                if (bb2)
+                                Sleep(1995, Ct);
+                                if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
                                 {
-                                    Logger.LogInformation("特化检测：阿蕾奇诺->回收契成功..");
-                                    break;
+                                    return;
                                 }
 
-                                Logger.LogInformation("特化检测：阿蕾奇诺->回收契失败，重试..");
+                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                                Sleep(50, Ct);
+                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                                Sleep(795, Ct);
+                                if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
+                                {
+                                    return;
+                                }
+
+                                for (int i = 0; i < 3; i++)
+                                {
+                                    Charge(450);
+                                    Sleep(150, Ct);
+                                    using var region13 = CaptureToRectArea();
+                                    var bb2 = IsQi(region13);
+                                    if (bb2)
+                                    {
+                                        Logger.LogInformation("特化检测：阿蕾奇诺->回收契成功..");
+                                        break;
+                                    }
+
+                                    Logger.LogInformation("特化检测：阿蕾奇诺->回收契失败，重试..");
+                                }
                             }
                         }
                     }
@@ -914,7 +919,15 @@ public class Avatar
                 if (bb22)
                 {
                     // Logger.LogWarning("契空1 {isTimes}",isTimes);
-                    isTimes += 2;
+                    if ((DateTime.Now - redTime).TotalMilliseconds >= 100)
+                    {
+                        redTime = DateTime.Now;
+                        isTimes += 2; 
+                    }
+                    else
+                    {
+                        isTimes = 0;
+                    }
                 }
                 
                 if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
@@ -948,17 +961,17 @@ public class Avatar
 }
     
     // 阿蕾奇诺契检测区域
-    private const int QiX = 1030;
+    private const int QiX = 840;//1030
     private const int QiY = 1000;
-    private const int QiW = 30;
+    private const int QiW = 220;//30
     private const int QiH = 20;
 
     // 阿蕾奇诺契 BGR: (255, 144, 140) ±12
     private static readonly Scalar QiLower = new Scalar(252, 120, 120);
     private static readonly Scalar QiUpper = new Scalar(255, 160, 160);
-    public static bool IsQi(ImageRegion ra)
+    public bool IsQi(ImageRegion ra)
     {
-        using var bloodRect = ra.DeriveCrop(QiX, QiY, QiW, QiH);
+        using var bloodRect = ra.DeriveCrop(QiX, QiY, QiW-QiKong, QiH);
         using var mask = OpenCvCommonHelper.Threshold(bloodRect.SrcMat, QiLower, QiUpper);
         using var labels = new Mat();
         using var stats = new Mat();
@@ -967,6 +980,19 @@ public class Avatar
             connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
         // Logger.LogWarning("numLabelsQ : {t}", numLabels);
         return numLabels >= 3;
+    }
+
+    public static bool IsReady(ImageRegion ra, int x, int y, int w, int h, Scalar lower, Scalar upper, int num = 1)
+    {
+        using var bloodRect = ra.DeriveCrop(x, y, w, h);
+        using var mask = OpenCvCommonHelper.Threshold(bloodRect.SrcMat, lower, upper);
+        using var labels = new Mat();
+        using var stats = new Mat();
+        using var centroids = new Mat();
+        var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+            connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+        // Logger.LogWarning("numLabelsQ : {t}", numLabels);
+        return numLabels >= num;
     }
 
     /// <summary>
@@ -1010,6 +1036,7 @@ public class Avatar
         return IsMotorcycleColor(a, b);
     }
 
+    private bool _arlecchino = false;
     /// <summary>
     /// 使用元素战技 E
     /// </summary>
@@ -1023,7 +1050,52 @@ public class Avatar
             }
             
             var mwk = false;
-            if (Name == "玛薇卡")
+            
+            if (!_arlecchino && ArlecchinoAutoEnabled && Name == "阿蕾奇诺")
+            {
+                _arlecchino = true;
+                Avatar? alqn = CombatScenes.SelectAvatar("阿蕾奇诺");
+                var region1 = CaptureToRectArea();
+                if (!AutoFightSkill.AvatarSkillAsync(Logger, alqn, false, 1, Ct, region1, false).Result)
+                {
+                    if (region1.Find(ElementAssets.Instance.PaimonMenuRo).IsExist())
+                    {
+                        Logger.LogInformation("特化检测UseSkill：阿蕾奇诺->空契放E");
+                        if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
+                        {
+                            return;
+                        }
+                        Sleep(50, Ct);
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        Sleep(50, Ct);
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        Sleep(50, Ct);
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        Sleep(600, Ct);
+                        if (Ct is { IsCancellationRequested: true } || AutoFightTask.FightEndTotoly)
+                        {
+                            return;
+                        }
+
+                        for (int jj = 0; jj < 3; jj++)
+                        {
+                            Charge(350);
+                            Sleep(100, Ct);
+                            using var region13 = CaptureToRectArea();
+                            var bb = IsQi(region13);
+                            if (bb)
+                            {
+                                Logger.LogInformation("特化检测UseSkill：阿蕾奇诺->回收契成功..");
+                                break;
+                            }
+                            Logger.LogInformation("特化检测UseSkill：阿蕾奇诺->回收契失败，重试..");
+                        }
+                        
+                        return;
+                    }
+                }
+            }
+            else if (Name == "玛薇卡")
             {
                 using var region2 = CaptureToRectArea();
                 // 获取两个点的颜色值
@@ -1083,6 +1155,7 @@ public class Avatar
             }
             else
             {
+                if(_arlecchino)return;
                 Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
             }
             

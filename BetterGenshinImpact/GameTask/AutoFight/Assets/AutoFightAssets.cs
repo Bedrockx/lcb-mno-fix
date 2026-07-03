@@ -227,13 +227,17 @@ public class AutoFightAssets : BaseAssets<AutoFightAssets>
         }.InitTemplate();
 
         // F2 多人游戏页面右侧的红色"踢出玩家"按钮
-        // ROI 限定在右半屏的中上部，覆盖 1P~4P 行的踢出按钮区域，避开右下角"回到单人模式"按钮干扰
+        // ROI 限定在右半屏的中上部，覆盖 1P~4P 行的踢出按钮区域，避开右下角"回到单人模式"按钮干扰 
         KickBtnRa = new RecognitionObject
         {
             Name = "KickBtn",
             RecognitionType = RecognitionTypes.TemplateMatch,
             TemplateImageMat = GameTaskManager.LoadAssetImage("AutoFight", "kick_btn.png", this.systemInfo),
             RegionOfInterest = new Rect(CaptureRect.Width/2, 0, CaptureRect.Width/2, CaptureRect.Height),
+            // 三通道（BGR）匹配：踢出按钮为红色、旁边"加为好友"为绿色。默认灰度匹配会把红/绿抹成
+            // 相近亮度导致误匹配到绿色按钮（此时提高 Threshold 也无效，因两者灰度分数都很高）。
+            // 开启三通道让颜色重新参与判定，区分红/绿。
+            Use3Channels = true,
             Threshold = 0.85,
             DrawOnWindow = true
         }.InitTemplate();

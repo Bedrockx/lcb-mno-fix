@@ -707,6 +707,7 @@ public class AutoFightTask : ISoloTask
             avatarToInit.ArlecchinoBurstLowHpGateEnabled = _taskParam.ArlecchinoBurstLowHpGateEnabled;
             avatarToInit.MavuikaMotorcycleCheckEnabled = _taskParam.MavuikaMotorcycleCheckEnabled;
             avatarToInit.ArlecchinoAutoEnabled = _taskParam.ArlecchinoAutoEnabled;
+            avatarToInit.QiKong = _taskParam.QiKong;
         }
         TimeSpan fightTimeout = TimeSpan.FromSeconds(_taskParam.Timeout); // 战斗超时时间
         Stopwatch timeoutStopwatch = Stopwatch.StartNew();
@@ -1102,7 +1103,7 @@ public class AutoFightTask : ISoloTask
                                             if (useA)
                                             {
                                                 Logger.LogInformation("自动EQ战斗：执行序号 {name} 角色首E技能后普攻 {time} ms", useSkillListWithF, useSkillListWithA[useSkillListWithF]);
-                                                avatarFirst.Attack(useSkillListWithA[useSkillListWithF]);
+                                                avatarFirst.Attack(useSkillListWithA[useSkillListWithF]); 
                                             }
                                         }
                                     }
@@ -3145,6 +3146,13 @@ public class AutoFightTask : ISoloTask
                         return Navigation.GetPositionStable(img, fightWaypoint.MapName, fightWaypoint.MapMatchMethod);
                     },
                     delay: t => Task.Delay(KazuhaReturnReseedGuard.ReseedReSampleDelayMs, t),
+                    // 画面稳定门控（本次修复）：重识别前先派蒙检测。CaptureToRectArea + Bv.IsInMainUi。
+                    isScreenStable: () =>
+                    {
+                        using var ra = CaptureToRectArea();
+                        return Bv.IsInMainUi(ra);
+                    },
+                    screenStablePollDelay: t => Task.Delay(KazuhaReturnReseedGuard.ScreenStablePollIntervalMs, t),
                     log: m => TaskControl.Logger.LogInformation("[联机][万叶] 持续回点{Msg}", m),
                     ct: token);
 

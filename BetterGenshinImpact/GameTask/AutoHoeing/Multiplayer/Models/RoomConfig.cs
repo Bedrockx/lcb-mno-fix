@@ -67,4 +67,20 @@ public class RoomConfig
     public bool EnableLaggingCatchUp { get; set; } = false;
     /// <summary>落后触发段数阈值，范围 [1,3]，默认 1。落后 ≥ N 段触发逐段跳进追赶。</summary>
     public int LagSegmentThreshold { get; set; } = 1;
+
+    // === 执行期参数房主同步（hoeing-multiplayer-sync-execution-params spec, 与服务端 RoomConfig 严格对称）===
+    /// <summary>组队超时动作：0=停止，1=按现有人数继续。源字段 AutoHoeingConfig.PartyTimeoutAction</summary>
+    public int PartyTimeoutAction { get; set; } = 0;
+    /// <summary>光柱拾取开关。源字段 AutoFightConfig.PickDropsAfterFightEnabled</summary>
+    public bool PickDropsAfterFightEnabled { get; set; } = false;
+    /// <summary>光柱拾取时长（秒），clamp ≥0。源字段 AutoFightConfig.PickDropsAfterFightSeconds</summary>
+    public int PickDropsAfterFightSeconds { get; set; } = 15;
+    /// <summary>删除战后等待。源字段 PathingPartyConfig.QuicklySkip</summary>
+    public bool QuicklySkip { get; set; } = false;
+    /// <summary>简易等待时间（ms），clamp ≥0。源字段 PathingPartyConfig.CombatScriptEndDelayMs</summary>
+    public int CombatScriptEndDelayMs { get; set; } = 900;
+    /// <summary>只在传送点时恢复。源字段 PathingPartyConfig.OnlyInTeleportRecover</summary>
+    public bool OnlyInTeleportRecover { get; set; } = false;
+    /// <summary>游泳检测。源字段 AutoFightConfig.SwimmingEnabled（默认 true）</summary>
+    public bool SwimmingEnabled { get; set; } = true;
 }

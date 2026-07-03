@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -53,10 +54,6 @@ public class AutoPartyTask
     private const double PlayerNameH = 40;
     // 已知 2P~4P 名字起点 Y（1080P）
     private static readonly double[] PlayerNameY1080P = [307, 429, 555];
-
-    // 踢陌生人扫描节流参数
-    private const int StrangerKickAcceptCooldownSec = 6;   // 同意申请后的保护期
-    private const int StrangerKickScanIntervalSec = 4;     // 扫描最小间隔
 
     /// <summary>
     /// UID 脱敏：保留前 3 位和后 3 位，中间用 *** 代替（用于日志输出）
@@ -244,9 +241,9 @@ public class AutoPartyTask
 
         // 用 UID 集合做"自己人"判定（成员加入 BGI 房间时上报 UID 和 PlayerName）
         // 名字也准备一份用于 OCR 容错匹配
-        // 同意申请后到 BGI 房间名单更新之间有几秒延迟，期间不踢人，避免误踢自己人刚到的成员
-        DateTime lastAcceptTime = DateTime.MinValue;
-        DateTime lastKickScanTime = DateTime.MinValue;
+        // 跨轮次维护每个"疑似陌生人"身份键的连续不匹配计数（连续 2 次才踢，吸收单帧 OCR 抽风）。
+        // 局部变量：方法退出即释放，不用静态字段避免跨会话污染（显式依赖原则）。
+        var consecutiveMissByIdentity = new Dictionary<string, int>(StringComparer.Ordinal);
         // F2 诊断日志节流状态（策略 D：变化立即输出 + 无变化每 5s 兜底心跳）
         F2DiagnosticLogThrottle.F2Metrics? lastEmittedF2Metrics = null;
         DateTime lastF2DiagnosticEmitTime = DateTime.MinValue;
@@ -303,9 +300,6 @@ public class AutoPartyTask
                             ClickConfirmButton();
                             await Delay(700, ct);
                             _logger.LogDebug("[自动组队-房主] 已点击确认，等待加载...");
-
-                            // 同意申请后开启保护期：BGI 名单刷新有延迟，期间不扫描踢人
-                            lastAcceptTime = DateTime.Now;
 
                             // 处理完弹窗后继续检测，可能还有更多申请
                             continue;
@@ -379,13 +373,20 @@ public class AutoPartyTask
                             return decision.ReturnedCount;
 
                         case HostPartyDecisionKind.KickStrangers:
-                            _logger.LogWarning("[自动组队-房主] 检测到陌生人闯入：游戏内 {F2} 人 > BGI 房间 {Bgi} 人，暂不开锄",
-                                f2Count, signalRCount);
-                            if ((DateTime.Now - lastAcceptTime).TotalSeconds >= StrangerKickAcceptCooldownSec)
+                            // 满员触发逐行成分校验。防误踢由名字校验 + 连续 2 次确认接管，
+                            // 不再受时间保护期 / 扫描节流门控（组队放人阶段不需等待）。
+                            var kickResult = await KickStrangersAsync(client, consecutiveMissByIdentity, expectedCount, ct);
+                            if (kickResult == StrangerKickScanResult.AllAllowed)
                             {
-                                await KickStrangersAsync(client, ct);
-                                lastKickScanTime = DateTime.Now;
+                                // 满员且逐行校验全为名单成员 ⇒ 开锄收敛出口
+                                _logger.LogInformation("[自动组队-房主] F2 满员且逐行校验全为名单成员，开始锄地 {Count}/{Expected}",
+                                    f2Count, expectedCount);
+                                Simulation.SendInput.Keyboard.KeyPress(User32.VK.VK_ESCAPE);
+                                await Delay(500, ct);
+                                await WaitForMainUi(ct, 10);
+                                return f2Count;
                             }
+                            // Kicked 或 PendingStranger（陌生人尚未连续 2 次）或 NotFull → 继续下一轮
                             await Delay(1000, ct);
                             continue;
 
@@ -441,19 +442,15 @@ public class AutoPartyTask
                     }
                 }
 
-                // 周期性踢陌生人扫描：F2 页面下，距上次同意申请已超保护期、且距上次扫描已超间隔
-                // 为什么放这里：在按 Y 之前，避免和申请弹窗叠加；保护期防止误踢刚被同意但 BGI 名单未更新的成员
-                if (isInF2Screen
-                    && (DateTime.Now - lastAcceptTime).TotalSeconds >= StrangerKickAcceptCooldownSec
-                    && (DateTime.Now - lastKickScanTime).TotalSeconds >= StrangerKickScanIntervalSec)
+                // 周期性踢陌生人扫描：F2 页面下每轮自然节拍扫描，不加人为节流。
+                // 满员触发 + 逐行名字校验 + 连续 2 次确认在 KickStrangersAsync 内部完成。
+                if (isInF2Screen)
                 {
-                    if (await KickStrangersAsync(client, ct))
+                    if (await KickStrangersAsync(client, consecutiveMissByIdentity, expectedCount, ct) == StrangerKickScanResult.Kicked)
                     {
                         // 踢人会触发弹窗 / UI 变化，下一轮重新评估
-                        lastKickScanTime = DateTime.Now;
                         continue;
                     }
-                    lastKickScanTime = DateTime.Now;
                 }
 
                 // 在 F2 界面，持续按 Y 触发申请弹窗（弹窗本身由循环顶部 ConfirmBtnRo 持续检测捕获）
@@ -785,9 +782,15 @@ public class AutoPartyTask
     ///   2. 按按钮 Y 坐标排序，逐行 OCR 同行玩家名（X 固定 417，Y 跟着按钮中心走）
     ///   3. 玩家名与 client.CurrentPlayerList 容错匹配，匹配失败 → 视为陌生人
     ///   4. 点对应踢出按钮 → 处理弹出的二次确认弹窗
-    /// 返回值：是否触发了踢人操作（用于调用方决定下一轮节奏）
+    /// 返回三态 StrangerKickScanResult：NotFull（未满员/空名单/无按钮）、AllAllowed（满员且全为名单成员）、
+    /// PendingStranger（有陌生人但连续不匹配未达阈值）、Kicked（本轮踢出一个）。
+    /// 详见 .kiro/specs/hoeing-party-stranger-kick-race-nodelay-fix/design.md §改动 4。
     /// </summary>
-    private async Task<bool> KickStrangersAsync(CoordinatorClient client, CancellationToken ct)
+    private async Task<StrangerKickScanResult> KickStrangersAsync(
+        CoordinatorClient client,
+        Dictionary<string, int> consecutiveMissByIdentity,
+        int expectedCount,
+        CancellationToken ct)
     {
         try
         {
@@ -800,40 +803,37 @@ public class AutoPartyTask
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray() ?? Array.Empty<string>();
 
-            // BGI 房间名单可能为空（成员还没注册），保守起见跳过踢人
+            // BGI 房间名单可能为空（成员还没注册），保守起见跳过踢人（Preservation 3.1）
             if (allowedNames.Length == 0)
             {
                 _logger.LogDebug("[踢陌生人] BGI 房间名单为空，跳过本次扫描");
-                return false;
+                return StrangerKickScanResult.NotFull;
             }
 
             var kickRegions = ra.FindMulti(AutoFightAssets.Instance.KickBtnRa);
             if (kickRegions.Count == 0)
             {
-                return false;
+                return StrangerKickScanResult.NotFull;
             }
 
-            // 关键守卫：陌生人闯入 ⇔ 游戏内实际人数（踢出按钮 + 1）> BGI 房间登记人数
-            // 游戏世界硬上限 4 人，所以只有 BGI 没满 + 游戏世界先被陌生人占满才会触发。
-            // 没有这道守卫时，调用方（满员判定 / 周期性扫描）一旦因模板偶发漏识或 OCR
-            // 偏差走到 KickStrangersAsync，会把队伍内合法成员当陌生人误踢。
-            var f2Count = kickRegions.Count + 1;
-            var bgiCount = client.CurrentRoomPlayerCount;
-            if (bgiCount <= 0 || f2Count <= bgiCount)
+            // 满员触发（替代被删的 f2Count > bgiCount 计数守卫）：worldCount = 踢出按钮数 + 1。
+            // 世界硬上限 4 人，满员时若混入陌生人则合法成员永远进不来，此刻必须做逐行成分校验。
+            // 未满员不做校验（Preservation 3.2：未满员的陌生人等满员那一刻再踢）。
+            var worldCount = kickRegions.Count + 1;
+            if (!StrangerKickDecisions.ShouldTriggerCompositionCheck(worldCount, expectedCount))
             {
-                _logger.LogDebug("[踢陌生人] 游戏内 {F2} 人 <= BGI 房间 {Bgi} 人，无陌生人，跳过扫描",
-                    f2Count, bgiCount);
-                return false;
+                _logger.LogDebug("[踢陌生人] 世界未满员 {World}/{Expected}，不触发成分校验", worldCount, expectedCount);
+                return StrangerKickScanResult.NotFull;
             }
 
-            _logger.LogInformation("[踢陌生人] 检测到陌生人闯入：游戏内 {F2} 人 > BGI 房间 {Bgi} 人，开始扫描",
-                f2Count, bgiCount);
+            _logger.LogInformation("[踢陌生人] 世界满员 {World}/{Expected}，开始逐行成分校验", worldCount, expectedCount);
 
             // 按 Y 坐标排序：从上到下对应 2P / 3P / 4P
             var sorted = kickRegions.OrderBy(r => r.Y).ToList();
             var scale = TaskContext.Instance().SystemInfo.ScaleTo1080PRatio;
 
-            bool anyKicked = false;
+            var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+            bool anyStranger = false;
             foreach (var btn in sorted)
             {
                 ct.ThrowIfCancellationRequested();
@@ -873,16 +873,34 @@ public class AutoPartyTask
                     continue;
                 }
 
-                // 复用现有白名单匹配（70% 容错，支持括号备注）
+                // 身份归一（仅用于跨轮次连续不匹配计数归属，不参与踢不踢判定）
+                var identityKey = StrangerKickDecisions.NormalizeIdentityKey(playerName);
+                if (string.IsNullOrEmpty(identityKey)) continue;
+                seenKeys.Add(identityKey);
+
+                // 复用现有白名单匹配（70% 容错，支持括号备注）——踢不踢的唯一判据
                 var isAllowed = IsInWhitelist(playerName, allowedNames);
+                var misses = StrangerKickDecisions.NextConsecutiveMiss(
+                    consecutiveMissByIdentity.GetValueOrDefault(identityKey), isAllowed);
+                consecutiveMissByIdentity[identityKey] = misses;
+
                 if (isAllowed)
                 {
-                    _logger.LogDebug("[踢陌生人] 玩家 [{Name}] 在 BGI 房间名单中，保留", playerName);
+                    _logger.LogDebug("[踢陌生人] 玩家 [{Name}] 在 BGI 房间名单中，保留（连续不匹配计数清零）", playerName);
                     continue;
                 }
 
-                _logger.LogWarning("[踢陌生人] 检测到陌生人 [{Name}]，BGI 房间名单: [{Allowed}]，准备踢出",
-                    playerName, string.Join(", ", allowedNames));
+                // 名字不在名单 = 疑似陌生人，但需连续 2 次不匹配才踢（吸收单帧 OCR 抽风）
+                anyStranger = true;
+                if (!StrangerKickDecisions.ShouldKickAfterMisses(misses))
+                {
+                    _logger.LogInformation("[踢陌生人] 疑似陌生人 [{Name}] 连续不匹配 {N}/{T} 次，暂不踢（吸收单帧抽风）",
+                        playerName, misses, StrangerKickDecisions.DefaultMissThreshold);
+                    continue;
+                }
+
+                _logger.LogWarning("[踢陌生人] 陌生人 [{Name}] 连续 {N} 次不匹配，BGI 房间名单: [{Allowed}]，踢出",
+                    playerName, misses, string.Join(", ", allowedNames));
 
                 // 点击踢出按钮中心
                 btn.Click();
@@ -910,14 +928,21 @@ public class AutoPartyTask
                 {
                     _logger.LogInformation("[踢陌生人] 已踢出陌生人 [{Name}]", playerName);
                 }
-                anyKicked = true;
+
+                // 踢掉后该键下轮因玩家消失会被清理，这里先移除避免残留
+                consecutiveMissByIdentity.Remove(identityKey);
 
                 // 一次只踢一个，避免按钮位置变化导致后续点错；下一轮循环会再扫
                 await Delay(800, ct);
-                break;
+                return StrangerKickScanResult.Kicked;
             }
 
-            return anyKicked;
+            // 清理本轮未出现的陈旧键（玩家已离开/被踢）：合法成员离开又回来时从 0 起算
+            var staleKeys = consecutiveMissByIdentity.Keys.Where(k => !seenKeys.Contains(k)).ToList();
+            foreach (var k in staleKeys) consecutiveMissByIdentity.Remove(k);
+
+            // 满员 + 逐行校验完成：有陌生人待确认 → PendingStranger；全是自己人 → AllAllowed
+            return anyStranger ? StrangerKickScanResult.PendingStranger : StrangerKickScanResult.AllAllowed;
         }
         catch (OperationCanceledException)
         {
@@ -926,7 +951,7 @@ public class AutoPartyTask
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "[踢陌生人] 扫描异常，忽略本次");
-            return false;
+            return StrangerKickScanResult.NotFull;
         }
     }
 

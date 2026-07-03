@@ -608,20 +608,29 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <ui:TextBlock Grid.Row="0"
                                           Grid.Column="0"
                                           FontTypography="Body"
-                                          Text="阿蕾奇诺普攻自动EQ"
+                                          Text="阿蕾奇诺普攻自动EQ,参数0~220,对应判断契空的20%~90%"
                                           TextWrapping="Wrap" />
                             <ui:TextBlock Grid.Row="1"
                                           Grid.Column="0"
                                           Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
                                           Text="开启后阿蕾奇诺的策略只需要attack(10)就可以普攻/没契/红血就自动识别EQ"
                                           TextWrapping="Wrap" />
+                            
+                            <ui:TextBox Grid.Row="0"
+                                        Grid.RowSpan="2"
+                                        Grid.Column="1"
+                                        Margin="0,0,10,0"
+                                        IsEnabled="{Binding Config.AutoFightConfig.ArlecchinoAutoEnabled, Mode=TwoWay}"
+                                        Text="{Binding Config.AutoFightConfig.QiKong, Mode=TwoWay}" />
+                            
                             <ui:ToggleSwitch Grid.Row="0"
                                              Grid.RowSpan="2"
-                                             Grid.Column="1"
+                                             Grid.Column="2"
                                              Margin="0,0,12,0"
                                              IsChecked="{Binding Config.AutoFightConfig.ArlecchinoAutoEnabled, Mode=TwoWay}" />
                         </Grid>
