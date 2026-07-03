@@ -77,6 +77,15 @@ public class TpTask
     public static volatile bool SuppressAutoRevivalClick = false;
 
     /// <summary>
+    /// 动态跑道模式自校准：MoveMouseBy 相对移动的"实际物理位移 ÷ 意图 pixelDelta"比值。
+    /// 该比值随系统 DPI / 鼠标设置漂移（实测 dpi2→1.0，dpi2.5→1.225），无法用公式可靠预测，
+    /// 故由 MouseMoveMap 每次拖动用 GetCursorPos 前后差实测校准（EMA 平滑），MoveMapTo 算跑道时消费。
+    /// 0 表示尚未校准（用 max(1, dpi/2) 作初值）。单线程传送场景，普通 static double 足够。
+    /// 详见 .kiro/specs/teleport-drag-edge-aware-runway-clamp/。
+    /// </summary>
+    private static double _dragMoveAmplifyRatio = 0;
+
+    /// <summary>
     /// 阶段 1 传送过渡页 (TeleportLoadingDetector.IsLoadingScreen) 命中后触发的静态事件。
     /// 参数：检测到 loading 命中的 Environment.TickCount 时间戳（毫秒），便于上层算延时。
     ///
@@ -114,7 +123,12 @@ public class TpTask
             _screenHeight = _tpConfig.MapZoomDistanceForce;
         }
         
-        TaskControl.Logger.LogDebug("屏幕宽高：{gameScreenBounds} 游戏分辨率：{GetGameScreenRect} 传送参数：{screenHeight}", gameScreenBounds.Size,SystemControl.GetGameScreenRect(TaskContext.Instance().GameHandle).Size,_screenHeight);
+        // 快速拖动 + MapZoomDistanceForce==0 → 动态跑道模式（边缘感知截断）；!=0 → 自定义固定倍数；关 → 经典。
+        TaskControl.Logger.LogDebug("屏幕宽高：{gameScreenBounds} 游戏分辨率：{GetGameScreenRect} 传送参数：{screenHeight} 拖动模式={Mode}",
+            gameScreenBounds.Size,
+            SystemControl.GetGameScreenRect(TaskContext.Instance().GameHandle).Size,
+            _screenHeight,
+            (_tpConfig.MapMoveStepDivisor && _tpConfig.MapZoomDistanceForce == 0) ? "动态跑道" : (_tpConfig.MapMoveStepDivisor ? "自定义固定倍数" : "经典"));
     }
 
     /// <summary>
@@ -953,13 +967,89 @@ public class TpTask
             // TaskControl.Logger.LogDebug("屏幕参数：{screenHeight}", _screenHeight);
             
             var moveStepDivisor = _tpConfig.MapMoveStepDivisor ? 40 : 10;
-            var moveStepDivisorDouble = _tpConfig.MapMoveStepDivisor ? SystemControl.GetGameScreenRect(TaskContext.Instance().GameHandle).Height*_screenHeight/5: _tpConfig.MaxMouseMove;
-            int moveMouseX = (int)Math.Min(totalMoveMouseX, moveStepDivisorDouble * totalMoveMouseX / mouseDistance) * Math.Sign(xOffset);
-            int moveMouseY = (int)Math.Min(totalMoveMouseY, moveStepDivisorDouble * totalMoveMouseY / mouseDistance) * Math.Sign(yOffset);
+            int moveMouseX, moveMouseY;
+            (double, double)? landingOverride = null;
+
+            // Dynamic_Runway_Mode：快速拖动 且 MapZoomDistanceForce==0 → 边缘感知动态跑道截断
+            // 详见 .kiro/specs/teleport-drag-edge-aware-runway-clamp/design.md §Components 2
+            bool dynamicRunway = _tpConfig.MapMoveStepDivisor && _tpConfig.MapZoomDistanceForce == 0;
+            if (dynamicRunway)
+            {
+                // 期望一次拖到目标，仅由跑道封顶。rawMove 即本次意图的物理像素位移
+                // （已由 GetCursorPos 光标读回实测验证：MoveMouseBy 的 /dpi 与 OS ×dpi 相抵，
+                //  实际物理位移 ≈ moveMouse 本身，故此处不再对位移做 /dpi 缩小）。
+                double rawMoveX = totalMoveMouseX * Math.Sign(xOffset);
+                double rawMoveY = totalMoveMouseY * Math.Sign(yOffset);
+
+                // 落点：与 MouseMoveMap 快速拖动分支同一随机公式，只算一次，供跑道计算与实际拖动共用
+                var captureRect = TaskContext.Instance().SystemInfo.CaptureAreaRect;
+                int signX = -Math.Sign((int)rawMoveX);
+                int signY = -Math.Sign((int)rawMoveY);
+                double landingX = captureRect.Width / 2d + Random.Shared.Next(captureRect.Width / 5, captureRect.Width * 3 / 10) * signX;
+                double landingY = captureRect.Height / 2d + Random.Shared.Next(captureRect.Height / 5, captureRect.Height * 3 / 10) * signY;
+                landingOverride = (landingX, landingY);
+
+                // 落点绝对物理坐标 = 捕获区左上角 + 落点（虚拟桌面物理坐标，与 GetCursorPos 同空间）。
+                // 跑道边界用游戏所在显示器的物理矩形：必须用 Win32 GetMonitorInfo.rcMonitor（与 capRect /
+                // GetCursorPos 同一物理虚拟桌面空间），不能用 WinForms Screen.Bounds——后者在高 DPI 缩放
+                // 下返回逻辑坐标，与 capRect 混用会导致落点相对坐标错乱、runway<0、t=0 卡死。
+                double landingAbsX = captureRect.X + landingX;
+                double landingAbsY = captureRect.Y + landingY;
+
+                Vanara.PInvoke.RECT monRect;
+                var __hMon = Vanara.PInvoke.User32.MonitorFromWindow(TaskContext.Instance().GameHandle,
+                    Vanara.PInvoke.User32.MonitorFlags.MONITOR_DEFAULTTONEAREST);
+                var __mi = new Vanara.PInvoke.User32.MONITORINFO { cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<Vanara.PInvoke.User32.MONITORINFO>() };
+                if (Vanara.PInvoke.User32.GetMonitorInfo(__hMon, ref __mi))
+                {
+                    monRect = __mi.rcMonitor;
+                }
+                else
+                {
+                    // 兜底：取不到显示器信息时退回捕获区自身范围（绝对坐标），至少不会算出负跑道卡死
+                    monRect = new Vanara.PInvoke.RECT(captureRect.X, captureRect.Y,
+                        captureRect.X + captureRect.Width, captureRect.Y + captureRect.Height);
+                }
+
+                // 落点换算成"相对显示器左上角"，边界用显示器物理宽高，三者同处物理空间
+                double monLeft = monRect.Left, monTop = monRect.Top;
+                double monW = monRect.Width, monH = monRect.Height;
+                double landingRelX = landingAbsX - monLeft;
+                double landingRelY = landingAbsY - monTop;
+
+                // 自校准放大比值：MoveMouseBy 相对移动实际物理位移 = 意图位移 × ratio（随 DPI 漂移）。
+                // 跑道要约束的是"实际物理位移"，故把意图位移 × ratio 作为预期实际位移喂给跑道计算。
+                // 首次未校准（=0）时用 max(1, dpi/2) 作初值（dpi2→1.0、dpi2.5→1.25，贴合实测）。
+                double dpiForInit = TaskContext.Instance().DpiScale;
+                double amplify = _dragMoveAmplifyRatio > 0 ? _dragMoveAmplifyRatio : Math.Max(1.0, dpiForInit / 2.0);
+                double t = TeleportDragRunway.ComputeRunwayScale(
+                    landingRelX, landingRelY, rawMoveX * amplify, rawMoveY * amplify,
+                    monW, monH, 50);
+
+                moveMouseX = (int)(rawMoveX * t);
+                moveMouseY = (int)(rawMoveY * t);
+
+                if (t < 1.0)
+                {
+                    TaskControl.Logger.LogDebug("[传送拖动] 触发边缘跑道截断 t={T:0.00}（避免鼠标顶屏幕边缘，amplify={AMP:0.00}）", t, amplify);
+                }
+            }
+            else
+            {
+                var moveStepDivisorDouble = _tpConfig.MapMoveStepDivisor ? SystemControl.GetGameScreenRect(TaskContext.Instance().GameHandle).Height*_screenHeight/5: _tpConfig.MaxMouseMove;
+                moveMouseX = (int)Math.Min(totalMoveMouseX, moveStepDivisorDouble * totalMoveMouseX / mouseDistance) * Math.Sign(xOffset);
+                moveMouseY = (int)Math.Min(totalMoveMouseY, moveStepDivisorDouble * totalMoveMouseY / mouseDistance) * Math.Sign(yOffset);
+
+                // [诊断] 未激活动态模式（MapZoomDistanceForce!=0 或非快速拖动）→ 走旧逻辑，无边缘保护
+                TaskControl.Logger.LogInformation(
+                    "[跑道] 未激活 MapMoveStepDivisor={Fast} MapZoomDistanceForce={Force} → 旧固定倍数逻辑",
+                    _tpConfig.MapMoveStepDivisor, _tpConfig.MapZoomDistanceForce);
+            }
+
             double moveMouseLength = Math.Sqrt(moveMouseX * moveMouseX + moveMouseY * moveMouseY);
             int moveSteps = Math.Max((int)moveMouseLength / moveStepDivisor, 3); // 每次移动的步数最小为 3，避免除 0 错误
             
-            await MouseMoveMap(moveMouseX, moveMouseY, moveSteps);
+            await MouseMoveMap(moveMouseX, moveMouseY, moveSteps, landingOverride);
 
             // 推算理论上的移动后坐标 (惯性预测)
             Point2f predictedPoint = mapCenterPoint + new Point2f(
@@ -1141,7 +1231,7 @@ public class TpTask
         }
     }
 
-    private async Task MouseMoveMap(int pixelDeltaX, int pixelDeltaY, int steps = 10)
+    private async Task MouseMoveMap(int pixelDeltaX, int pixelDeltaY, int steps = 10, (double, double)? landingOverride = null)
     {
         double dpi = TaskContext.Instance().DpiScale;
         int[] stepX = GenerateSteps((int)(pixelDeltaX / dpi), steps);
@@ -1151,11 +1241,21 @@ public class TpTask
 
         if (_tpConfig.MapMoveStepDivisor)
         {
-            int signX = -Math.Sign(pixelDeltaX);
-            int signY = -Math.Sign(pixelDeltaY);
-            GameCaptureRegion.GameRegionMove((rect, _) =>
-                (rect.Width / 2d + Random.Shared.Next(rect.Width / 5, rect.Width *3/10)*signX,
-                    rect.Height / 2d + Random.Shared.Next(rect.Height / 5, rect.Height *3/10)*signY));
+            if (landingOverride is { } lp)
+            {
+                // Dynamic_Runway_Mode：使用 MoveMapTo 已算好的落点（与跑道计算同一取值），
+                // 保证惯性推算位移与真实拖动一致。详见 teleport-drag-edge-aware-runway-clamp spec。
+                GameCaptureRegion.GameRegionMove((_, _) => (lp.Item1, lp.Item2));
+            }
+            else
+            {
+                // Custom_Fixed_Mode：原随机落点公式，逐字节不变
+                int signX = -Math.Sign(pixelDeltaX);
+                int signY = -Math.Sign(pixelDeltaY);
+                GameCaptureRegion.GameRegionMove((rect, _) =>
+                    (rect.Width / 2d + Random.Shared.Next(rect.Width / 5, rect.Width *3/10)*signX,
+                        rect.Height / 2d + Random.Shared.Next(rect.Height / 5, rect.Height *3/10)*signY));
+            }
         }
         else
         {
@@ -1167,7 +1267,16 @@ public class TpTask
         await Delay(50+_tpConfig.StepIntervalMilliseconds-2, ct);
         Simulation.SendInput.Mouse.LeftButtonDown();
         await Delay(50+_tpConfig.StepIntervalMilliseconds-2, ct);
-        
+
+        // 动态跑道自校准：拖动前读真实光标物理坐标（GetCursorPos 返回物理像素），
+        // 拖动后再读一次，用前后差实测 MoveMouseBy 放大比值。仅动态跑道模式需要。
+        bool __needCalib = _tpConfig.MapMoveStepDivisor && landingOverride is not null;
+        Vanara.PInvoke.POINT __curBefore = default;
+        if (__needCalib)
+        {
+            Vanara.PInvoke.User32.GetCursorPos(out __curBefore);
+        }
+
         if (_tpConfig.MapMoveStepDivisor)
         {
             using (var image = CaptureToRectArea())
@@ -1210,6 +1319,31 @@ public class TpTask
                             isMark = false;
                         }
                     } 
+                }
+            }
+
+            // 拖动后读真实光标物理坐标，实测 MoveMouseBy 放大比值 = 实际物理位移 / 意图 pixelDelta，
+            // 用较大分量轴计算（信噪比高），EMA 平滑写入 _dragMoveAmplifyRatio 供跑道计算自校准。
+            if (__needCalib)
+            {
+                Vanara.PInvoke.User32.GetCursorPos(out var __curAfter);
+                int __realDx = __curAfter.X - __curBefore.X;
+                int __realDy = __curAfter.Y - __curBefore.Y;
+                double __measured = 0;
+                if (Math.Abs(pixelDeltaX) >= Math.Abs(pixelDeltaY) && pixelDeltaX != 0)
+                {
+                    __measured = Math.Abs(__realDx) / (double)Math.Abs(pixelDeltaX);
+                }
+                else if (pixelDeltaY != 0)
+                {
+                    __measured = Math.Abs(__realDy) / (double)Math.Abs(pixelDeltaY);
+                }
+                // 只在本次确实产生了有意义位移、且比值落在合理区间时校准（防中断/遮挡的异常样本污染）
+                if (__measured >= 0.5 && __measured <= 3.0 && (Math.Abs(__realDx) + Math.Abs(__realDy)) > 20)
+                {
+                    _dragMoveAmplifyRatio = _dragMoveAmplifyRatio > 0
+                        ? _dragMoveAmplifyRatio * 0.6 + __measured * 0.4   // EMA 平滑
+                        : __measured;                                       // 首次直接采纳
                 }
             }
         }
