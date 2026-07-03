@@ -39,6 +39,24 @@
         <!--  联机内容区（MultiplayerEnabled=true 显示）  -->
         <StackPanel Visibility="{Binding MultiplayerEnabled, Converter={StaticResource BoolToVis}}">
 
+            <!--  A0 账户名称（hoeing-multiplayer-account-name-config）：复用单机 AccountName，纯本地不同步  -->
+            <ui:CardExpander Margin="0,0,0,12"
+                             ContentPadding="12"
+                             Icon="{ui:SymbolIcon Person24}"
+                             IsExpanded="True">
+                <ui:CardExpander.Header>
+                    <ui:TextBlock FontTypography="Body" Text="账户名称" />
+                </ui:CardExpander.Header>
+                <StackPanel>
+                    <ui:TextBox Margin="0,0,0,4"
+                                PlaceholderText="默认账户"
+                                Text="{Binding AccountName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <ui:TextBlock Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                  Text="用于多用户运行时区分不同账户的记录，单用户请勿修改"
+                                  TextWrapping="Wrap" />
+                </StackPanel>
+            </ui:CardExpander>
+
             <!--  A 联机角色  -->
             <ui:CardExpander Margin="0,0,0,12"
                              ContentPadding="12"

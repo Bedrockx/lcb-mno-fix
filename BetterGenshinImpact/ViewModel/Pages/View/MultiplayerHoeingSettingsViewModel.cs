@@ -19,6 +19,8 @@ namespace BetterGenshinImpact.ViewModel.Pages.View;
 public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
 {
     // ===== A 联机角色 =====
+    // hoeing-multiplayer-account-name-config：账户名称（复用单机 AutoHoeingConfig.AccountName，纯本地不同步）
+    [ObservableProperty] private string _accountName = "默认账户";
     [ObservableProperty] private bool _multiplayerEnabled;
 
     [ObservableProperty]
@@ -166,6 +168,8 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
 
         GroupOptions = groupOptions;
 
+        // hoeing-multiplayer-account-name-config：账户名初值，缺失回退全局配置的 AccountName（R1.3）
+        _accountName = GetStr("accountName", g.AccountName);
         _multiplayerEnabled = GetBool("multiplayerEnabled", g.MultiplayerEnabled);
         _roleSelection = GetStr("multiplayerRole", "host") == "member" ? "成员（加入房间）" : "房主（创建房间）";
 
@@ -234,6 +238,8 @@ public partial class MultiplayerHoeingSettingsViewModel : ObservableObject
     /// </summary>
     public void WriteMultiplayerSettings(Dictionary<string, object?> settings)
     {
+        // hoeing-multiplayer-account-name-config：写回 accountName 键（复用单机同一配置组通道，R2）
+        settings["accountName"] = AccountName;
         settings["multiplayerRole"] = RoleSelection == "成员（加入房间）" ? "member" : "host";
         settings["memberJoinMode"] = JoinModeSelection == "随机加入现有房间" ? "random" : "byHostName";
         settings["targetHostName"] = TargetHostName;

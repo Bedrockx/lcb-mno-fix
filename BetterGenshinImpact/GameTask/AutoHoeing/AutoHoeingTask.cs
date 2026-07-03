@@ -1544,7 +1544,13 @@ public class AutoHoeingTask : ISoloTask
     {
         // 1. 加载配置
         var accountName = string.IsNullOrEmpty(_config.AccountName) ? "默认账户" : _config.AccountName;
-        LoadGroupSettings(accountName);
+        LoadGroupSettings(accountName, _config.MultiplayerEnabled);
+
+        // hoeing-multiplayer-account-name-config：任务启动即确保账户 CD 记录文件存在。
+        // 无论单机/联机、房主/成员，新账户名一经运行即在 records 目录生成 {账户名}.json，
+        // 不再依赖"某条路线成功跑完才写盘"（联机被踢/中断时那条路径不会触发）。
+        _cdManager.Load(_dataDir, accountName);
+        _cdManager.EnsureFileExists();
 
         // 2. 解析时间限制
         _timeChecker.ParseRestrictions(_config.NoRunPeriod);
@@ -3530,7 +3536,7 @@ public class AutoHoeingTask : ISoloTask
         }
     }
 
-    private void LoadGroupSettings(string accountName)
+    private void LoadGroupSettings(string accountName, bool isMultiplayer = false)
     {
         if (_config.GroupIndex == 1)
         {
@@ -3585,7 +3591,12 @@ public class AutoHoeingTask : ISoloTask
             }
             else
             {
-                _logger.LogError("配置文件不存在，请先在路径组一运行一次");
+                // hoeing-multiplayer-account-name-config R3：联机路径缺失 settings 文件静默走默认设置继续，
+                // 不记录阻塞错误；单机路径保留现状 LogError（R3.4 / R4）。
+                if (LoadGroupSettingsDecisions.ShouldLogMissingSettingsError(isMultiplayer))
+                {
+                    _logger.LogError("配置文件不存在，请先在路径组一运行一次");
+                }
             }
         }
     }

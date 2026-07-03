@@ -58,6 +58,19 @@ public class CdManager
     }
 
     /// <summary>
+    /// 确保账户 CD 记录文件存在（hoeing-multiplayer-account-name-config）：
+    /// 任务启动时调用，若 records/{accountName}.json 不存在则立即创建一个空记录文件，
+    /// 使新账户名一经运行即可见对应文件，不依赖路线是否跑完 / 房主成员角色。
+    /// 已存在则不改动其内容。须在 Load 之后调用（Load 会设置 _filePath）。
+    /// </summary>
+    public void EnsureFileExists()
+    {
+        if (string.IsNullOrEmpty(_filePath)) return;
+        if (File.Exists(_filePath)) return;
+        Save();   // 当前 _records 为空则写出空数组，同时创建 records 目录
+    }
+
+    /// <summary>
     /// 判断路线是否在CD中
     /// </summary>
     public bool IsOnCooldown(RouteInfo route)
