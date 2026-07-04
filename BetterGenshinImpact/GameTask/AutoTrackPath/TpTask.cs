@@ -755,7 +755,7 @@ public class TpTask
             try
             {
                 using var ra = CaptureToRectArea();
-                if (Bv.IsInBigMapUi(ra))
+                if (ra.Find(QuickTeleportAssets.Instance.MapScaleButtonRo).IsExist())
                 {
                     await Delay(10, ct);
                     return true;
@@ -767,6 +767,7 @@ public class TpTask
             }
             await Delay(pollMs, ct);
         }
+        Logger.LogWarning("等待大地图界面超时（{TimeoutMs}ms），可能地图尚未打开", timeoutMs);
         return false;
     }
 
