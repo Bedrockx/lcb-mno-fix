@@ -312,8 +312,12 @@ public class TpTask
 
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
         {
-            await Delay(200, ct);
-            await WaitMapStableOrTimeoutAsync(300); 
+            // await Delay(200, ct);
+            // await WaitMapStableOrTimeoutAsync(300); 
+            if (!await WaitForBigMapUiOrTimeoutAsync(2000))
+            {
+                Logger.LogWarning("等待大地图界面超时（2000ms），可能地图尚未打开，继续按原逻辑读取缩放级别");
+            }
         }
         else
         {
@@ -696,8 +700,14 @@ public class TpTask
         // fast-drag-recognition-acceleration spec / step 1 boot delay optimization
         if (_tpConfig.MapMoveStepDivisor && _tpConfig.FastDragRecognitionEnabled)
         {
-            await Delay(200, ct);
-            await WaitMapStableOrTimeoutAsync(timeoutMs: 1300); 
+            // await Delay(200, ct);
+            // await WaitMapStableOrTimeoutAsync(timeoutMs: 1300); 
+            //
+            // await WaitMapStableOrTimeoutAsync(200);
+            if (!await WaitForBigMapUiOrTimeoutAsync(2000))
+            {
+                Logger.LogWarning("等待大地图界面超时（2000ms），可能地图尚未打开");
+            }
             using var ra2 = CaptureToRectArea();
             if (ra2.Find(QuickTeleportAssets.Instance.MapScaleButtonRo).IsExist())
             {
@@ -966,18 +976,19 @@ public class TpTask
             
             // TaskControl.Logger.LogDebug("屏幕参数：{screenHeight}", _screenHeight);
             
-            var moveStepDivisor = _tpConfig.MapMoveStepDivisor ? 40 : 10;
             int moveMouseX, moveMouseY;
             (double, double)? landingOverride = null;
 
             // Dynamic_Runway_Mode：快速拖动 且 MapZoomDistanceForce==0 → 边缘感知动态跑道截断
             // 详见 .kiro/specs/teleport-drag-edge-aware-runway-clamp/design.md §Components 2
             bool dynamicRunway = _tpConfig.MapMoveStepDivisor && _tpConfig.MapZoomDistanceForce == 0;
+
+            var moveStepDivisor = _tpConfig.MapMoveStepDivisor ? 40 : 10;
             if (dynamicRunway)
             {
-                // 期望一次拖到目标，仅由跑道封顶。rawMove 即本次意图的物理像素位移
-                // （已由 GetCursorPos 光标读回实测验证：MoveMouseBy 的 /dpi 与 OS ×dpi 相抵，
-                //  实际物理位移 ≈ moveMouse 本身，故此处不再对位移做 /dpi 缩小）。
+                // 意图物理像素位移 = 到目标的满量位移。绝对定位（MouseMoveTo）精确落位、不过冲，
+                // 故无需过冲保护系数；满量拖动最多把目标拖到正中心不会过头/回摆，太远则由跑道 t<1
+                // 自动截断到屏幕内、下一轮继续。这样每次拖满、速度最快，且不顶边。
                 double rawMoveX = totalMoveMouseX * Math.Sign(xOffset);
                 double rawMoveY = totalMoveMouseY * Math.Sign(yOffset);
 
@@ -1031,7 +1042,7 @@ public class TpTask
 
                 if (t < 1.0)
                 {
-                    TaskControl.Logger.LogDebug("[传送拖动] 触发边缘跑道截断 t={T:0.00}（避免鼠标顶屏幕边缘，amplify={AMP:0.00}）", t, amplify);
+                    TaskControl.Logger.LogDebug("[传送拖动] 触发边缘跑道截断 t={T:0.00}（拖到屏幕边缘即停）", t);
                 }
             }
             else
@@ -1039,17 +1050,20 @@ public class TpTask
                 var moveStepDivisorDouble = _tpConfig.MapMoveStepDivisor ? SystemControl.GetGameScreenRect(TaskContext.Instance().GameHandle).Height*_screenHeight/5: _tpConfig.MaxMouseMove;
                 moveMouseX = (int)Math.Min(totalMoveMouseX, moveStepDivisorDouble * totalMoveMouseX / mouseDistance) * Math.Sign(xOffset);
                 moveMouseY = (int)Math.Min(totalMoveMouseY, moveStepDivisorDouble * totalMoveMouseY / mouseDistance) * Math.Sign(yOffset);
-
-                // [诊断] 未激活动态模式（MapZoomDistanceForce!=0 或非快速拖动）→ 走旧逻辑，无边缘保护
-                TaskControl.Logger.LogInformation(
-                    "[跑道] 未激活 MapMoveStepDivisor={Fast} MapZoomDistanceForce={Force} → 旧固定倍数逻辑",
-                    _tpConfig.MapMoveStepDivisor, _tpConfig.MapZoomDistanceForce);
             }
 
             double moveMouseLength = Math.Sqrt(moveMouseX * moveMouseX + moveMouseY * moveMouseY);
             int moveSteps = Math.Max((int)moveMouseLength / moveStepDivisor, 3); // 每次移动的步数最小为 3，避免除 0 错误
-            
+
             await MouseMoveMap(moveMouseX, moveMouseY, moveSteps, landingOverride);
+
+            // 动态跑道：拖动越快（小 StepInterval）画面渲染越可能滞后，若立刻识别会读到中间态坐标、
+            // 距离虚高导致多拖一轮。拖后先等地图像素稳定再识别（通常几十 ms 即返回，远比多拖一整轮便宜），
+            // 使小 StepInterval 也能一次到位。仅动态模式；其它路径行为不变。
+            if (dynamicRunway)
+            {
+                await WaitMapStableOrTimeoutAsync(300);
+            }
 
             // 推算理论上的移动后坐标 (惯性预测)
             Point2f predictedPoint = mapCenterPoint + new Point2f(
@@ -1283,15 +1297,44 @@ public class TpTask
             {
                 var pos = image.SrcMat.At<Vec3b>(500,500);
                 var pos2 = image.SrcMat.At<Vec3b>(600,500);
-               
+
+                // 动态跑道模式：用绝对定位 MoveMouseTo 分步，从落点 lp 精确移动到 lp+pixelDelta。
+                // 绝对定位不受 Windows 指针加速影响（相对 MoveMouseBy 会被非线性放大，实测大位移放大 1.65×
+                // 导致顶边/回摆），位移精确可预测。capture 区坐标与物理桌面 1:1（已由光标读回验证）。
+                // 仅动态模式（landingOverride 非空）走此路；Custom_Fixed 仍走下方相对分步，逐字节不变。
+                bool __absDrag = landingOverride is not null;
+                double __startX = landingOverride?.Item1 ?? 0;
+                double __startY = landingOverride?.Item2 ?? 0;
+                // 绝对分步用不除 dpi 的缓动步进（capture 像素空间），累计和 = pixelDelta
+                int[] stepXAbs = __absDrag ? GenerateSteps(pixelDeltaX, steps) : stepX;
+                int[] stepYAbs = __absDrag ? GenerateSteps(pixelDeltaY, steps) : stepY;
+                double __accX = 0, __accY = 0;
+
                 for (var i = 1; i < steps; i++)
                 {
                     var i1 = i;
-                    
-                    // Simulation.SendInput.Mouse.MoveMouseBy(stepX[i], stepY[i]);
-                    GameCaptureRegion.GameRegionMoveBy((_, scale) => (stepX[i1] * scale, stepY[i1] * scale));
+
+                    if (__absDrag)
+                    {
+                        // 绝对定位：累计缓动步进得到当前应到达的 capture 坐标，MoveMouseTo 精确落位
+                        __accX += stepXAbs[i1];
+                        __accY += stepYAbs[i1];
+                        double tx = __startX + __accX;
+                        double ty = __startY + __accY;
+                        GameCaptureRegion.GameRegionMove((_, _) => (tx, ty));
+                    }
+                    else
+                    {
+                        // Simulation.SendInput.Mouse.MoveMouseBy(stepX[i], stepY[i]);
+                        GameCaptureRegion.GameRegionMoveBy((_, scale) => (stepX[i1] * scale, stepY[i1] * scale));
+                    }
                     if(i==1) await Delay(50, ct);
-                    await Delay(_tpConfig.StepIntervalMilliseconds, ct);
+                    // 绝对定位（动态跑道）用精确延时，让 StepInterval<15ms 真正生效（否则被系统计时精度钳到 ~15.6ms）；
+                    // 其它路径保持原 Task.Delay 行为不变。
+                    if (__absDrag)
+                        await PreciseDelay(_tpConfig.StepIntervalMilliseconds, ct);
+                    else
+                        await Delay(_tpConfig.StepIntervalMilliseconds, ct);
                     
                     if (i >= steps/2 && steps > 3 && isMark)
                     {
@@ -1473,6 +1516,30 @@ public class TpTask
             await Delay(pollMs, ct);
         }
         return false; // 阶段 2 超时：回退到 ClickTpPoint 兜底
+    }
+
+    /// <summary>
+    /// 精确短延时：Task.Delay 受 Windows 系统计时器精度（默认 ~15.6ms）钳制，设 2ms 实际睡 ~15.6ms，
+    /// 导致动态拖动的 StepInterval 参数对 &lt;15ms 的取值完全失效（拖动"慢且调参无感"）。
+    /// 本方法用 Stopwatch + SpinWait 忙等到精确时长，让小 StepInterval 真正生效、拖动提速。
+    /// 仅用于拖动循环这类几百毫秒的短程忙等，代价是这期间占用一点 CPU，可接受。
+    /// ms &gt;= 15 时直接走 Task.Delay（此时精度足够，不必忙等占 CPU）。
+    /// </summary>
+    private async Task PreciseDelay(int ms, CancellationToken token)
+    {
+        if (ms <= 0) return;
+        if (ms >= 15)
+        {
+            await Delay(ms, token);
+            return;
+        }
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var target = TimeSpan.FromMilliseconds(ms);
+        while (sw.Elapsed < target)
+        {
+            token.ThrowIfCancellationRequested();
+            Thread.SpinWait(200);
+        }
     }
 
     private int[] GenerateSteps(int delta, int steps)
@@ -1695,7 +1762,7 @@ public class TpTask
         {
             using var ra3 = CaptureToRectArea();
             ra3.Find(_assets.MapUndergroundToGroundButtonRo, rg => rg.Click());
-            await Delay(200, ct);
+            await Delay(170, ct);
         }
 
         // 识别当前位置

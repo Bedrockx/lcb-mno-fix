@@ -151,9 +151,10 @@ public class QuickTeleportAssets : BaseAssets<QuickTeleportAssets>
                 (int)(90 * AssetScale),
                 (int)(570 * AssetScale)),
             DrawOnWindow = true,
-            UseMask = true,
+            Use3Channels = true,  // 该按钮有颜色相近内容，灰度匹配区分不开导致分数上不去（实测灰度<0.8），必须用3通道彩色匹配
+            UseMask = true,       // 模板绿色背景需用 mask 抠掉（与诊断时彩色+mask 算出 0.856 的条件一致）
             MaskColor = Color.FromArgb(0, 255, 0),
-            Threshold = 0.99
+            Threshold = 0.8       // 彩色匹配实测约 0.856，0.99 过严改为 0.8
         }.InitTemplate();
         MapUndergroundToGroundButtonRo = new RecognitionObject
         {
