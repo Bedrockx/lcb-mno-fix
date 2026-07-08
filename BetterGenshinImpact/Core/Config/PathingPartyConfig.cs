@@ -143,7 +143,7 @@ public partial class PathingPartyConfig : ObservableObject
     private int _distance = 45;
     
     [JsonIgnore]
-    public List<string> HurryOnAvatarList { get; } = ["","自动","玛薇卡","瓦雷莎","希诺宁"];
+    public List<string> HurryOnAvatarList { get; } = ["","自动","玛薇卡","瓦雷莎","希诺宁","闲云"];
     
     [JsonIgnore]
     public List<string> TravelModeList { get; } = ["精准靠近","连续赶路"];
@@ -153,6 +153,12 @@ public partial class PathingPartyConfig : ObservableObject
     
     [ObservableProperty]
     private string _travelMode = "精准靠近";
+    
+    /// <summary>
+    /// 接近节点时切人步行（火神同款），适用于除闲云外所有角色
+    /// </summary>
+    [ObservableProperty]
+    private bool _switchToWalkEnabled = false;
     
     [ObservableProperty]
     private bool _mwkFlyEnabled = true;

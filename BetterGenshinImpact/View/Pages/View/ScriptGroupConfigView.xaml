@@ -288,191 +288,210 @@
                                          Grid.Column="1"
                                          IsChecked="{Binding PathingConfig.IsVisitStatueBeforeSwitchParty}" />
                     </Grid>
-                    <Grid Margin="016,16,16,0">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <ui:TextBlock Grid.Row="0"
-                                      Grid.Column="0"
-                                      FontTypography="Body"
-                                      Text="【赶路位】在冲刺和奔跑的节点大于设定距离自行执行"
-                                      TextWrapping="Wrap" />
-                        <ui:TextBlock Grid.Row="1"
-                                      Grid.Column="0"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="精准靠近：适合采集，节点间减速 / 连续赶路：适合锄地"
-                                      TextWrapping="Wrap" />
-                        
-                        <ui:TextBlock Grid.Row="0"
-                                      Grid.RowSpan="2"
-                                      Grid.Column="1"
-                                      FontSize="10"
-                                      Margin="0,0,10,34"
-                                      HorizontalAlignment="Center"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="赶路模式"
-                                      TextWrapping="Wrap" />
-                        <ComboBox Grid.Row="0"
-                                  Grid.RowSpan="2"
-                                  Grid.Column="1"
-                                  Width="110"
-                                  Margin="0,0,10,0"
-                                  ItemsSource="{Binding PathingConfig.TravelModeList}"
-                                  SelectedItem="{Binding PathingConfig.TravelMode}">
-                                    <ComboBox.Style>
-                                        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding PathingConfig.HurryOnAvatar}" Value="">
-                                                    <Setter Property="IsEnabled" Value="False"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </ComboBox.Style>
-                            </ComboBox>
-                        
-                        <ui:TextBlock Grid.Row="0"
-                                      Grid.Column="2"
-                                      Grid.RowSpan="2"
-                                      FontSize="10"
-                                      Margin="0,0,10,34"
-                                      HorizontalAlignment="Center"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="赶路最小距离"
-                                      TextWrapping="Wrap" />
-                        <ui:TextBox Grid.Row="0"
-                                    Grid.RowSpan="2"
-                                    Grid.Column="2"
-                                    MinWidth="60"
-                                    Height="35"
-                                    HorizontalContentAlignment="Center"
-                                    Margin="0,0,10,0"
-                                    Text="{Binding PathingConfig.Distance}">
-                                     <ui:TextBox.Style>
+                    <ui:CardExpander Margin="0,0,0,12"
+                                     ContentPadding="0">
+                        <ui:CardExpander.Header>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="自动赶路设置"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="选择赶路角色后，在冲刺和奔跑节点大于设定距离时自动执行赶路技能"
+                                              TextWrapping="Wrap" />
+                            </Grid>
+                        </ui:CardExpander.Header>
+                        <StackPanel>
+                            <!-- 赶路角色 -->
+                            <Grid Margin="16,16,16,10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="赶路角色"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="选择赶路角色后自动启用，留空则关闭赶路"
+                                              TextWrapping="Wrap" />
+                                <ComboBox Grid.Row="0"
+                                          Grid.RowSpan="2"
+                                          Grid.Column="1"
+                                          MinWidth="100"
+                                          ItemsSource="{Binding PathingConfig.HurryOnAvatarList}"
+                                          SelectedItem="{Binding PathingConfig.HurryOnAvatar}" />
+                            </Grid>
+
+                            <!-- 赶路模式 / 最小距离 -->
+                            <Grid Margin="16,0,16,10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="赶路模式"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="精准靠近：适合采集，节点间减速 / 连续赶路：适合锄地"
+                                              TextWrapping="Wrap" />
+                                <ComboBox Grid.Row="0"
+                                          Grid.RowSpan="2"
+                                          Grid.Column="1"
+                                          Width="100"
+                                          Margin="0,0,10,0"
+                                          ItemsSource="{Binding PathingConfig.TravelModeList}"
+                                          SelectedItem="{Binding PathingConfig.TravelMode}" />
+                                <ui:TextBox Grid.Row="0"
+                                            Grid.RowSpan="2"
+                                            Grid.Column="2"
+                                            MinWidth="60"
+                                            Height="35"
+                                            HorizontalContentAlignment="Center"
+                                            Text="{Binding PathingConfig.Distance}">
+                                    <ui:TextBox.Style>
                                         <Style TargetType="ui:TextBox" BasedOn="{StaticResource {x:Type ui:TextBox}}">
                                             <Setter Property="Visibility" Value="Visible"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding PathingConfig.HurryOnAvatar}" Value="">
-                                                    <Setter Property="IsEnabled" Value="False"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
                                         </Style>
                                     </ui:TextBox.Style>
-                        </ui:TextBox>
+                                </ui:TextBox>
+                            </Grid>
 
-                        
-                        <ui:TextBlock Grid.Row="0"
-                                      Grid.Column="3"
-                                      FontSize="10"
-                                      Margin="10,0,5,0"
-                                      HorizontalAlignment="Left"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="赶路角色"
-                                      TextWrapping="Wrap" />
-                        <ComboBox Grid.Row="0"
-                                  Grid.Column="3"
-                                  Width="100"
-                                  Margin="0,0,5,0"
-                                  HorizontalAlignment="Right"
-                                  ItemsSource="{Binding PathingConfig.HurryOnAvatarList}"
-                                  SelectedItem="{Binding PathingConfig.HurryOnAvatar}" />
-                        
-                        <ui:TextBlock Grid.Row="1"
-                                      Grid.Column="3"
-                                      FontSize="10"
-                                      Margin="10,0,5,0"
-                                      HorizontalAlignment="Left"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="飞行赶路"
-                                      TextWrapping="Wrap" />                      
-                        <ui:ToggleSwitch Grid.Row="1"
-                                                          Grid.Column="3"
-                                                          FontSize="10"
-                                                          Margin="0,0,5,0"
-                                                          HorizontalAlignment="Right"
-                                                          IsChecked="{Binding PathingConfig.MwkFlyEnabled, Mode=TwoWay}">
-                                             <ui:ToggleSwitch.Style>
-                                                 <Style TargetType="ui:ToggleSwitch" BasedOn="{StaticResource {x:Type ui:ToggleSwitch}}">
-                                                     <Setter Property="IsEnabled" Value="False"/>
-                                                     <Style.Triggers>
-                                                         <DataTrigger Binding="{Binding PathingConfig.HurryOnAvatar}" Value="玛薇卡">
-                                                             <Setter Property="IsEnabled" Value="True"/>
-                                                         </DataTrigger>
-                                                     </Style.Triggers>
-                                                 </Style>
-                                             </ui:ToggleSwitch.Style>
-                                         </ui:ToggleSwitch>
-                        
-                        <ui:TextBlock Grid.Row="2"
-                                      Grid.Column="0"
-                                      FontTypography="Body"
-                                      Text="【玛薇卡】跳飞 / 冲刺"
-                                      TextWrapping="Wrap" />
-                        <ui:ToggleSwitch Grid.Row="2"
-                                         Grid.Column="2"
-                                         FontSize="10"
-                                         Margin="0,0,5,0"
-                                         HorizontalAlignment="Right"
-                                         IsChecked="{Binding PathingConfig.MwkJumpFlyEnabled, Mode=TwoWay}">
-                            <ui:ToggleSwitch.Style>
-                                <Style TargetType="ui:ToggleSwitch" BasedOn="{StaticResource {x:Type ui:ToggleSwitch}}">
-                                    <Setter Property="IsEnabled" Value="False"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding PathingConfig.HurryOnAvatar}" Value="玛薇卡">
-                                            <Setter Property="IsEnabled" Value="True"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ui:ToggleSwitch.Style>
-                        </ui:ToggleSwitch>
-                        <ui:TextBlock Grid.Row="3"
-                                      Grid.Column="0"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="开启后玛薇卡赶路用跳跃替代冲刺"
-                                      TextWrapping="Wrap" />
+                            <!-- 接近切人步行 -->
+                            <Grid Margin="16,0,16,10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="接近时切人步行"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="接近节点时切换步行角色以精确停止（火神同款），闲云除外"
+                                              TextWrapping="Wrap" />
+                                <ui:ToggleSwitch Grid.Row="0"
+                                                 Grid.RowSpan="2"
+                                                 Grid.Column="1"
+                                                 IsChecked="{Binding PathingConfig.SwitchToWalkEnabled, Mode=TwoWay}" />
+                            </Grid>
 
-                        <ui:TextBlock Grid.Row="2"
-                                      Grid.RowSpan="2"
-                                      Grid.Column="1"
-                                      FontSize="10"
-                                      Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
-                                      Text="跳飞间隔(秒)"
-                                      TextWrapping="Wrap"
-                                      VerticalAlignment="Center" />
-                        <ui:TextBox Grid.Row="2"
-                                    Grid.RowSpan="2"
-                                    Grid.Column="1"
-                                    MinWidth="60"
-                                    Height="35"
-                                    HorizontalContentAlignment="Center"
-                                    Margin="0,0,10,0"
-                                    Text="{Binding PathingConfig.MwkJumpFlyIntervalSeconds}">
-                            <ui:TextBox.Style>
-                                <Style TargetType="ui:TextBox" BasedOn="{StaticResource {x:Type ui:TextBox}}">
-                                    <Setter Property="IsEnabled" Value="False"/>
-                                    <Style.Triggers>
-                                        <MultiDataTrigger>
-                                            <MultiDataTrigger.Conditions>
-                                                <Condition Binding="{Binding PathingConfig.HurryOnAvatar}" Value="玛薇卡"/>
-                                                <Condition Binding="{Binding PathingConfig.MwkJumpFlyEnabled}" Value="True"/>
-                                            </MultiDataTrigger.Conditions>
-                                            <Setter Property="IsEnabled" Value="True"/>
-                                        </MultiDataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ui:TextBox.Style>
-                        </ui:TextBox>
-                        
-                    </Grid>
+                            <!-- 启用跳飞 -->
+                            <Grid Margin="16,0,16,10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="启用跳飞赶路"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="开启后赶路时启用跳飞"
+                                              TextWrapping="Wrap" />
+                                <ui:ToggleSwitch Grid.Row="0"
+                                                 Grid.RowSpan="2"
+                                                 Grid.Column="1"
+                                                 IsChecked="{Binding PathingConfig.MwkJumpFlyEnabled, Mode=TwoWay}" />
+                            </Grid>
+
+                            <!-- 跳飞间隔 -->
+                            <Grid Margin="16,0,16,10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="跳飞/跳跃间隔（秒）"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="跳飞/跳跃赶路间隔，闲云实际使用一半值"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBox Grid.Row="0"
+                                            Grid.RowSpan="2"
+                                            Grid.Column="1"
+                                            MinWidth="60"
+                                            Height="35"
+                                            HorizontalContentAlignment="Center"
+                                            Text="{Binding PathingConfig.MwkJumpFlyIntervalSeconds}" />
+                            </Grid>
+
+                            <!-- 飞行赶路 -->
+                            <Grid Margin="16,0,16,16">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <ui:TextBlock Grid.Row="0"
+                                              Grid.Column="0"
+                                              FontTypography="Body"
+                                              Text="飞行赶路"
+                                              TextWrapping="Wrap" />
+                                <ui:TextBlock Grid.Row="1"
+                                              Grid.Column="0"
+                                              Foreground="{ui:ThemeResource TextFillColorTertiaryBrush}"
+                                              Text="玛薇卡在飞行节点也使用摩托"
+                                              TextWrapping="Wrap" />
+                                <ui:ToggleSwitch Grid.Row="0"
+                                                 Grid.RowSpan="2"
+                                                 Grid.Column="1"
+                                                 IsChecked="{Binding PathingConfig.MwkFlyEnabled, Mode=TwoWay}" />
+                            </Grid>
+                        </StackPanel>
+                    </ui:CardExpander>
                     <Grid Margin="16">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
