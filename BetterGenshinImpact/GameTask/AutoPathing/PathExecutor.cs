@@ -70,7 +70,6 @@ public class PathExecutor
     private CancellationToken ct;
     private PathExecutorSuspend pathExecutorSuspend;
     private string _hurryOnAvatar = "";
-    private bool _MwkFly = true;
     private readonly ReturnMainUiTask _returnMainUiTask = new();
     
     public PathingPartyConfig PartyConfig
@@ -370,6 +369,15 @@ public class PathExecutor
         {
             case "玛薇卡":
                 bool boarded = false;
+
+                // 飞行姿态检测：采样 (1028,1584) 像素全白判定是否在飞行
+                if (waypoint.MoveMode == MoveModeEnum.Fly.Code && PartyConfig.MwkFlyEnabled)
+                {
+                    using var flyRegion = CaptureToRectArea();
+                    var flyPixel = flyRegion.SrcMat.At<Vec3b>(1028, 1584);
+                    state.IsFlyingMwk = flyPixel.Item0 == 255 && flyPixel.Item1 == 255 && flyPixel.Item2 == 255;
+                }
+
                 if (distance > PartyConfig.Distance)
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
@@ -441,6 +449,29 @@ public class PathExecutor
                     }
 
                     // 跳飞成功，跳过通用逻辑
+                    return true;
+                }
+
+                // Fly 模式特殊移动：在空中时根据距离计算 Dash 加速时间
+                if (waypoint.MoveMode == MoveModeEnum.Fly.Code && state.IsFlyingMwk)
+                {
+                    var flyTime = distance switch
+                    {
+                        > 140 => 3500,
+                        > 100 => 2400,
+                        > 80 => 900,
+                        > 70 => 500,
+                        > 60 => 270,
+                        > 50 => 80,
+                        _ => 0
+                    };
+
+                    if (flyTime > 0)
+                    {
+                        waypoint.MoveMode = MoveModeEnum.Dash.Code;
+                        await Delay(flyTime, ct);
+                        waypoint.MoveMode = MoveModeEnum.Fly.Code;
+                    }
                     return true;
                 }
 
@@ -2181,7 +2212,6 @@ public class PathExecutor
             PartyConfig.TravelMode = "精准靠近";
         }
         
-        _MwkFly = PartyConfig.MwkFlyEnabled;
     }
 
     private void LogScreenResolution()
