@@ -278,11 +278,9 @@ public class PathExecutor
     private DateTime _lastXilonenSkillCheckTime = DateTime.MinValue;
     private DateTime _lastWandererSkillCheckTime = DateTime.MinValue;
     private DateTime _lastChascaSkillCheckTime = DateTime.MinValue;
-    private DateTime _lastSandroneSkillCheckTime = DateTime.MinValue;
     private DateTime _lastChascaLandingTime = DateTime.MinValue;
     private DateTime _lastWandererLandingTime = DateTime.MinValue;
-    private bool _sandroneCdSeen;       // 是否曾识别到桑多涅 CD > 0
-    private bool _sandroneSkipMode;     // CD 由 >0→0 时置 true，7s 内跳过通用逻辑
+    private bool _sandroneSkipMode;     // 每次按E切换：true→6s内跳过通用逻辑，false→6s内走通用逻辑
 
     /// <summary>
     /// 赶路逻辑跨帧状态
@@ -915,64 +913,39 @@ public class PathExecutor
                         await Delay(50, ct);
                         Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
 
+                        avatar.LastSkillTime = default; // 清除 6 秒窗口，避免接近后继续跳过
+
                         Logger.LogInformation("自动赶路：桑多涅接近节点");
                         return false;
                     }
                 }
 
-                // 赶路逻辑：仅 run/dash 路段生效
+                // ② 赶路逻辑：仅 run/dash 路段生效
                 if (distance > PartyConfig.Distance
                     && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
-                    // 6 秒 CD 窗口内持续以 0.5s 频率 OCR
+                    // 6 秒窗口内：根据 _sandroneSkipMode 决定行为，不做 OCR
                     if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 6)
                     {
-                        if ((DateTime.UtcNow - _lastSandroneSkillCheckTime).TotalSeconds < 0.5)
-                            return _sandroneSkipMode;
-
-                        _lastSandroneSkillCheckTime = DateTime.UtcNow;
-                        var innerCd = await ReadEskillCdAsync("桑多涅");
-                        if (innerCd > 0)
-                        {
-                            avatar.LastSkillTime = DateTime.UtcNow; // 重置 6 秒计时器
-                            _sandroneCdSeen = true;                 // 标记识别到 CD
-                            return true;                            // 跳过通用逻辑
-                        }
-                        // CD <= 0：技能就绪，退出跳过模式
-                        if (_sandroneSkipMode)
-                        {
-                            _sandroneSkipMode = false;
-                            avatar.LastSkillTime = default; // 清除内置 CD，允许下方按 E
-                        }
-                        return false;
+                        return _sandroneSkipMode; // true=跳过通用逻辑, false=走通用逻辑
                     }
-                    _sandroneSkipMode = false; // 超时退出跳过模式
 
-                    // OCR 识别 E 技能 CD
+                    // 6 秒窗口外：OCR 检测 E 技能 CD，技能可用时才按E
                     var cd = await ReadEskillCdAsync("桑多涅");
                     if (cd <= 0)
                     {
-                        // 下个节点为飞行 → 无条件进入跳过模式
+                        // 下个节点为飞行 → 无条件跳过通用逻辑
                         if (nextWaypoint?.MoveMode == MoveModeEnum.Fly.Code || nextWaypoint?.Action == MoveModeEnum.Fly.Code)
                             _sandroneSkipMode = true;
-                        else if (_sandroneCdSeen)
-                        {
-                            // CD 由 >0 变为 0 → 进入跳过模式
-                            _sandroneSkipMode = true;
-                            _sandroneCdSeen = false;
-                        }
+                        else
+                            _sandroneSkipMode = !_sandroneSkipMode; // 正常切换
+
                         Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                         avatar.LastSkillTime = DateTime.UtcNow;
-                        return false;
                     }
-                    else
-                    {
-                        // 识别到 CD，标记已见到 CD
-                        _sandroneCdSeen = true;
-                        return false;
-                    }
+                    return false;
                 }
 
                 break;
@@ -1850,7 +1823,7 @@ public class PathExecutor
                             {
                                 if (waypoint.Action == ActionEnum.Fight.Code)
                                 {
-                                    _sandroneSkipMode = false; // 战斗节点恢复体力，清除桑多涅跳过模式
+                                    _sandroneSkipMode = true; // 战斗节点：设为 true 使下次按E时切换为 false，即战斗后第一次不跳过
                                     AutoFightTask.FightWaypoint = waypoint;
                                     PathingConditionConfig.CombatScenesGoBackUp = _combatScenes;//把地图追踪的战斗CD等同步给战斗节点
                                 }

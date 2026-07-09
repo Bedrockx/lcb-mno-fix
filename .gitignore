@@ -48,3 +48,6 @@ BgiCoordinatorServer/docker-compose.override.yml
 
 # Claude
 .claude/*
+
+# Build output
+Build/
