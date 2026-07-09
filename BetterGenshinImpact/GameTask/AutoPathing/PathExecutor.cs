@@ -357,9 +357,14 @@ public class PathExecutor
         Avatar? avatar,
         ImageRegion screen2,
         int num,
-        HurryOnState state)
+        HurryOnState state,
+        List<string>? disabledAvatars)
     {
         if (avatar == null) return false;
+
+        // 当前角色在禁用列表中 → 跳过赶路分支，走通用逻辑
+        if (disabledAvatars is { Count: > 0 } && disabledAvatars.Contains(avatar.Name))
+            return false;
 
         switch (avatar.Name)
         {
@@ -643,7 +648,7 @@ public class PathExecutor
                 if (shouldApproach)
                 {
                     state.TrackingLogo = false;
-                    if (PartyConfig.SwitchToWalkEnabled)
+                    if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
                     {
                         // 切人步行模式（火神同款）：切换到步行角色精确停止
                         var nextIdx = GetSwitchToWalkIndex();
@@ -3056,6 +3061,11 @@ public class PathExecutor
         var hurryOnLogo = true;
         var flyDelay = waypoint.MoveMode == MoveModeEnum.Fly.Code;
         var hurryOnState = new HurryOnState();
+        var disabledHurryAvatars = waypoint.DisabledHurryAvatars switch
+        {
+            { } list => list,
+            null => task?.Info?.DisabledHurryAvatars
+        };
         bool dushed = true;
 
         string nextAvatarIndexStop = "";
@@ -3305,7 +3315,7 @@ public class PathExecutor
             if (avatar != null && isPoint)
             {
                 // 赶路逻辑（已全部迁移至 ExecuteHurryOnAsync 中）
-                var result = await ExecuteHurryOnAsync(waypoint, nextWaypoint, distance, nextDistance, isPoint, avatar, screen2, num, hurryOnState);
+                var result = await ExecuteHurryOnAsync(waypoint, nextWaypoint, distance, nextDistance, isPoint, avatar, screen2, num, hurryOnState, disabledHurryAvatars);
                 if (result)
                 {
                     if (hurryOnLogo)
