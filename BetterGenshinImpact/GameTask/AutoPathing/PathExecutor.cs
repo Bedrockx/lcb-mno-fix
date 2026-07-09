@@ -1024,10 +1024,6 @@ public class PathExecutor
                             await Delay(50, ct);
                             Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                             await Delay(100, ct);
-                            if (avatar.Name == "恰斯卡")
-                            {
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                            }
                             Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
 
                             avatar.LastSkillTime = DateTime.UtcNow;
