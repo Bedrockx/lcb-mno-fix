@@ -278,6 +278,10 @@ public class PathExecutor
     private DateTime _lastXilonenSkillCheckTime = DateTime.MinValue;
     private DateTime _lastWandererSkillCheckTime = DateTime.MinValue;
     private DateTime _lastChascaSkillCheckTime = DateTime.MinValue;
+    private DateTime _lastChascaLandingTime = DateTime.MinValue;
+    private DateTime _lastWandererLandingTime = DateTime.MinValue;
+    private bool _sandroneCdSeen;       // 是否曾识别到桑多涅 CD > 0
+    private bool _sandroneSkipMode;     // CD 由 >0→0 时置 true，7s 内跳过通用逻辑
 
     /// <summary>
     /// 赶路逻辑跨帧状态
@@ -456,7 +460,7 @@ public class PathExecutor
                 }
 
                 // 跳飞分支：远距离时在摩托上触发跳跃加速（需配置启用、距离 > 2*PartyConfig.Distance、且视角已稳定）
-                if (PartyConfig.MwkJumpFlyEnabled && distance > 2 * PartyConfig.Distance && state.RotationStableCount >= 3)
+                if (PartyConfig.MwkJumpFlyEnabled && distance > 2 * PartyConfig.Distance && state.RotationStableCount >= 1)
                 {
                     var interval = PartyConfig.MwkJumpFlyIntervalSeconds > 0 ? PartyConfig.MwkJumpFlyIntervalSeconds : 2;
 
@@ -865,9 +869,9 @@ public class PathExecutor
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
                     // OCR识别E技能CD，CD<=0=技能可用 → 按E跳一次后等待跳飞间隔的一半，跳过通用逻辑
-                    // 要求视角已稳定（连续3帧 ≤30°）才触发，避免旋转中起跳
+                    // 要求视角已稳定（至少1帧 ≤30°）才触发，避免旋转中起跳
                     var cd = await ReadEskillCdAsync("闲云");
-                    if (cd <= 0 && state.RotationStableCount >= 3)
+                    if (cd <= 0 && state.RotationStableCount >= 1)
                     {
                         Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                         var interval = PartyConfig.MwkJumpFlyIntervalSeconds > 0 ? PartyConfig.MwkJumpFlyIntervalSeconds : 1.4;
@@ -899,11 +903,11 @@ public class PathExecutor
                     {
                         state.TrackingLogo = false;
 
-                        // 点按攻击3次，间隔100ms
+                        // 点按攻击3次，间隔200/50ms
                         Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(100, ct);
+                        await Delay(200, ct);
                         Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(100, ct);
+                        await Delay(50, ct);
                         Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
 
                         // 火神同款下落攻击判定：检测是否进入飞行姿态，是则 NormalAttack 取消
@@ -935,20 +939,40 @@ public class PathExecutor
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
-                    // 内置 7 秒 CD
-                    if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 7)
+                    // CD 由 >0→0 转换后 6 秒内跳过通用逻辑，否则走内置 6 秒 CD
+                    if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 6)
+                    {
+                        if (_sandroneSkipMode)
+                            return true;
                         return false;
+                    }
+                    _sandroneSkipMode = false; // 超时退出跳过模式
 
-                    // OCR 识别 E 技能 CD，CD <= 0 时技能可用 → 点按 E
+                    // OCR 识别 E 技能 CD
                     var cd = await ReadEskillCdAsync("桑多涅");
                     if (cd <= 0)
                     {
+                        // 下个节点为飞行 → 无条件进入跳过模式
+                        if (nextWaypoint?.MoveMode == MoveModeEnum.Fly.Code || nextWaypoint?.Action == MoveModeEnum.Fly.Code)
+                        {
+                            _sandroneSkipMode = true;
+                        }
+                        else if (_sandroneCdSeen)
+                        {
+                            // CD 由 >0 变为 0 → 进入跳过模式
+                            _sandroneSkipMode = true;
+                            _sandroneCdSeen = false;
+                        }
                         Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                         avatar.LastSkillTime = DateTime.UtcNow;
+                        return false;
                     }
-
-                    // 后续走通用赶路逻辑
-                    return false;
+                    else
+                    {
+                        // 识别到 CD，标记已见到 CD
+                        _sandroneCdSeen = true;
+                        return false;
+                    }
                 }
 
                 break;
@@ -1006,124 +1030,62 @@ public class PathExecutor
                     }
                     _lastChascaSkillCheckTime = DateTime.UtcNow;
 
-                    // 旋转不稳定检测：飞行中连续视角差异>30°则退出飞行
-                    if (state.ChascaFlyingState && state.RotationStableCount == 0)
-                    {
-                        state.ChascaFlightUnstableCount++;
-                        if (state.ChascaFlightUnstableCount >= 2)
-                        {
-                            state.ChascaFlyingState = false;
-                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                            await Delay(50, ct);
-                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                            await Delay(50, ct);
-                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                            await Delay(20, ct);
-                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-                            Logger.LogInformation($"自动赶路：{avatar.Name}视角失控，退出飞行");
-                            return false;
-                        }
-                    }
-                    else if (state.ChascaFlyingState)
-                    {
-                        state.ChascaFlightUnstableCount = 0;
-                    }
-
-                    // 旋转不稳定检测：飞行中连续视角差异>30°则退出飞行
-                    if (state.WandererFlyingState && state.RotationStableCount == 0)
-                    {
-                        state.WandererFlightUnstableCount++;
-                        if (state.WandererFlightUnstableCount >= 2)
-                        {
-                            state.WandererFlyingState = false;
-                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                            await Delay(50, ct);
-                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                            await Delay(50, ct);
-                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                            await Delay(20, ct);
-                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-                            Logger.LogInformation("自动赶路：流浪者视角失控，退出飞行");
-                            return false;
-                        }
-                    }
-                    else if (state.WandererFlyingState)
-                    {
-                        state.WandererFlightUnstableCount = 0;
-                    }
-
-                    // 要求视角稳定通过（连续3帧≤30°）才触发
-                    if (state.RotationStableCount >= 3)
-                    {
-                        var cd = await ReadEskillCdAsync(avatar.Name);
-
-                        if (!state.ChascaFlyingState)
-                        {
-                            // 飞行状态为false：技能可用时启动飞行
-                            if (cd <= 0)
-                            {
-                                // 松开所有按键，等待50，按下W，等待100，点按E，等待50，按下右键
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-                                await Delay(100, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
-
-                                avatar.LastSkillTime = DateTime.UtcNow;
-                                state.ChascaFlyingState = true;
-                                Logger.LogInformation($"自动赶路：{avatar.Name}启动飞行");
-                                return true; // 跳过通用逻辑
-                            }
-                            // CD存在走通用逻辑
-                        }
-                        else
-                        {
-                            // 飞行状态为true
-                            if (cd <= 0)
-                            {
-                                // 无CD说明飞行未结束，无需操作，跳过通用逻辑
-                                // 保持松开W
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                                state.ChascaFlightCheckCount++;
-                                if (state.ChascaFlightCheckCount % 3 == 0)
-                                    Simulation.SendInput.Mouse.MiddleButtonClick();
-                                return true;
-                            }
-                            else
-                            {
-                                // 有CD说明飞行结束，更新状态为false，走通用逻辑
-                                state.ChascaFlyingState = false;
-                                // 点按两次鼠标左键，松开所有按键，按下W
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                                await Delay(20, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-                                Logger.LogInformation($"自动赶路：{avatar.Name}飞行结束");
-                            }
-                        }
-                    }
-
-                    // 飞行状态期间保持松开W，右键由主循环根据飞行状态控制
+                    // ① 飞行中状态管理：CD检查不受旋转稳定性限制
                     if (state.ChascaFlyingState)
                     {
-                        Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                        state.ChascaFlightCheckCount++;
-                        if (state.ChascaFlightCheckCount % 3 == 0)
-                            Simulation.SendInput.Mouse.MiddleButtonClick();
+                        var cd = await ReadEskillCdAsync(avatar.Name);
+                        if (cd > 0)
+                        {
+                            // 有CD说明飞行结束
+                            state.ChascaFlyingState = false;
+                            _lastChascaLandingTime = DateTime.UtcNow;
+                            // 点按左键3次取消飞行，间隔200/50ms
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            await Delay(200, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            await Delay(50, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                            Logger.LogInformation($"自动赶路：{avatar.Name}飞行结束");
+                            return false; // 走通用逻辑
+                        }
+                        // 无CD说明飞行未结束，保持按住W和右键
                         return true;
                     }
 
+                    // ② 起飞逻辑：需要视角稳定（至少1帧） + 技能可用
+                    if (state.RotationStableCount >= 1)
+                    {
+                        // 降落冷却期内跳过 OCR 起飞尝试
+                        if ((DateTime.UtcNow - _lastChascaLandingTime).TotalSeconds < 5)
+                            return false;
+
+                        var cd = await ReadEskillCdAsync(avatar.Name);
+                        if (cd <= 0)
+                        {
+                            // 松开E，等待50，点按E，等待100，按下右键
+                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill, KeyType.KeyUp);
+                            await Delay(50, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                            await Delay(100, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
+
+                            avatar.LastSkillTime = DateTime.UtcNow;
+                            state.ChascaFlyingState = true;
+                            Logger.LogInformation($"自动赶路：{avatar.Name}启动飞行");
+                            return true;
+                        }
+                        // CD存在走通用逻辑
+                    }
+
+                    // 飞行状态保持fallback
+                    if (state.ChascaFlyingState) return true;
+
                     return false;
                 }
+
+                // ③ 飞行中但距离不足进入赶路逻辑 → 仍跳过通用逻辑，防止右键被中断
+                if (state.ChascaFlyingState) return true;
 
                 break;
 
@@ -1147,9 +1109,9 @@ public class PathExecutor
                         if (state.WandererFlyingState)
                         {
                             Logger.LogInformation("自动赶路：流浪者接近节点，关闭飞行状态");
-                            // 下车动作：点按E，等待50ms，点按左键，等待50ms，点按左键
+                            // 下车动作：点按E，等待200ms，点按左键，等待50ms，点按左键
                             Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                            await Delay(50, ct);
+                            await Delay(200, ct);
                             Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
                             await Delay(50, ct);
                             Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
@@ -1173,67 +1135,29 @@ public class PathExecutor
                     }
                     _lastWandererSkillCheckTime = DateTime.UtcNow;
 
-                    // 要求视角稳定通过（连续3帧≤30°）才触发
-                    if (state.RotationStableCount >= 3)
-                    {
-                        var cd = await ReadEskillCdAsync("流浪者");
-
-                        if (!state.WandererFlyingState)
-                        {
-                            // 飞行状态为false：技能可用时启动飞行
-                            if (cd <= 0)
-                            {
-                                // 松开所有按键，等待50，按下W，等待100，点按E，等待50，按下右键
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-                                await Delay(100, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
-
-                                avatar.LastSkillTime = DateTime.UtcNow;
-                                state.WandererFlyingState = true;
-                                Logger.LogInformation("自动赶路：流浪者启动飞行");
-                                return true; // 跳过通用逻辑
-                            }
-                            // CD存在走通用逻辑
-                        }
-                        else
-                        {
-                            // 飞行状态为true
-                            if (cd <= 0)
-                            {
-                                // 无CD说明飞行未结束，无需操作，跳过通用逻辑
-                                // 保持松开W
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                                state.WandererFlightCheckCount++;
-                                if (state.WandererFlightCheckCount % 3 == 0)
-                                    Simulation.SendInput.Mouse.MiddleButtonClick();
-                                return true;
-                            }
-                            else
-                            {
-                                // 有CD说明飞行结束，更新状态为false，走通用逻辑
-                                state.WandererFlyingState = false;
-                                // 点按两次鼠标左键，松开所有按键，按下W
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                                await Delay(20, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-                                Logger.LogInformation("自动赶路：流浪者飞行结束");
-                            }
-                        }
-                    }
-
-                    // 飞行状态期间保持松开W，右键由主循环根据飞行状态控制
+                    // ① 飞行中状态管理：CD检查不受旋转稳定性限制
                     if (state.WandererFlyingState)
                     {
+                        var cd = await ReadEskillCdAsync("流浪者");
+                        if (cd > 0)
+                        {
+                            // 有CD说明飞行结束
+                            state.WandererFlyingState = false;
+                            _lastWandererLandingTime = DateTime.UtcNow;
+                            // 点按左键3次，松开所有按键，按下W
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            await Delay(200, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            await Delay(50, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                            await Delay(20, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+                            Logger.LogInformation("自动赶路：流浪者飞行结束");
+                            return false; // 走通用逻辑
+                        }
+                        // 无CD说明飞行未结束，保持松开W
                         Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
                         state.WandererFlightCheckCount++;
                         if (state.WandererFlightCheckCount % 3 == 0)
@@ -1241,8 +1165,46 @@ public class PathExecutor
                         return true;
                     }
 
+                    // ② 起飞逻辑：需要视角稳定（至少1帧） + 技能可用
+                    if (state.RotationStableCount >= 1)
+                    {
+                        // 降落冷却期内跳过 OCR 起飞尝试
+                        if ((DateTime.UtcNow - _lastWandererLandingTime).TotalSeconds < 5)
+                            return false;
+
+                        var cd = await ReadEskillCdAsync("流浪者");
+                        if (cd <= 0)
+                        {
+                            // 松开所有按键，等待50，按下W，等待100，点按E，等待50，按下右键
+                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                            await Delay(50, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+                            await Delay(100, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                            await Delay(50, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
+
+                            avatar.LastSkillTime = DateTime.UtcNow;
+                            state.WandererFlyingState = true;
+                            Logger.LogInformation("自动赶路：流浪者启动飞行");
+                            return true;
+                        }
+                        // CD存在走通用逻辑
+                    }
+
+                    // 飞行状态保持fallback
+                    if (state.WandererFlyingState)
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                        return true;
+                    }
+
                     return false;
                 }
+
+                // ③ 飞行中但距离不足进入赶路逻辑 → 仍跳过通用逻辑，防止右键被中断
+                if (state.WandererFlyingState) return true;
 
                 break;
         }
@@ -1307,7 +1269,7 @@ public class PathExecutor
         ESkillCdTracker.Record(avatarName, cd);
         if (cd <= 0)
         {
-            ESkillCdTracker.ApplyFallback(avatarName);
+            ESkillCdTracker.ApplyFallback(avatarName, false);
         }
         return cd;
     }
@@ -1888,6 +1850,7 @@ public class PathExecutor
                             {
                                 if (waypoint.Action == ActionEnum.Fight.Code)
                                 {
+                                    _sandroneSkipMode = false; // 战斗节点恢复体力，清除桑多涅跳过模式
                                     AutoFightTask.FightWaypoint = waypoint;
                                     PathingConditionConfig.CombatScenesGoBackUp = _combatScenes;//把地图追踪的战斗CD等同步给战斗节点
                                 }
@@ -3561,26 +3524,32 @@ public class PathExecutor
         // Logger.LogWarning("赶路测试log:当前节点:({x2}),动作:({t1}),类型({t2}))", waypoint.Type, waypoint.Action, waypoint.MoveMode);
         // Logger.LogWarning("赶路测试log:Next节点:({x2}),动作:({t1}),间隔距离({x3}),类型({t2}))", nextWaypoint?.Type?? "null", nextWaypoint?.MoveMode ,nextWaypoint?.Action, (int)Math.Round(nextDistance.Value));
 
-        // 按下w，一直走；飞行赶路时按右键代替W
+        // 按下w，一直走；飞行赶路时以右键代替W（流浪者松开W，恰斯卡/伊法按住W）
         if (!flyDelay)
         {
-            var anyFlyingInit = hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState;
-            if (anyFlyingInit)
+            var wandererFlying = hurryOnState.WandererFlyingState;
+            if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
+            {
                 Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
+                if (!wandererFlying)
+                    Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+            }
             else
+            {
                 Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+            }
         }
 
         while (!ct.IsCancellationRequested)
         {
             // 每个迭代重新评估飞行状态（可能刚起飞/刚降落）
-            var anyFlying = hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState;
+            var wandererFlying = hurryOnState.WandererFlyingState;
             if (!Simulation.IsKeyDown(GIActions.MoveForward.ToActionKey().ToVK()))
             {
-                if (!flyDelay && !anyFlying) Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+                if (!flyDelay && !wandererFlying) Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
             }
             // 飞行赶路时确保右键按住（无条件发送，鼠标按键IsKeyDown不可靠）
-            if (anyFlying)
+            if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
                 Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
             flyDelay = false;
 
@@ -3791,6 +3760,45 @@ public class PathExecutor
 
             if (avatar != null && isPoint)
             {
+                // 提前旋转视角，使 RotationStableCount 在本轮即被更新
+                targetOrientation = Navigation.GetTargetOrientation(waypoint, position);
+                var diff = _rotateTask.RotateToApproach(targetOrientation, screen2);
+                if (num > 20)
+                {
+                    if (diff.HasValue && Math.Abs(diff.Value) > 5)
+                    {
+                        consecutiveRotationCountBeyondAngle++;
+                    }
+                    else if (diff.HasValue)
+                    {
+                        consecutiveRotationCountBeyondAngle = 0;
+                    }
+
+                    if (consecutiveRotationCountBeyondAngle > 10)
+                    {
+                        Logger.LogDebug("旋转视角超过10次仍未接近目标角度，可能卡住了，停止移动并强制转向");
+                        if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
+                        {
+                            hurryOnState.ChascaFlyingState = false;
+                            hurryOnState.WandererFlyingState = false;
+                        }
+                        Simulation.ReleaseAllKey();
+                        Simulation.SendInput.Keyboard.KeyPress(User32.VK.VK_X);
+                        await Delay(50, ct);
+                        await WaitUntilRotatedTo(targetOrientation, 10);
+                    }
+                }
+
+                // 视角稳定度跟踪：不受 num 限制，第一轮即开始更新
+                if (diff.HasValue && Math.Abs(diff.Value) <= 60)
+                {
+                    hurryOnState.RotationStableCount++;
+                }
+                else if (diff.HasValue)
+                {
+                    hurryOnState.RotationStableCount = 0;
+                }
+
                 // 赶路逻辑（已全部迁移至 ExecuteHurryOnAsync 中）
                 var result = await ExecuteHurryOnAsync(waypoint, nextWaypoint, distance, nextDistance, isPoint, avatar, screen2, num, hurryOnState, disabledHurryAvatars);
                 if (result)
@@ -4088,43 +4096,6 @@ public class PathExecutor
                 }
             }
 
-            // 旋转视角
-            targetOrientation = Navigation.GetTargetOrientation(waypoint, position);
-            //执行旋转
-            var diff = _rotateTask.RotateToApproach(targetOrientation, screen2);
-            if (num > 20)
-            {
-                // diff == null 表示本轮未真实测量到角度（抢锁失败），不累加也不清零卡死计数，保持上一轮状态
-                if (diff.HasValue && Math.Abs(diff.Value) > 5)
-                {
-                    consecutiveRotationCountBeyondAngle++;
-                }
-                else if (diff.HasValue)
-                {
-                    consecutiveRotationCountBeyondAngle = 0;
-                }
-
-                // 视角稳定度跟踪：连续帧旋转角度 ≤30° 时累加，超过时重置
-                if (diff.HasValue && Math.Abs(diff.Value) <= 30)
-                {
-                    hurryOnState.RotationStableCount++;
-                }
-                else if (diff.HasValue)
-                {
-                    hurryOnState.RotationStableCount = 0;
-                }
-
-                if (consecutiveRotationCountBeyondAngle > 10)
-                {
-                    // 松开所有按键，停走后再转向，避免绕圈
-                    Logger.LogDebug("旋转视角超过10次仍未接近目标角度，可能卡住了，停止移动并强制转向");
-                    Simulation.ReleaseAllKey();
-                    Simulation.SendInput.Keyboard.KeyPress(User32.VK.VK_X);
-                    await Delay(50, ct);
-                    await WaitUntilRotatedTo(targetOrientation, 10);
-                }
-            }
-
             // 根据指定方式进行移动
             if (waypoint.MoveMode == MoveModeEnum.Fly.Code)
             {
@@ -4246,6 +4217,10 @@ public class PathExecutor
             await Delay(100, ct);
             
         }
+        
+        // 到达节点，强制退出赶路飞行状态
+        hurryOnState.ChascaFlyingState = false;
+        hurryOnState.WandererFlyingState = false;
         
         // 抬起w键
         Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);

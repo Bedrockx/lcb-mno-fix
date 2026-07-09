@@ -9,7 +9,7 @@ mkdir dist\BetterGI
 for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath`) do set "path=%path%;%%i\MSBuild\Current\Bin;%%i\Common7\IDE"
 
 @echo [prepare version]
-set "pkgVer=0.69.9+mno"
+set "pkgVer=0.78.91+mno"
 
 @echo [input version - press any key within 5s to customize]
 for /f "usebackq delims=" %%v in (`powershell -NoLogo -NoProfile -Command "$d='%pkgVer%';[System.Console]::Error.Write('Enter version (default: '+$d+'): ');$s=[DateTime]::Now;$r=$null;while(($r -eq $null)-and(([DateTime]::Now-$s).TotalSeconds-lt 5)){if([System.Console]::KeyAvailable){$r=[System.Console]::ReadLine();break}Start-Sleep -Milliseconds 100}if([string]::IsNullOrWhiteSpace($r)){$d}else{$r}"`) do set "pkgVer=%%v"
