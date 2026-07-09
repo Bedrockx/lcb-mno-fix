@@ -141,9 +141,16 @@ public partial class PathingPartyConfig : ObservableObject
     
     [ObservableProperty]
     private int _distance = 45;
+
+    /// <summary>
+    /// 接近停车距离，到达此距离时触发接近逻辑（下车/切人/退出赶路状态）。
+    /// 强制小于等于 <see cref="Distance"/>，越界时自动使用 Distance 的值。
+    /// </summary>
+    [ObservableProperty]
+    private int _approachStopDistance = 25;
     
     [JsonIgnore]
-    public List<string> HurryOnAvatarList { get; } = ["","自动","玛薇卡","瓦雷莎","希诺宁","闲云","桑多涅"];
+    public List<string> HurryOnAvatarList { get; } = ["","自动","玛薇卡","瓦雷莎","希诺宁","闲云","桑多涅","恰斯卡","流浪者"];
     
     [JsonIgnore]
     public List<string> TravelModeList { get; } = ["精准靠近","连续赶路"];

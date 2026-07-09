@@ -381,6 +381,50 @@ public class PathExecutor
                     state.IsFlyingMwk = false;
                 }
 
+                // ① 接近处理：优先检查，确保移速过快时不会跳过下车/切人逻辑
+                if (state.TrackingLogo)
+                {
+                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
+                    var needsApproach = false;
+                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
+                        needsApproach = true;
+                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
+                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
+                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
+                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
+                        needsApproach = true;
+
+                    if (needsApproach)
+                    {
+                        state.TrackingLogo = false;
+                        var colorDiff = GetMavikaColorDifference(screen2);
+                        if (colorDiff < 15 && Bv.GetMotionStatus(screen2) != MotionStatus.Fly)
+                        {
+                            if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
+                            {
+                                var nextIdx = GetSwitchToWalkIndex();
+                                Logger.LogInformation("自动赶路：{t} 节点接近...-i {t2} {t3} {t4}", PartyConfig.TravelMode, nextIdx, waypoint?.MoveMode, Math.Round(colorDiff));
+
+                                Task.Run(async () =>
+                                {
+                                    var switchedAvatar = await SwitchAvatar2(nextIdx);
+                                    if (switchedAvatar == null)
+                                    {
+                                        if (PathingConditionConfig.AutoEatCount < 3)
+                                            PathingConditionConfig.AutoEatCount = 2;
+                                    }
+                                }, ct);
+                            }
+                            else
+                            {
+                                Logger.LogInformation("自动赶路：玛薇卡接近节点，下车步行");
+                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                            }
+                        }
+                        return false;
+                    }
+                }
+
                 if (distance > PartyConfig.Distance)
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
@@ -560,52 +604,89 @@ public class PathExecutor
                     return true;
                 }
 
-                // 接近处理：在摩托上接近节点时下车 + 吃东西（一次性门闩 trackingLogo 控制）
+                break;
+
+            case "瓦雷莎":
+                // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var needsApproach = false;
-                    var approachThreshold = !string.IsNullOrEmpty(nextWaypoint?.Action) ? 30 : 25;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < approachThreshold)
-                        needsApproach = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < 40 &&
+                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
+                    var shouldApproach = false;
+                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
+                        shouldApproach = true;
+                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
                              (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
                               || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
                               || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        needsApproach = true;
+                        shouldApproach = true;
 
-                    if (needsApproach)
+                    if (shouldApproach)
                     {
                         state.TrackingLogo = false;
-                        var colorDiff = GetMavikaColorDifference(screen2);
-                        if (colorDiff < 15 && Bv.GetMotionStatus(screen2) != MotionStatus.Fly)
+                        if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
                         {
-                            if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
+                            // 切人步行模式（火神同款）：切换到步行角色精确停止
+                            var nextIdx = GetSwitchToWalkIndex();
+                            Logger.LogInformation("自动赶路：瓦雷莎接近节点，切人步行 {t}", nextIdx);
+                            Task.Run(async () =>
                             {
-                                var nextIdx = GetSwitchToWalkIndex();
-                                Logger.LogInformation("自动赶路：{t} 节点接近...-i {t2} {t3} {t4}", PartyConfig.TravelMode, nextIdx, waypoint?.MoveMode, Math.Round(colorDiff));
-
-                                Task.Run(async () =>
+                                var switchedAvatar = await SwitchAvatar2(nextIdx);
+                                if (switchedAvatar == null)
                                 {
-                                    var switchedAvatar = await SwitchAvatar2(nextIdx);
-                                    if (switchedAvatar == null)
-                                    {
-                                        if (PathingConditionConfig.AutoEatCount < 3)
-                                            PathingConditionConfig.AutoEatCount = 2;
-                                    }
-                                }, ct);
-                            }
-                            else
+                                    if (PathingConditionConfig.AutoEatCount < 3)
+                                        PathingConditionConfig.AutoEatCount = 2;
+                                }
+                            }, ct);
+                        }
+                        else
+                        {
+                            if (await AutoFightSkill.AvatarSkillAsync(Logger, avatar, false, 2, ct))
                             {
-                                Logger.LogInformation("自动赶路：玛薇卡接近节点，下车步行");
-                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                                await Delay(300, ct);
+                            }
+
+                            // 非赶路状态下的冲刺检测
+                            var lower = new Scalar(220, 150, 150);
+                            var higher = new Scalar(230, 160, 180);
+                            using var mask = OpenCvCommonHelper.Threshold(screen2.DeriveCrop(948, 410, 26, 30).SrcMat, lower, higher);
+                            using var labels = new Mat();
+                            using var stats = new Mat();
+                            using var centroids = new Mat();
+
+                            var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+                                connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+
+                            if (numLabels > 3 && numLabels < 40)
+                            {
+                                state.MavikaFlyCount++;
+                                if (state.MavikaFlyCount > 2 && avatar.IsActive(screen2))
+                                {
+                                    Task.Run(async () =>
+                                    {
+                                        await Delay(1000, ct);
+                                        using var region3 = CaptureToRectArea();
+                                        if (avatar.IsActive(region3))
+                                        {
+                                            Simulation.SendInput.SimulateAction(GIActions.Jump);
+                                            await Delay(100, ct);
+                                            using var region4 = CaptureToRectArea();
+                                            var isFlying = Bv.GetMotionStatus(region4) == MotionStatus.Fly;
+                                            if (isFlying)
+                                            {
+                                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                                Logger.LogInformation("自动赶路：{t} 下落攻击...", "瓦蕾莎");
+                                            }
+                                        }
+                                        state.MavikaFlyCount = 0;
+                                    }, ct);
+                                }
                             }
                         }
                         return false;
                     }
                 }
-                break;
 
-            case "瓦雷莎":
                 if (distance > PartyConfig.Distance)
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
@@ -677,84 +758,60 @@ public class PathExecutor
                     return true;
                 }
 
-                // 接近节点时退出赶路状态（受 TravelMode 影响）
-                var shouldApproach = false;
-                if (PartyConfig.TravelMode == "精准靠近" && distance < 30)
-                    shouldApproach = true;
-                else if (PartyConfig.TravelMode == "连续赶路" && distance < 40 &&
-                         (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                          || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                          || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                    shouldApproach = true;
-
-                if (shouldApproach)
-                {
-                    state.TrackingLogo = false;
-                    if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
-                    {
-                        // 切人步行模式（火神同款）：切换到步行角色精确停止
-                        var nextIdx = GetSwitchToWalkIndex();
-                        Logger.LogInformation("自动赶路：瓦雷莎接近节点，切人步行 {t}", nextIdx);
-                        Task.Run(async () =>
-                        {
-                            var switchedAvatar = await SwitchAvatar2(nextIdx);
-                            if (switchedAvatar == null)
-                            {
-                                if (PathingConditionConfig.AutoEatCount < 3)
-                                    PathingConditionConfig.AutoEatCount = 2;
-                            }
-                        }, ct);
-                    }
-                    else
-                    {
-                        if (await AutoFightSkill.AvatarSkillAsync(Logger, avatar, false, 2, ct))
-                        {
-                            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                            await Delay(300, ct);
-                        }
-
-                        // 非赶路状态下的冲刺检测：通过HSV+连通域分析判断冲刺进度条，
-                        // 确认接近目标后跳跃靠近，同时防止误入飞行状态
-                        var lower = new Scalar(220, 150, 150);
-                        var higher = new Scalar(230, 160, 180);
-                        using var mask = OpenCvCommonHelper.Threshold(screen2.DeriveCrop(948, 410, 26, 30).SrcMat, lower, higher);
-                        using var labels = new Mat();
-                        using var stats = new Mat();
-                        using var centroids = new Mat();
-
-                        var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
-                            connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
-
-                        if (numLabels > 3 && numLabels < 40)
-                        {
-                            state.MavikaFlyCount++;
-                            if (state.MavikaFlyCount > 2 && avatar.IsActive(screen2))
-                            {
-                                Task.Run(async () =>
-                                {
-                                    await Delay(1000, ct);
-                                    using var region3 = CaptureToRectArea();
-                                    if (avatar.IsActive(region3))
-                                    {
-                                        Simulation.SendInput.SimulateAction(GIActions.Jump);
-                                        await Delay(100, ct);
-                                        using var region4 = CaptureToRectArea();
-                                        var isFlying = Bv.GetMotionStatus(region4) == MotionStatus.Fly;
-                                        if (isFlying)
-                                        {
-                                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                            Logger.LogInformation("自动赶路：{t} 下落攻击...", "瓦蕾莎");
-                                        }
-                                    }
-                                    state.MavikaFlyCount = 0;
-                                }, ct);
-                            }
-                        }
-                    }
-                }
                 break;
 
             case "希诺宁":
+                // ① 接近处理：优先检查
+                if (state.TrackingLogo)
+                {
+                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
+                    var shouldApproachX = false;
+                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
+                        shouldApproachX = true;
+                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
+                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
+                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
+                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
+                        shouldApproachX = true;
+
+                    if (shouldApproachX)
+                    {
+                        state.TrackingLogo = false;
+                        if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
+                        {
+                            // 切人步行模式（火神同款）：切换到步行角色精确停止
+                            var nextIdx = GetSwitchToWalkIndex();
+                            Logger.LogInformation("自动赶路：希诺宁接近节点，切人步行 {t}", nextIdx);
+                            Task.Run(async () =>
+                            {
+                                var switchedAvatar = await SwitchAvatar2(nextIdx);
+                                if (switchedAvatar == null)
+                                {
+                                    if (PathingConditionConfig.AutoEatCount < 3)
+                                        PathingConditionConfig.AutoEatCount = 2;
+                                }
+                            }, ct);
+                        }
+                        else if (state.XilonenESkillState)
+                        {
+                            Logger.LogInformation("自动赶路：希诺宁接近节点，关闭E技能赶路状态");
+                            // 每0.1秒按一次E，直到识别到技能CD（E状态关闭）
+                            while (true)
+                            {
+                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                                await Delay(100, ct);
+                                var cd = await ReadEskillCdAsync("希诺宁");
+                                if (cd > 0)
+                                {
+                                    state.XilonenESkillState = false;
+                                    break;
+                                }
+                            }
+                        }
+                        return false;
+                    }
+                }
+
                 if (distance > PartyConfig.Distance
                     && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
                 {
@@ -789,52 +846,7 @@ public class PathExecutor
                     return false;
                 }
 
-                // 接近处理：同其他分支的两模式检测
-                var shouldApproachX = false;
-                if (PartyConfig.TravelMode == "精准靠近" && distance < 30)
-                    shouldApproachX = true;
-                else if (PartyConfig.TravelMode == "连续赶路" && distance < 40 &&
-                         (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                          || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                          || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                    shouldApproachX = true;
-
-                if (shouldApproachX)
-                {
-                    if (PartyConfig.SwitchToWalkEnabled && MultiplayerCoordinator == null)
-                    {
-                        // 切人步行模式（火神同款）：切换到步行角色精确停止
-                        var nextIdx = GetSwitchToWalkIndex();
-                        Logger.LogInformation("自动赶路：希诺宁接近节点，切人步行 {t}", nextIdx);
-                        Task.Run(async () =>
-                        {
-                            var switchedAvatar = await SwitchAvatar2(nextIdx);
-                            if (switchedAvatar == null)
-                            {
-                                if (PathingConditionConfig.AutoEatCount < 3)
-                                    PathingConditionConfig.AutoEatCount = 2;
-                            }
-                        }, ct);
-                    }
-                    else if (state.XilonenESkillState)
-                    {
-                        Logger.LogInformation("自动赶路：希诺宁接近节点，关闭E技能赶路状态");
-                        // 每0.1秒按一次E，直到识别到技能CD（E状态关闭）
-                        while (true)
-                        {
-                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                            await Delay(100, ct);
-                            var cd = await ReadEskillCdAsync("希诺宁");
-                            if (cd > 0)
-                            {
-                                state.XilonenESkillState = false;
-                                break;
-                            }
-                        }
-                    }
-                }
-                return false;
-
+                break;
             case "闲云":
                 // 仅 run/dash 路段生效
                 if (distance > PartyConfig.Distance
@@ -860,36 +872,14 @@ public class PathExecutor
                 break;
 
             case "桑多涅":
-                // 赶路逻辑：仅 run/dash 路段生效
-                if (distance > PartyConfig.Distance
-                    && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
-                {
-                    await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
-
-                    // 内置 7 秒 CD
-                    if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 7)
-                        return false;
-
-                    // OCR 识别 E 技能 CD，CD <= 0 时技能可用 → 点按 E
-                    var cd = await ReadEskillCdAsync("桑多涅");
-                    if (cd <= 0)
-                    {
-                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                        avatar.LastSkillTime = DateTime.UtcNow;
-                    }
-
-                    // 后续走通用赶路逻辑
-                    return false;
-                }
-
-                // 接近处理（同其他人判定标准）：无切人退出机制
+                // ① 接近处理：优先检查（无切人退出机制）
                 if (state.TrackingLogo)
                 {
+                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
                     var needsApproach = false;
-                    var approachThreshold = !string.IsNullOrEmpty(nextWaypoint?.Action) ? 30 : 25;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < approachThreshold)
+                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
                         needsApproach = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < 40 &&
+                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
                              (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
                               || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
                               || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
@@ -926,6 +916,37 @@ public class PathExecutor
                         return false;
                     }
                 }
+
+                // 赶路逻辑：仅 run/dash 路段生效
+                if (distance > PartyConfig.Distance
+                    && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
+                {
+                    await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
+
+                    // 内置 7 秒 CD
+                    if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 7)
+                        return false;
+
+                    // OCR 识别 E 技能 CD，CD <= 0 时技能可用 → 点按 E
+                    var cd = await ReadEskillCdAsync("桑多涅");
+                    if (cd <= 0)
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        avatar.LastSkillTime = DateTime.UtcNow;
+                    }
+
+                    // 后续走通用赶路逻辑
+                    return false;
+                }
+
+                break;
+
+            case "恰斯卡":
+                // TODO: 恰斯卡赶路逻辑
+                break;
+
+            case "流浪者":
+                // TODO: 流浪者赶路逻辑
                 break;
         }
 
