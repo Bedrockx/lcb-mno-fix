@@ -1627,6 +1627,8 @@ public class PathExecutor
                                 await HandleTeleportWaypoint(waypoint);
                             }
                             
+                            _sandroneSkipMode = true; // 传送节点恢复体力，重置交替模式（第一次不跳过）
+
                             // 标记同步点已到达（第一个传送点）
                             if (!_syncPointReached)
                             {
