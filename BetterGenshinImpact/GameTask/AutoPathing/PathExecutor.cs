@@ -373,9 +373,11 @@ public class PathExecutor
                 // 飞行姿态检测：采样 (1028,1584) 像素全白判定是否在飞行
                 if (waypoint.MoveMode == MoveModeEnum.Fly.Code && PartyConfig.MwkFlyEnabled)
                 {
-                    using var flyRegion = CaptureToRectArea();
-                    var flyPixel = flyRegion.SrcMat.At<Vec3b>(1028, 1584);
-                    state.IsFlyingMwk = flyPixel.Item0 == 255 && flyPixel.Item1 == 255 && flyPixel.Item2 == 255;
+                    CheckMavikaFlying(state);
+                }
+                else
+                {
+                    state.IsFlyingMwk = false;
                 }
 
                 if (distance > PartyConfig.Distance)
@@ -452,6 +454,13 @@ public class PathExecutor
                     return true;
                 }
 
+                // 跳飞后飞行检查：如果已进入玛薇卡飞行状态，按空格保持飞行姿态
+                if (CheckMavikaFlying(state))
+                {
+                    Simulation.SendInput.SimulateAction(GIActions.Jump);
+                    await Delay(100, ct);
+                }
+
                 // Fly 模式特殊移动：在空中时根据距离计算 Dash 加速时间
                 if (waypoint.MoveMode == MoveModeEnum.Fly.Code && state.IsFlyingMwk)
                 {
@@ -465,6 +474,8 @@ public class PathExecutor
                         > 50 => 80,
                         _ => 0
                     };
+
+                    Logger.LogInformation("自动赶路：{t} 飞行 {t2} ms 距离 {t3}", "玛薇卡", flyTime, Math.Round(distance));
 
                     if (flyTime > 0)
                     {
@@ -877,6 +888,17 @@ public class PathExecutor
             Math.Pow(pos.Item1 - pos2.Item1, 2) +
             Math.Pow(pos.Item2 - pos2.Item2, 2)
         );
+    }
+
+    /// <summary>
+    /// 玛薇卡飞行姿态检测：采样 (1028,1584) 像素全白判定是否处于飞行状态
+    /// </summary>
+    private bool CheckMavikaFlying(HurryOnState state)
+    {
+        using var region = CaptureToRectArea();
+        var pixel = region.SrcMat.At<Vec3b>(1028, 1584);
+        state.IsFlyingMwk = pixel.Item0 == 255 && pixel.Item1 == 255 && pixel.Item2 == 255;
+        return state.IsFlyingMwk;
     }
 
     /// <summary>
