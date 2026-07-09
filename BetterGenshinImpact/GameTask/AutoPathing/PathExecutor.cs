@@ -381,6 +381,12 @@ public class PathExecutor
         if (disabledAvatars is { Count: > 0 } && disabledAvatars.Contains(avatar.Name))
             return false;
 
+        // 游泳检测：处于游泳状态时跳过整个赶路逻辑
+        if (SwimmingConfirm(screen2))
+        {
+            return false;
+        }
+
         switch (avatar.Name)
         {
             case "玛薇卡":
@@ -904,30 +910,10 @@ public class PathExecutor
                     {
                         state.TrackingLogo = false;
 
-                        // 点按攻击3次，间隔200/50ms
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(200, ct);
+                        // 点按攻击2次
                         Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
                         await Delay(50, ct);
                         Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-
-                        // 火神同款下落攻击判定：检测是否进入飞行姿态，是则 NormalAttack 取消
-                        using var approachRegion = CaptureToRectArea();
-                        if (Bv.GetMotionStatus(approachRegion) == MotionStatus.Fly)
-                        {
-                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                            await Delay(300, ct);
-                            for (int i = 0; i < 5; i++)
-                            {
-                                using var retryRegion = CaptureToRectArea();
-                                if (Bv.GetMotionStatus(retryRegion) == MotionStatus.Fly)
-                                {
-                                    Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                    await Delay(300, ct);
-                                }
-                                else break;
-                            }
-                        }
 
                         Logger.LogInformation("自动赶路：桑多涅接近节点");
                         return false;
@@ -1045,13 +1031,6 @@ public class PathExecutor
                         // 不在飞行状态说明飞行结束
                         state.ChascaFlyingState = false;
                         _lastChascaLandingTime = DateTime.UtcNow;
-                        // 点按左键3次取消飞行，间隔200/50ms
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(200, ct);
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(50, ct);
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
                         Logger.LogInformation($"自动赶路：{avatar.Name}飞行结束");
                         return false;
                     }
@@ -1147,21 +1126,11 @@ public class PathExecutor
                         // 不在飞行状态说明飞行结束
                         state.WandererFlyingState = false;
                         _lastWandererLandingTime = DateTime.UtcNow;
-                        // 点按左键3次，松开所有按键，按下W
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(200, ct);
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(50, ct);
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
-                        Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
-                        await Delay(20, ct);
-                        Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
                         Logger.LogInformation("自动赶路：流浪者飞行结束");
                         return false; // 走通用逻辑
                     }
-                    // 仍在飞行状态，保持松开W
-                    Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                    // 仍在飞行状态，保持按住W
+                    Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
                     state.WandererFlightCheckCount++;
                     if (state.WandererFlightCheckCount % 3 == 0)
                         Simulation.SendInput.Mouse.MiddleButtonClick();
@@ -1256,6 +1225,33 @@ public class PathExecutor
         var pixel = region.SrcMat.At<Vec3b>(1028, 1584);
         state.IsFlyingMwk = pixel.Item0 == 255 && pixel.Item1 == 255 && pixel.Item2 == 255;
         return state.IsFlyingMwk;
+    }
+
+    /// <summary>
+    /// 游泳检测（色块连通性检测）：采样右下角 (1819,1028) 9×7 区域黄色像素
+    /// </summary>
+    private static bool SwimmingConfirm(Region region)
+    {
+        var fullRegion = region.ToImageRegion();
+        bool ownRegion = fullRegion != region; // ToImageRegion 对 ImageRegion 返回自身，不 dispose
+        try
+        {
+            using var regionMat = fullRegion.DeriveCrop(1819, 1028, 9, 7);
+            using var mask = OpenCvCommonHelper.Threshold(regionMat.SrcMat,
+                new Scalar(242, 223, 39), new Scalar(255, 233, 44));
+            using var labels = new Mat();
+            using var stats = new Mat();
+            using var centroids = new Mat();
+
+            var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+                connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+
+            return numLabels > 1;
+        }
+        finally
+        {
+            if (ownRegion) fullRegion.Dispose();
+        }
     }
 
     /// <summary>
@@ -3528,29 +3524,20 @@ public class PathExecutor
         // Logger.LogWarning("赶路测试log:当前节点:({x2}),动作:({t1}),类型({t2}))", waypoint.Type, waypoint.Action, waypoint.MoveMode);
         // Logger.LogWarning("赶路测试log:Next节点:({x2}),动作:({t1}),间隔距离({x3}),类型({t2}))", nextWaypoint?.Type?? "null", nextWaypoint?.MoveMode ,nextWaypoint?.Action, (int)Math.Round(nextDistance.Value));
 
-        // 按下w，一直走；飞行赶路时以右键代替W（流浪者松开W，恰斯卡/伊法按住W）
+        // 按下w，一直走；飞行赶路时以右键代替W
         if (!flyDelay)
         {
-            var wandererFlying = hurryOnState.WandererFlyingState;
             if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
-            {
                 Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
-                if (!wandererFlying)
-                    Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-            }
-            else
-            {
-                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
-            }
+            Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
         }
 
         while (!ct.IsCancellationRequested)
         {
             // 每个迭代重新评估飞行状态（可能刚起飞/刚降落）
-            var wandererFlying = hurryOnState.WandererFlyingState;
             if (!Simulation.IsKeyDown(GIActions.MoveForward.ToActionKey().ToVK()))
             {
-                if (!flyDelay && !wandererFlying) Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+                if (!flyDelay) Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
             }
             // 飞行赶路时确保右键按住（无条件发送，鼠标按键IsKeyDown不可靠）
             if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
