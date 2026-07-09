@@ -917,6 +917,8 @@ public class PathExecutor
                             Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
                         }
 
+                        await SafeLanding(ct);
+
                         _sandroneCount = 0; // 重置计数器
 
                         Logger.LogInformation("自动赶路：桑多涅接近节点");
@@ -932,21 +934,26 @@ public class PathExecutor
 
                     if (!DashAtSecondPlaceExist())
                     {
-                        // 冲刺键图标不存在 → 2秒内置CD内跳过
-                        if ((DateTime.UtcNow - _lastSandroneSkillTime).TotalSeconds < 2)
+                        // 冲刺键图标不存在 → 2秒内置CD外才OCR检测并尝试按E
+                        if ((DateTime.UtcNow - _lastSandroneSkillTime).TotalSeconds >= 2)
                         {
-                            return false;
+                            // OCR检测技能CD，无CD时才按E
+                            var sandroneCd = await ReadEskillCdAsync("桑多涅");
+                            if (sandroneCd <= 0)
+                            {
+                                Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                                await Delay(150, ct);
+                                if (DashAtSecondPlaceExist())
+                                {
+                                    _lastSandroneSkillTime = DateTime.UtcNow;
+                                    _sandroneCount++;
+                                }
+                                else
+                                {
+                                    await SafeLanding(ct);
+                                }
+                            }
                         }
-
-                        // OCR检测技能CD，无CD时才按E
-                        var sandroneCd = await ReadEskillCdAsync("桑多涅");
-                        if (sandroneCd <= 0)
-                        {
-                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                            _lastSandroneSkillTime = DateTime.UtcNow;
-                            _sandroneCount++;
-                        }
-                        return false;
                     }
 
                     // 冲刺键图标存在 → 下个节点为飞行时强制跳过通用逻辑
@@ -1020,6 +1027,7 @@ public class PathExecutor
                         state.ChascaFlyingState = false;
                         _lastChascaLandingTime = DateTime.UtcNow;
                         Logger.LogInformation($"自动赶路：{avatar.Name}飞行结束");
+                        await SafeLanding(ct);
                         return false;
                     }
                     // 仍在飞行状态：距离大于45保持按住W和右键，小于45时禁用通用逻辑并松开右键
@@ -1093,12 +1101,9 @@ public class PathExecutor
                             if (SpaceAtSecondPlaceExist(state))
                             {
                                 Logger.LogInformation("自动赶路：流浪者接近节点，关闭飞行状态");
-                                // 下车动作：点按E，等待200ms，点按左键，等待50ms，点按左键
+                                // 下车动作：点按E，安全降落
                                 Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                                await Delay(200, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                                await Delay(50, ct);
-                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                await SafeLanding(ct);
                             }
                             state.WandererFlyingState = false;
                         }
@@ -1119,6 +1124,7 @@ public class PathExecutor
                         state.WandererFlyingState = false;
                         _lastWandererLandingTime = DateTime.UtcNow;
                         Logger.LogInformation("自动赶路：流浪者飞行结束");
+                        await SafeLanding(ct);
                         return false; // 走通用逻辑
                     }
                     // 仍在飞行状态，保持按住W
@@ -1248,6 +1254,34 @@ public class PathExecutor
         var pixel = region.SrcMat.At<Vec3b>(1028, 1584);
         state.IsFlyingMwk = pixel.Item0 == 255 && pixel.Item1 == 255 && pixel.Item2 == 255;
         return state.IsFlyingMwk;
+    }
+
+    /// <summary>
+    /// 安全降落：点按空格尝试降落，若仍处于飞行状态则执行下落攻击（火神跳飞同款处理）
+    /// </summary>
+    private async Task SafeLanding(CancellationToken ct)
+    {
+        await Delay(100, ct);
+        Simulation.SendInput.SimulateAction(GIActions.Jump);
+        await Delay(100, ct);
+
+        // 检测飞行状态
+        using var screen = CaptureToRectArea();
+        if (Bv.GetMotionStatus(screen) == MotionStatus.Fly)
+        {
+            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+            await Delay(300, ct);
+            for (int i = 0; i < 5; i++)
+            {
+                using var retryRegion = CaptureToRectArea();
+                if (Bv.GetMotionStatus(retryRegion) == MotionStatus.Fly)
+                {
+                    Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                    await Delay(300, ct);
+                }
+                else break;
+            }
+        }
     }
 
     /// <summary>
