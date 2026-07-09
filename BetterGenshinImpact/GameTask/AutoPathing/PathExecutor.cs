@@ -404,7 +404,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查，确保移速过快时不会跳过下车/切人逻辑
                 if (state.TrackingLogo)
                 {
-                    var needsApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
+                    var needsApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint, avatar.Name);
 
                     if (needsApproach)
                     {
@@ -622,7 +622,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var shouldApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
+                    var shouldApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint, avatar.Name);
 
                     if (shouldApproach)
                     {
@@ -768,7 +768,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
+                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint, avatar.Name);
 
                     if (shouldApproachX)
                     {
@@ -871,7 +871,7 @@ public class PathExecutor
                 // ① 接近处理
                 if (state.TrackingLogo)
                 {
-                    var needsApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
+                    var needsApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint, avatar.Name);
 
                     if (needsApproach)
                     {
@@ -945,7 +945,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
+                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint, avatar.Name);
 
                     if (shouldApproachX)
                     {
@@ -1047,7 +1047,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查，确保移速过快时不会跳过下车/切人逻辑
                 if (state.TrackingLogo)
                 {
-                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
+                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint, avatar.Name);
 
                     if (shouldApproachX)
                     {
@@ -1178,9 +1178,15 @@ public class PathExecutor
     /// <summary>
     /// 判断是否需要触发接近处理（精准靠近 / 连续赶路通用条件）
     /// </summary>
-    private bool ShouldApproach(double distance, double? nextDistance, WaypointForTrack waypoint, Waypoint? nextWaypoint)
+    private bool ShouldApproach(double distance, double? nextDistance, WaypointForTrack waypoint, Waypoint? nextWaypoint, string avatarName)
     {
         var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
+
+        // 恰斯卡/桑多涅/流浪者：下个节点为飞行时无条件启用接近
+        if ((avatarName == "恰斯卡" || avatarName == "桑多涅" || avatarName == "流浪者")
+            && nextWaypoint?.Action == MoveModeEnum.Fly.Code)
+            return true;
+
         if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
             return true;
 
@@ -1195,12 +1201,12 @@ public class PathExecutor
 
     private bool SandroneShouldSkip(int count)
     {
-        // 序列: 11010101010...（后续全为10交替）
+        // 序列: 1=不跳过, 0=跳过 → 11010101010...（后续全为10交替）
         return count switch
         {
-            0 => true,
-            1 => true,
-            _ => count % 2 == 1,
+            0 => false,  // 1 → 不跳过
+            1 => false,  // 1 → 不跳过
+            _ => count % 2 == 0,  // 偶数→0→跳过, 奇数→1→不跳过
         };
     }
 
