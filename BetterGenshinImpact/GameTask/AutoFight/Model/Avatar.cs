@@ -291,18 +291,26 @@ public class Avatar
     /// </summary>
     public static bool SwimmingConfirm(Region region)
     {
-        using var fullRegion = region.ToImageRegion();
-        using var regionMat = fullRegion.DeriveCrop(1819, 1028, 9, 7);
-        using var mask = OpenCvCommonHelper.Threshold(regionMat.SrcMat, 
-            new Scalar(242, 223, 39),new Scalar(255, 233, 44));// new Scalar(242, 223, 39),new Scalar(255, 233, 44));
-        using var labels = new Mat();
-        using var stats = new Mat();
-        using var centroids = new Mat();
+        var fullRegion = region.ToImageRegion();
+        bool ownRegion = fullRegion != region; // ToImageRegion 对 ImageRegion 返回自身，不 dispose
+        try
+        {
+            using var regionMat = fullRegion.DeriveCrop(1819, 1028, 9, 7);
+            using var mask = OpenCvCommonHelper.Threshold(regionMat.SrcMat, 
+                new Scalar(242, 223, 39),new Scalar(255, 233, 44));// new Scalar(242, 223, 39),new Scalar(255, 233, 44));
+            using var labels = new Mat();
+            using var stats = new Mat();
+            using var centroids = new Mat();
 
-        var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
-            connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+            var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+                connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
 
-        return numLabels > 1;
+            return numLabels > 1;
+        }
+        finally
+        {
+            if (ownRegion) fullRegion.Dispose();
+        }
     }
 
     /// <summary>

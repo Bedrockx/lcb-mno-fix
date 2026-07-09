@@ -280,7 +280,8 @@ public class PathExecutor
     private DateTime _lastChascaSkillCheckTime = DateTime.MinValue;
     private DateTime _lastChascaLandingTime = DateTime.MinValue;
     private DateTime _lastWandererLandingTime = DateTime.MinValue;
-    private bool _sandroneSkipMode;     // 每次按E切换：true→6s内跳过通用逻辑，false→6s内走通用逻辑
+    private int _sandroneCount;     // 桑多涅按E次数计数器，用于序列决策
+    private DateTime _lastSandroneSkillTime = DateTime.MinValue; // 桑多涅2秒内置CD
 
     /// <summary>
     /// 赶路逻辑跨帧状态
@@ -891,7 +892,7 @@ public class PathExecutor
                 break;
 
             case "桑多涅":
-                // ① 接近处理：优先检查（无切人退出机制）
+                // ① 接近处理
                 if (state.TrackingLogo)
                 {
                     var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
@@ -908,12 +909,15 @@ public class PathExecutor
                     {
                         state.TrackingLogo = false;
 
-                        // 点按攻击2次
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
-                        await Delay(50, ct);
-                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                        // 如果在冲刺模式，普攻取消
+                        if (DashAtSecondPlaceExist())
+                        {
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            await Delay(50, ct);
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                        }
 
-                        avatar.LastSkillTime = default; // 清除 6 秒窗口，避免接近后继续跳过
+                        _sandroneCount = 0; // 重置计数器
 
                         Logger.LogInformation("自动赶路：桑多涅接近节点");
                         return false;
@@ -926,24 +930,35 @@ public class PathExecutor
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
-                    // 6 秒窗口内：根据 _sandroneSkipMode 决定行为，不做 OCR
-                    if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 6)
+                    if (!DashAtSecondPlaceExist())
                     {
-                        return _sandroneSkipMode; // true=跳过通用逻辑, false=走通用逻辑
+                        // 冲刺键图标不存在 → 2秒内置CD内跳过
+                        if ((DateTime.UtcNow - _lastSandroneSkillTime).TotalSeconds < 2)
+                        {
+                            return false;
+                        }
+
+                        // OCR检测技能CD，无CD时才按E
+                        var sandroneCd = await ReadEskillCdAsync("桑多涅");
+                        if (sandroneCd <= 0)
+                        {
+                            Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                            _lastSandroneSkillTime = DateTime.UtcNow;
+                            _sandroneCount++;
+                        }
+                        return false;
                     }
 
-                    // 6 秒窗口外：OCR 检测 E 技能 CD，技能可用时才按E
-                    var cd = await ReadEskillCdAsync("桑多涅");
-                    if (cd <= 0)
+                    // 冲刺键图标存在 → 下个节点为飞行时强制跳过通用逻辑
+                    if (nextWaypoint?.Action == MoveModeEnum.Fly.Code)
                     {
-                        // 下个节点为飞行 → 无条件跳过通用逻辑
-                        if (nextWaypoint?.MoveMode == MoveModeEnum.Fly.Code || nextWaypoint?.Action == MoveModeEnum.Fly.Code)
-                            _sandroneSkipMode = true;
-                        else
-                            _sandroneSkipMode = !_sandroneSkipMode; // 正常切换
+                        return true;
+                    }
 
-                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
-                        avatar.LastSkillTime = DateTime.UtcNow;
+                    // 根据 count 序列决定是否跳过通用逻辑
+                    if (SandroneShouldSkip(_sandroneCount))
+                    {
+                        return true;
                     }
                     return false;
                 }
@@ -1007,7 +1022,11 @@ public class PathExecutor
                         Logger.LogInformation($"自动赶路：{avatar.Name}飞行结束");
                         return false;
                     }
-                    // 仍在飞行状态，保持按住W和右键
+                    // 仍在飞行状态：距离大于45保持按住W和右键，小于45时禁用通用逻辑并松开右键
+                    if (distance < 45)
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                    }
                     return true;
                 }
 
@@ -1104,6 +1123,11 @@ public class PathExecutor
                     }
                     // 仍在飞行状态，保持按住W
                     Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+                    // 距离小于45时禁用通用逻辑并松开右键
+                    if (distance < 45)
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                    }
                     state.WandererFlightCheckCount++;
                     if (state.WandererFlightCheckCount % 3 == 0)
                         Simulation.SendInput.Mouse.MiddleButtonClick();
@@ -1187,6 +1211,32 @@ public class PathExecutor
             Math.Pow(pos.Item1 - pos2.Item1, 2) +
             Math.Pow(pos.Item2 - pos2.Item2, 2)
         );
+    }
+
+    private bool SandroneShouldSkip(int count)
+    {
+        // 序列: 11010101010...（后续全为10交替）
+        return count switch
+        {
+            0 => true,
+            1 => true,
+            _ => count % 2 == 1,
+        };
+    }
+
+    private bool DashAtSecondPlaceExist()
+    {
+        using var region = CaptureToRectArea().DeriveCrop(1595, 1028, 9, 7);
+        using var mask = OpenCvCommonHelper.Threshold(region.SrcMat,
+            new Scalar(242, 223, 39), new Scalar(255, 233, 44));
+        using var labels = new Mat();
+        using var stats = new Mat();
+        using var centroids = new Mat();
+
+        var numLabels = Cv2.ConnectedComponentsWithStats(mask, labels, stats, centroids,
+            connectivity: PixelConnectivity.Connectivity4, ltype: MatType.CV_32S);
+
+        return numLabels > 1;
     }
 
     /// <summary>
@@ -1627,7 +1677,7 @@ public class PathExecutor
                                 await HandleTeleportWaypoint(waypoint);
                             }
                             
-                            _sandroneSkipMode = true; // 传送节点恢复体力，重置交替模式（第一次不跳过）
+                            _sandroneCount = 0; // 传送节点重置计数器
 
                             // 标记同步点已到达（第一个传送点）
                             if (!_syncPointReached)
@@ -1825,7 +1875,7 @@ public class PathExecutor
                             {
                                 if (waypoint.Action == ActionEnum.Fight.Code)
                                 {
-                                    _sandroneSkipMode = true; // 战斗节点：设为 true 使下次按E时切换为 false，即战斗后第一次不跳过
+                                    _sandroneCount = 0; // 战斗节点重置计数器
                                     AutoFightTask.FightWaypoint = waypoint;
                                     PathingConditionConfig.CombatScenesGoBackUp = _combatScenes;//把地图追踪的战斗CD等同步给战斗节点
                                 }
@@ -3464,6 +3514,7 @@ public class PathExecutor
         var hurryOnLogo = true;
         var flyDelay = waypoint.MoveMode == MoveModeEnum.Fly.Code;
         var hurryOnState = new HurryOnState();
+        double distance = double.MaxValue;
         var disabledHurryAvatars = waypoint.DisabledHurryAvatars switch
         {
             { } list => list,
@@ -3499,10 +3550,10 @@ public class PathExecutor
         // Logger.LogWarning("赶路测试log:当前节点:({x2}),动作:({t1}),类型({t2}))", waypoint.Type, waypoint.Action, waypoint.MoveMode);
         // Logger.LogWarning("赶路测试log:Next节点:({x2}),动作:({t1}),间隔距离({x3}),类型({t2}))", nextWaypoint?.Type?? "null", nextWaypoint?.MoveMode ,nextWaypoint?.Action, (int)Math.Round(nextDistance.Value));
 
-        // 按下w，一直走；飞行赶路时以右键代替W
+        // 按下w，一直走；飞行赶路时同时按下右键（距离小于45时不按右键）
         if (!flyDelay)
         {
-            if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
+            if ((hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState) && distance >= 45)
                 Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
             Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
         }
@@ -3514,9 +3565,14 @@ public class PathExecutor
             {
                 if (!flyDelay) Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
             }
-            // 飞行赶路时确保右键按住（无条件发送，鼠标按键IsKeyDown不可靠）
+            // 飞行赶路时确保右键按住；距离小于45时松开右键且不再按压
             if (hurryOnState.ChascaFlyingState || hurryOnState.WandererFlyingState)
-                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
+            {
+                if (distance >= 45)
+                    Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
+                else
+                    Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+            }
             flyDelay = false;
 
             // === 联机模式：走路途中检测到复苏信号（来自 AnomalyDetector 模板/色块路径）===
@@ -3600,7 +3656,7 @@ public class PathExecutor
 
                  additionalTimeInMs = additionalTimeInMs + 1000;//当做起步补偿
              }
-            var distance = Navigation.GetDistance(waypoint, position);
+            distance = Navigation.GetDistance(waypoint, position);
             Debug.WriteLine($"接近目标点中，距离为{distance}");
 
             // === 路径同步点抢报（fastsync-redesign-parameter-passing spec / OQ-7=a）===
