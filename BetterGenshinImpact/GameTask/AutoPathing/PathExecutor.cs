@@ -297,6 +297,7 @@ public class PathExecutor
         public int RotationStableCount;
         public bool WandererFlyingState;
         public bool ChascaFlyingState;
+        public bool IfaFlyingState;
         public bool SuppressForwardKey;
     }
 
@@ -948,6 +949,7 @@ public class PathExecutor
                 break;
 
             case "恰斯卡":
+            case "伊法":
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
@@ -966,13 +968,13 @@ public class PathExecutor
                         state.TrackingLogo = false;
                         if (state.ChascaFlyingState)
                         {
-                            Logger.LogInformation("自动赶路：恰斯卡接近节点，关闭飞行状态");
+                            Logger.LogInformation($"自动赶路：{avatar.Name}接近节点，关闭飞行状态");
                             // 下车动作：按住E，识别CD直到识别到CD为止
                             Simulation.SendInput.SimulateAction(GIActions.ElementalSkill, KeyType.KeyDown);
                             while (true)
                             {
                                 await Delay(100, ct);
-                                var cd = await ReadEskillCdAsync("恰斯卡");
+                                var cd = await ReadEskillCdAsync(avatar.Name);
                                 if (cd > 0)
                                 {
                                     break;
@@ -999,7 +1001,7 @@ public class PathExecutor
                     // 要求视角稳定通过（连续3帧≤30°）才触发
                     if (state.RotationStableCount >= 3)
                     {
-                        var cd = await ReadEskillCdAsync("恰斯卡");
+                        var cd = await ReadEskillCdAsync(avatar.Name);
 
                         if (!state.ChascaFlyingState)
                         {
@@ -1018,7 +1020,7 @@ public class PathExecutor
                                 avatar.LastSkillTime = DateTime.UtcNow;
                                 state.ChascaFlyingState = true;
                                 state.SuppressForwardKey = true;
-                                Logger.LogInformation("自动赶路：恰斯卡启动飞行");
+                                Logger.LogInformation($"自动赶路：{avatar.Name}启动飞行");
                                 return false; // 跳过通用逻辑
                             }
                             // CD存在走通用逻辑
@@ -1040,7 +1042,16 @@ public class PathExecutor
                                 // 有CD说明飞行结束，更新状态为false，走通用逻辑
                                 state.ChascaFlyingState = false;
                                 state.SuppressForwardKey = false;
-                                Logger.LogInformation("自动赶路：恰斯卡飞行结束");
+                                // 点按两次鼠标左键，松开所有按键，按下W
+                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                await Delay(50, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                await Delay(50, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                                await Delay(20, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
+                                Logger.LogInformation($"自动赶路：{avatar.Name}飞行结束");
                             }
                         }
                     }
@@ -1146,6 +1157,15 @@ public class PathExecutor
                                 // 有CD说明飞行结束，更新状态为false，走通用逻辑
                                 state.WandererFlyingState = false;
                                 state.SuppressForwardKey = false;
+                                // 点按两次鼠标左键，松开所有按键，按下W
+                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                await Delay(50, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                await Delay(50, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyUp);
+                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyUp);
+                                await Delay(20, ct);
+                                Simulation.SendInput.SimulateAction(GIActions.MoveForward, KeyType.KeyDown);
                                 Logger.LogInformation("自动赶路：流浪者飞行结束");
                             }
                         }
