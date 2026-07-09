@@ -291,6 +291,7 @@ public class PathExecutor
         public int MavikaSlopeCount;
         public int ClimbLogo;
         public bool XilonenESkillState;
+        public int RotationStableCount;
     }
 
     private static readonly HashSet<string> HurryOnBlacklist = ["玛薇卡", "希诺宁", "瓦蕾莎", "茜特菈莉"];
@@ -400,8 +401,8 @@ public class PathExecutor
                     }
                 }
 
-                // 跳飞分支：远距离时在摩托上触发跳跃加速（需配置启用且距离 > 2*PartyConfig.Distance）
-                if (PartyConfig.MwkJumpFlyEnabled && distance > 2 * PartyConfig.Distance)
+                // 跳飞分支：远距离时在摩托上触发跳跃加速（需配置启用、距离 > 2*PartyConfig.Distance、且视角已稳定）
+                if (PartyConfig.MwkJumpFlyEnabled && distance > 2 * PartyConfig.Distance && state.RotationStableCount >= 3)
                 {
                     var interval = PartyConfig.MwkJumpFlyIntervalSeconds > 0 ? PartyConfig.MwkJumpFlyIntervalSeconds : 2;
 
@@ -450,15 +451,14 @@ public class PathExecutor
                         return false;
                     }
 
+                    // 跳飞后飞行检查：如果进入玛薇卡飞行姿态，按空格退出飞行模式
+                    if (CheckMavikaFlying(state))
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.Jump);
+                    }
+
                     // 跳飞成功，跳过通用逻辑
                     return true;
-                }
-
-                // 跳飞后飞行检查：如果已进入玛薇卡飞行状态，按空格保持飞行姿态
-                if (CheckMavikaFlying(state))
-                {
-                    Simulation.SendInput.SimulateAction(GIActions.Jump);
-                    await Delay(100, ct);
                 }
 
                 // Fly 模式特殊移动：在空中时根据距离计算 Dash 加速时间
@@ -840,8 +840,9 @@ public class PathExecutor
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
                     // OCR识别E技能CD，CD<=0=技能可用 → 按E跳一次后等待跳飞间隔的一半，跳过通用逻辑
+                    // 要求视角已稳定（连续3帧 ≤30°）才触发，避免旋转中起跳
                     var cd = await ReadEskillCdAsync("闲云");
-                    if (cd <= 0)
+                    if (cd <= 0 && state.RotationStableCount >= 3)
                     {
                         Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                         var interval = PartyConfig.MwkJumpFlyIntervalSeconds > 0 ? PartyConfig.MwkJumpFlyIntervalSeconds : 1.4;
@@ -3677,6 +3678,16 @@ public class PathExecutor
                 else if (diff.HasValue)
                 {
                     consecutiveRotationCountBeyondAngle = 0;
+                }
+
+                // 视角稳定度跟踪：连续帧旋转角度 ≤30° 时累加，超过时重置
+                if (diff.HasValue && Math.Abs(diff.Value) <= 30)
+                {
+                    hurryOnState.RotationStableCount++;
+                }
+                else if (diff.HasValue)
+                {
+                    hurryOnState.RotationStableCount = 0;
                 }
 
                 if (consecutiveRotationCountBeyondAngle > 10)
