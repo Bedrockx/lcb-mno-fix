@@ -755,7 +755,8 @@ public class PathExecutor
                 break;
 
             case "希诺宁":
-                if (distance > PartyConfig.Distance)
+                if (distance > PartyConfig.Distance
+                    && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
@@ -835,7 +836,9 @@ public class PathExecutor
                 return false;
 
             case "闲云":
-                if (distance > PartyConfig.Distance)
+                // 仅 run/dash 路段生效
+                if (distance > PartyConfig.Distance
+                    && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
                 {
                     await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
 
@@ -853,6 +856,75 @@ public class PathExecutor
 
                     // CD中 → 走通用赶路逻辑
                     return false;
+                }
+                break;
+
+            case "桑多涅":
+                // 赶路逻辑：仅 run/dash 路段生效
+                if (distance > PartyConfig.Distance
+                    && (waypoint?.MoveMode == MoveModeEnum.Run.Code || waypoint?.MoveMode == MoveModeEnum.Dash.Code))
+                {
+                    await SwitchToHurryAvatarAsync(screen2, avatar, distance, num, ct);
+
+                    // 内置 7 秒 CD
+                    if (avatar.LastSkillTime != default && (DateTime.UtcNow - avatar.LastSkillTime).TotalSeconds < 7)
+                        return false;
+
+                    // OCR 识别 E 技能 CD，CD <= 0 时技能可用 → 点按 E
+                    var cd = await ReadEskillCdAsync("桑多涅");
+                    if (cd <= 0)
+                    {
+                        Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
+                        avatar.LastSkillTime = DateTime.UtcNow;
+                    }
+
+                    // 后续走通用赶路逻辑
+                    return false;
+                }
+
+                // 接近处理（同其他人判定标准）：无切人退出机制
+                if (state.TrackingLogo)
+                {
+                    var needsApproach = false;
+                    var approachThreshold = !string.IsNullOrEmpty(nextWaypoint?.Action) ? 30 : 25;
+                    if (PartyConfig.TravelMode == "精准靠近" && distance < approachThreshold)
+                        needsApproach = true;
+                    else if (PartyConfig.TravelMode == "连续赶路" && distance < 40 &&
+                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
+                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
+                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
+                        needsApproach = true;
+
+                    if (needsApproach)
+                    {
+                        state.TrackingLogo = false;
+
+                        // 点按攻击，等待50，再点按一次
+                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                        await Delay(50, ct);
+                        Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+
+                        // 火神同款下落攻击判定：检测是否进入飞行姿态，是则 NormalAttack 取消
+                        using var approachRegion = CaptureToRectArea();
+                        if (Bv.GetMotionStatus(approachRegion) == MotionStatus.Fly)
+                        {
+                            Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            await Delay(300, ct);
+                            for (int i = 0; i < 5; i++)
+                            {
+                                using var retryRegion = CaptureToRectArea();
+                                if (Bv.GetMotionStatus(retryRegion) == MotionStatus.Fly)
+                                {
+                                    Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                                    await Delay(300, ct);
+                                }
+                                else break;
+                            }
+                        }
+
+                        Logger.LogInformation("自动赶路：桑多涅接近节点");
+                        return false;
+                    }
                 }
                 break;
         }
