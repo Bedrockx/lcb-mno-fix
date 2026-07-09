@@ -404,15 +404,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查，确保移速过快时不会跳过下车/切人逻辑
                 if (state.TrackingLogo)
                 {
-                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
-                    var needsApproach = false;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
-                        needsApproach = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
-                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        needsApproach = true;
+                    var needsApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
 
                     if (needsApproach)
                     {
@@ -630,15 +622,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
-                    var shouldApproach = false;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
-                        shouldApproach = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
-                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        shouldApproach = true;
+                    var shouldApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
 
                     if (shouldApproach)
                     {
@@ -784,15 +768,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
-                    var shouldApproachX = false;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
-                        shouldApproachX = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
-                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        shouldApproachX = true;
+                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
 
                     if (shouldApproachX)
                     {
@@ -895,15 +871,7 @@ public class PathExecutor
                 // ① 接近处理
                 if (state.TrackingLogo)
                 {
-                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
-                    var needsApproach = false;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
-                        needsApproach = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
-                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        needsApproach = true;
+                    var needsApproach = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
 
                     if (needsApproach)
                     {
@@ -977,15 +945,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查
                 if (state.TrackingLogo)
                 {
-                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
-                    var shouldApproachX = false;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
-                        shouldApproachX = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
-                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        shouldApproachX = true;
+                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
 
                     if (shouldApproachX)
                     {
@@ -1064,6 +1024,10 @@ public class PathExecutor
                             await Delay(50, ct);
                             Simulation.SendInput.SimulateAction(GIActions.ElementalSkill);
                             await Delay(100, ct);
+                            if (avatar.Name == "恰斯卡")
+                            {
+                                Simulation.SendInput.SimulateAction(GIActions.NormalAttack);
+                            }
                             Simulation.SendInput.SimulateAction(GIActions.SprintMouse, KeyType.KeyDown);
 
                             avatar.LastSkillTime = DateTime.UtcNow;
@@ -1083,15 +1047,7 @@ public class PathExecutor
                 // ① 接近处理：优先检查，确保移速过快时不会跳过下车/切人逻辑
                 if (state.TrackingLogo)
                 {
-                    var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
-                    var shouldApproachX = false;
-                    if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
-                        shouldApproachX = true;
-                    else if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
-                             (nextDistance < 25 || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
-                              || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
-                              || (nextDistance < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
-                        shouldApproachX = true;
+                    var shouldApproachX = ShouldApproach(distance, nextDistance, waypoint, nextWaypoint);
 
                     if (shouldApproachX)
                     {
@@ -1217,6 +1173,24 @@ public class PathExecutor
             Math.Pow(pos.Item1 - pos2.Item1, 2) +
             Math.Pow(pos.Item2 - pos2.Item2, 2)
         );
+    }
+
+    /// <summary>
+    /// 判断是否需要触发接近处理（精准靠近 / 连续赶路通用条件）
+    /// </summary>
+    private bool ShouldApproach(double distance, double? nextDistance, WaypointForTrack waypoint, Waypoint? nextWaypoint)
+    {
+        var effectiveStopDist = Math.Min(PartyConfig.ApproachStopDistance, PartyConfig.Distance);
+        if (PartyConfig.TravelMode == "精准靠近" && distance < effectiveStopDist)
+            return true;
+
+        var nd = nextDistance ?? double.MaxValue;
+        if (PartyConfig.TravelMode == "连续赶路" && distance < Math.Max(effectiveStopDist, 15) &&
+            (nd < 25 || nextWaypoint == null || nextWaypoint?.Type == WaypointType.Target.Code || waypoint.Type == WaypointType.Target.Code
+             || nextWaypoint?.Action == MoveModeEnum.Fly.Code || waypoint?.Action == ActionEnum.CombatScript.Code
+             || (nd < 25 && nextWaypoint?.Action == ActionEnum.CombatScript.Code)))
+            return true;
+        return false;
     }
 
     private bool SandroneShouldSkip(int count)
